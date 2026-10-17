@@ -95,7 +95,8 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                     return None;
                 }
                 return match (method, action) {
-                    (Put | Post, "delete") => Some(CipherSoftDelete(id)),
+                    (Put, "delete") => Some(CipherSoftDelete(id)),
+                    (Post, "delete") => Some(CipherDelete(id)),
                     (Put | Post, "restore") => Some(CipherRestore(id)),
                     _ => None,
                 };
@@ -134,6 +135,10 @@ mod tests {
         assert_eq!(
             classify(Method::Put, "/api/ciphers/abc-123/delete"),
             Some(Route::CipherSoftDelete("abc-123"))
+        );
+        assert_eq!(
+            classify(Method::Post, "/api/ciphers/abc-123/delete"),
+            Some(Route::CipherDelete("abc-123"))
         );
         assert_eq!(
             classify(Method::Get, "/api/folders/abc/"),
