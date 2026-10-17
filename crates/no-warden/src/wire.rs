@@ -15,6 +15,12 @@ pub struct PreloginRequest<'a> {
     pub email: &'a str,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserKeyIdRequest<'a> {
+    pub user_key_id: &'a str,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreloginResponse {

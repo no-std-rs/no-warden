@@ -28,6 +28,7 @@ pub enum Route<'a> {
     Prelogin,
     Register,
     Profile,
+    UserKeyId,
     RevisionDate,
     Token,
     Sync,
@@ -71,6 +72,7 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         ) => Some(Prelogin),
         (Post, "/api/accounts/register") => Some(Register),
         (Get, "/api/accounts/profile") => Some(Profile),
+        (Post, "/api/accounts/key-management/user-key-id") => Some(UserKeyId),
         (Get, "/api/accounts/revision-date") => Some(RevisionDate),
         (Post, "/identity/connect/token") => Some(Token),
         (Get, "/api/sync") => Some(Sync),
@@ -146,6 +148,11 @@ mod tests {
         );
         assert!(!Route::Prelogin.requires_authentication());
         assert!(Route::Sync.requires_authentication());
+        assert_eq!(
+            classify(Method::Post, "/api/accounts/key-management/user-key-id"),
+            Some(Route::UserKeyId)
+        );
+        assert!(Route::UserKeyId.requires_authentication());
         for path in [
             "/api/ciphers/../delete",
             "/api/ciphers//restore",
