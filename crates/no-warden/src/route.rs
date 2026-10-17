@@ -108,7 +108,7 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
             }
             match method {
                 Get => Some(CipherGet(tail)),
-                Put => Some(CipherUpdate(tail)),
+                Put | Post => Some(CipherUpdate(tail)),
                 Delete => Some(CipherDelete(tail)),
                 _ => None,
             }
@@ -130,6 +130,10 @@ mod tests {
     use super::*;
     #[test]
     fn routes_authentication_and_actions() {
+        assert_eq!(
+            classify(Method::Post, "/api/ciphers/item-id"),
+            Some(Route::CipherUpdate("item-id"))
+        );
         assert_eq!(
             classify(Method::Get, "/api/sync?excludeDomains=true"),
             Some(Route::Sync)

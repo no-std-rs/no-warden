@@ -211,6 +211,7 @@ impl<S: Storage> VaultService<S> {
         require_owner(owner)?;
         validate_id(id)?;
         validation::validate_cipher(request)?;
+        validate_encrypted_for(owner, request)?;
         self.check_cipher_folder(owner, request.folder_id)?;
         if self
             .storage
@@ -233,6 +234,7 @@ impl<S: Storage> VaultService<S> {
     ) -> Result<(), ApiError> {
         require_owner(owner)?;
         validation::validate_cipher(request)?;
+        validate_encrypted_for(owner, request)?;
         if self.check_cipher(owner, id)? {
             return Err(ApiError::new(
                 ErrorKind::Conflict,
@@ -317,6 +319,20 @@ fn require_owner(owner: &str) -> Result<(), ApiError> {
     }
 }
 
+fn validate_encrypted_for(owner: &str, request: &CipherRequest<'_>) -> Result<(), ApiError> {
+    if request
+        .encrypted_for
+        .is_some_and(|account| account != owner)
+    {
+        Err(ApiError::invalid(
+            "encryptedFor",
+            "The cipher was encrypted for another account.",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_id(id: &str) -> Result<(), ApiError> {
     if id.is_empty()
         || id.len() > 128
@@ -354,6 +370,7 @@ mod tests {
         folder: Option<(String, String)>,
         cipher: Option<(String, String, bool)>,
         writes: usize,
+        reads: usize,
     }
 
     impl Storage for Memory {
@@ -366,6 +383,7 @@ mod tests {
             Ok(())
         }
         fn folder_metadata(&mut self, id: &str) -> Result<Option<ItemMetadata<'_>>, ()> {
+            self.reads += 1;
             Ok(self
                 .folder
                 .as_ref()
@@ -386,6 +404,7 @@ mod tests {
             Ok(())
         }
         fn cipher_metadata(&mut self, id: &str) -> Result<Option<ItemMetadata<'_>>, ()> {
+            self.reads += 1;
             Ok(self
                 .cipher
                 .as_ref()
@@ -419,6 +438,9 @@ mod tests {
             notes: None,
             folder_id: None,
             organization_id: None,
+            encrypted_for: None,
+            encrypted_by_key_id: None,
+            key: None,
             favorite: false,
             reprompt: 0,
             login: None,
@@ -496,5 +518,58 @@ mod tests {
                 .kind,
             ErrorKind::Unauthorized
         );
+    }
+
+    #[test]
+    fn cipher_encryption_owner_is_checked_before_storage_access() {
+        let mut service = VaultService::new(Memory::default());
+        let mut request = cipher();
+        request.encrypted_for = Some("alice");
+        request.encrypted_by_key_id = Some("opaque:key/id");
+        request.key = Some(ENCRYPTED);
+        service.create_cipher("alice", "cipher", &request).unwrap();
+        let reads = service.storage().reads;
+        let writes = service.storage().writes;
+        request.encrypted_for = Some("bob");
+        request.folder_id = Some("unknown-folder");
+        assert_eq!(
+            service
+                .create_cipher("alice", "second", &request)
+                .unwrap_err()
+                .field,
+            Some("encryptedFor")
+        );
+        assert_eq!(
+            service
+                .update_cipher("alice", "cipher", &request)
+                .unwrap_err()
+                .field,
+            Some("encryptedFor")
+        );
+        assert_eq!(service.storage().reads, reads);
+        assert_eq!(service.storage().writes, writes);
+    }
+
+    #[test]
+    fn malformed_cipher_keys_are_rejected_before_storage_access() {
+        let mut service = VaultService::new(Memory::default());
+        let mut request = cipher();
+        request.key = Some("unwrapped plaintext key");
+        assert_eq!(
+            service
+                .create_cipher("alice", "cipher", &request)
+                .unwrap_err()
+                .field,
+            Some("key")
+        );
+        assert_eq!(
+            service
+                .update_cipher("alice", "cipher", &request)
+                .unwrap_err()
+                .field,
+            Some("key")
+        );
+        assert_eq!(service.storage().reads, 0);
+        assert_eq!(service.storage().writes, 0);
     }
 }

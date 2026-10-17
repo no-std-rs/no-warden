@@ -191,6 +191,12 @@ pub struct CipherRequest<'a> {
     pub notes: Option<&'a str>,
     pub folder_id: Option<&'a str>,
     pub organization_id: Option<&'a str>,
+    /// Account whose key material the client used to encrypt this cipher.
+    pub encrypted_for: Option<&'a str>,
+    /// Opaque identifier of the client key material used for encryption.
+    pub encrypted_by_key_id: Option<&'a str>,
+    /// Optional per-cipher key wrapped with the account's user key.
+    pub key: Option<&'a str>,
     #[serde(default)]
     pub favorite: bool,
     #[serde(default)]
@@ -243,6 +249,9 @@ mod tests {
             r#"{"type":1,"name":"encrypted","login":{"uris":[{"uri":"encrypted","match":0}]}}"#,
         )
         .unwrap();
+        assert!(request.encrypted_for.is_none());
+        assert!(request.encrypted_by_key_id.is_none());
+        assert!(request.key.is_none());
         assert_eq!(
             request
                 .login
@@ -258,5 +267,18 @@ mod tests {
             serde_json::to_value(ListResponse::<u8>::new(&[])).unwrap()["object"],
             "list"
         );
+    }
+
+    #[test]
+    fn modern_cipher_key_metadata_round_trips_without_rewriting_identifiers() {
+        let input = r#"{"type":2,"name":"ciphertext","secureNote":{"type":0},"encryptedFor":"alice","encryptedByKeyId":"opaque:key/id","key":"wrapped-cipher-key"}"#;
+        let request: CipherRequest<'_> = serde_json::from_str(input).unwrap();
+        assert_eq!(request.encrypted_for, Some("alice"));
+        assert_eq!(request.encrypted_by_key_id, Some("opaque:key/id"));
+        assert_eq!(request.key, Some("wrapped-cipher-key"));
+        let serialized = serde_json::to_value(request).unwrap();
+        assert_eq!(serialized["encryptedFor"], "alice");
+        assert_eq!(serialized["encryptedByKeyId"], "opaque:key/id");
+        assert_eq!(serialized["key"], "wrapped-cipher-key");
     }
 }

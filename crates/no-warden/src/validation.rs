@@ -215,6 +215,10 @@ pub fn validate_cipher(request: &CipherRequest<'_>) -> Result<(), ApiError> {
     }
     validate_encrypted_string(request.name)
         .map_err(|_| ApiError::invalid("name", "An encrypted cipher name is required."))?;
+    if let Some(key) = request.key {
+        validate_encrypted_string(key)
+            .map_err(|_| ApiError::invalid("key", "An encrypted cipher key is required."))?;
+    }
     optional_encrypted(request.notes)?;
     match request.kind {
         1 => {
@@ -326,13 +330,14 @@ fn optional_encrypted(value: Option<&str>) -> Result<(), ApiError> {
 }
 
 /// Validate an EncString envelope, never its authenticity or plaintext.
-/// Supports the legacy AES/RSA formats numbered 0 through 6.
+/// Supports AES/RSA formats numbered 0 through 6 and the headerless AES-256 form.
 pub fn validate_encrypted_string(value: &str) -> Result<(), ApiError> {
     let invalid = || ApiError::invalid("encryptedValue", "Invalid encrypted value envelope.");
     if value.len() > MAX_ENCRYPTED_FIELD_BYTES {
         return Err(invalid());
     }
-    let (kind, payload) = value.split_once('.').ok_or_else(invalid)?;
+    // Legacy clients omit the type prefix for AES-256-CBC (`iv|ciphertext`).
+    let (kind, payload) = value.split_once('.').unwrap_or(("0", value));
     let mut parts = payload.split('|');
     let first = decoded_base64_len(parts.next().ok_or_else(invalid)?).ok_or_else(invalid)?;
     match kind {
@@ -409,6 +414,11 @@ mod tests {
     #[test]
     fn encrypted_values_require_well_formed_envelopes() {
         assert!(validate_encrypted_string(ENCRYPTED).is_ok());
+        assert!(
+            validate_encrypted_string("AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==").is_ok()
+        );
+        // A headerless value has no MAC: current clients interpret it as type 0.
+        assert!(validate_encrypted_string("AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").is_err());
         for invalid in [
             "plaintext",
             "2.a|b|c",
@@ -463,6 +473,26 @@ mod tests {
                 .is_ok()
         );
         assert!(PasswordPolicy::default().validate("short").is_err());
+    }
+
+    #[test]
+    fn optional_cipher_keys_require_valid_envelopes() {
+        for key in [Some(""), Some("plaintext"), Some("2.a|b|c")] {
+            let input = std::format!(
+                r#"{{"type":2,"name":"{ENCRYPTED}","secureNote":{{"type":0}},"key":{}}}"#,
+                serde_json::to_string(&key).unwrap(),
+            );
+            let request: CipherRequest<'_> = serde_json::from_str(&input).unwrap();
+            assert_eq!(validate_cipher(&request).unwrap_err().field, Some("key"));
+        }
+        for key in [None, Some(ENCRYPTED)] {
+            let input = std::format!(
+                r#"{{"type":2,"name":"{ENCRYPTED}","secureNote":{{"type":0}},"key":{}}}"#,
+                serde_json::to_string(&key).unwrap(),
+            );
+            let request: CipherRequest<'_> = serde_json::from_str(&input).unwrap();
+            assert!(validate_cipher(&request).is_ok());
+        }
     }
 
     #[test]
