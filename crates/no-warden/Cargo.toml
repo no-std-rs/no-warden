@@ -1,0 +1,16 @@
+[package]
+name = "no-warden"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Allocation-free Bitwarden-compatible protocol models and vault business rules"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/no-std-rs/no-warden"
+keywords = ["bitwarden", "vaultwarden", "no-std", "embedded"]
+categories = ["no-std::no-alloc", "api-bindings"]
+
+[dependencies]
+serde = { version = "1", default-features = false, features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"
