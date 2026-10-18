@@ -1,6 +1,9 @@
 # Real-client compatibility checks
 
-Use Node.js 22 or newer, OpenSSL, and the pinned official Bitwarden CLI:
+The compatibility harness requires Linux, Node.js 22 or newer, OpenSSL,
+util-linux `prlimit`, and the pinned official Bitwarden CLI. This requirement
+applies to these test tools; the crate and standalone server have separate
+platform requirements.
 
 ```sh
 npm ci --prefix tools
@@ -9,6 +12,7 @@ npm ci --prefix tools
 Build and start the standalone Rust server, then run the checks:
 
 ```sh
+node --test tools/cli-process.test.mjs
 tools/e2e.sh
 node --test tools/server-tests.mjs
 node tools/persistence.mjs
@@ -31,6 +35,23 @@ valid Bitwarden PBKDF2, AES-CBC/HMAC, and RSA keys. The CLI uses a temporary
 `BITWARDENCLI_APPDATA_DIR`, which is deleted even if the test fails. The test
 does not access an existing user's CLI account or vault. Account passwords,
 session tokens, and vault contents are never printed.
+
+CLI subprocess stdout goes through a regular file descriptor explicitly set to
+0600 inside a 0700 directory. Its pathname is unlinked before the child starts,
+so terminating the parent during a synchronous CLI call leaves no named stdout
+file behind. The helper reads the descriptor at explicit offsets, then closes it
+and removes the empty directory in `finally`. This avoids the documented Node.js
+pipe-write hazard when the unmodified CLI exits immediately after printing.
+The helper retains a 90-second timeout and a 4 MiB stderr buffer limit. A
+shell-free [`prlimit` invocation](https://man7.org/linux/man-pages/man1/prlimit.1.html)
+caps each child process's regular files at 4 MiB plus one overflow-detection byte
+and sets the core-dump size limit to zero. Output above
+4 MiB is rejected before reading; output exactly at the limit is accepted.
+This kernel limit also applies to CLI cache files and other regular-file writes
+in that subprocess. An empty login result still
+fails the suite; its diagnostic includes only byte counts, process metadata, and
+the CLI authentication status. The observed intermittent cloud failure has not
+been conclusively attributed to stdout flushing. No command is retried.
 
 The CLI suite checks incorrect-password rejection, password login, key
 decryption, encrypted folder and login item CRUD, custom fields, Unicode notes,

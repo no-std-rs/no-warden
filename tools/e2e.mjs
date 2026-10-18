@@ -5,9 +5,10 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fork, spawnSync } from "node:child_process";
+import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { seedAccount } from "./seed-account.mjs";
+import { runCliProcess } from "./cli-process.mjs";
 
 const toolsDir = dirname(fileURLToPath(import.meta.url));
 const localBw = join(toolsDir, "node_modules/.bin/bw");
@@ -17,6 +18,7 @@ const email = process.env.BW_E2E_EMAIL ?? `no-warden-${Date.now()}-${randomBytes
 const password = process.env.BW_E2E_PASSWORD ?? randomBytes(32).toString("base64url");
 const appdata = mkdtempSync(join(tmpdir(), "no-warden-bw-"));
 const tlsDirectory = mkdtempSync(join(tmpdir(), "no-warden-tls-"));
+const outputDirectory = mkdtempSync(join(tmpdir(), "no-warden-cli-"));
 const env = {
   ...process.env,
   BITWARDENCLI_APPDATA_DIR: appdata,
@@ -27,6 +29,7 @@ const env = {
 delete env.BW_SESSION;
 let commands = 0;
 let proxy;
+let lastRunMetadata;
 
 async function cliServer() {
   if (!server.startsWith("http:")) return server;
@@ -50,10 +53,13 @@ async function cliServer() {
 function run(args, options = {}) {
   commands += 1;
   if (process.env.BW_E2E_VERBOSE) console.log(`    bw ${args.slice(0, 2).join(" ")}`);
-  const result = spawnSync(bw, [...args, "--nointeraction"], {
-    env: { ...env, ...options.env }, encoding: "utf8", timeout: 90_000,
-    maxBuffer: 4 * 1024 * 1024,
+  const result = runCliProcess(bw, [...args, "--nointeraction"], {
+    env: { ...env, ...options.env }, cacheDirectory: outputDirectory,
   });
+  lastRunMetadata = {
+    status: result.status, signal: result.signal, errorCode: result.error?.code ?? null,
+    stdoutBytes: result.stdoutBytes, stderrBytes: result.stderrBytes,
+  };
   if (options.failure) {
     assert(!result.error && result.status !== null, `bw ${args.slice(0, 2).join(" ")} could not complete`);
     assert.notEqual(result.status, 0, `bw ${args.slice(0, 2).join(" ")} unexpectedly succeeded`);
@@ -61,7 +67,7 @@ function run(args, options = {}) {
   }
   if (result.error || result.status !== 0) {
     // Arguments may contain encrypted or plaintext vault items; never print them.
-    throw new Error(`bw ${args.slice(0, 2).join(" ")} failed (${result.status}): ${result.error?.message ?? result.stderr.trim()}`);
+    throw new Error(`bw ${args.slice(0, 2).join(" ")} failed: ${JSON.stringify(lastRunMetadata)}`);
   }
   return result.stdout.trim();
 }
@@ -70,8 +76,17 @@ function json(args) { return JSON.parse(run(args)); }
 function encode(value) { return Buffer.from(JSON.stringify(value)).toString("base64"); }
 function stage(name) { console.log(`  ${name}`); }
 function login() {
-  env.BW_SESSION = run(["login", email, "--passwordenv", "BW_E2E_PASSWORD", "--raw"]);
-  assert(env.BW_SESSION.length > 20, "CLI did not return an unlock session");
+  const session = run(["login", email, "--passwordenv", "BW_E2E_PASSWORD", "--raw"]);
+  if (session.length <= 20) {
+    const metadata = lastRunMetadata;
+    let authStatus = "unavailable";
+    try {
+      const status = json(["status"]).status;
+      if (["unauthenticated", "locked", "unlocked"].includes(status)) authStatus = status;
+    } catch { /* Keep the original failure, without exposing any CLI output. */ }
+    assert.fail(`CLI did not return an unlock session: ${JSON.stringify({ ...metadata, authStatus })}`);
+  }
+  env.BW_SESSION = session;
 }
 
 try {
@@ -160,4 +175,5 @@ try {
   proxy?.kill();
   rmSync(appdata, { recursive: true, force: true });
   rmSync(tlsDirectory, { recursive: true, force: true });
+  rmSync(outputDirectory, { recursive: true, force: true });
 }
