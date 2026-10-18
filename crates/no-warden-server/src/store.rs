@@ -2,11 +2,15 @@ use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_ha
 use no_warden::{
     Storage,
     account_keys::{AccountKeyState, AccountKeyStorage},
+    account_profile::AccountProfileStorage,
     bulk::{CipherBulkOperation, CipherBulkStorage, ValidatedCipherBulk},
     identity::{ApiKeyDevice, IdentityStorage, ReauthenticationProof, Secret},
     import::{ImportData, ImportStorage, ValidatedImport},
     service::ItemMetadata,
-    wire::{AccountKeys, ApiKeyResponse, CipherRequest, FolderRequest, RegisterRequest},
+    wire::{
+        AccountKeys, ApiKeyResponse, AvatarUpdateRequest, CipherRequest, FolderRequest,
+        ProfileUpdateRequest, RegisterRequest,
+    },
 };
 use rand::{
     distributions::{Alphanumeric, DistString},
@@ -189,6 +193,22 @@ impl Store {
             account_key_cache: None,
             public_key_cache: None,
         })
+    }
+
+    fn update_profile_field(
+        &mut self,
+        owner: &str,
+        path: &'static str,
+        value: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        let tx = self.db.transaction()?;
+        let revision = next_revision(&tx, owner)?;
+        require_change(tx.execute(
+            "UPDATE accounts SET document=json_set(document,?1,?2) WHERE id=?3",
+            params![path, value, owner],
+        )?)?;
+        bump(&tx, owner, &revision)?;
+        tx.commit()
     }
 
     fn prepare_api_key(&mut self, owner: &str, rotate: bool) -> rusqlite::Result<()> {
@@ -578,6 +598,24 @@ impl CipherBulkStorage for Store {
     }
 }
 
+impl AccountProfileStorage for Store {
+    fn update_profile_name(
+        &mut self,
+        owner: &str,
+        request: &ProfileUpdateRequest<'_>,
+    ) -> Result<(), Self::Error> {
+        self.update_profile_field(owner, "$.name", Some(request.name))
+    }
+
+    fn update_avatar_color(
+        &mut self,
+        owner: &str,
+        request: &AvatarUpdateRequest<'_>,
+    ) -> Result<(), Self::Error> {
+        self.update_profile_field(owner, "$.avatarColor", request.avatar_color)
+    }
+}
+
 impl AccountKeyStorage for Store {
     fn account_key_state(
         &mut self,
@@ -697,6 +735,9 @@ impl Storage for Store {
         fields.remove("masterPasswordHash");
         fields.remove("_password");
         document["id"] = json!(id);
+        // Registration does not authorize avatar changes. Only the dedicated
+        // avatar endpoint can populate this authoritative profile field.
+        document["avatarColor"] = Value::Null;
         document["email"] = json!(document["email"].as_str().unwrap().trim().to_lowercase());
         let revision = now();
         document["creationDate"] = json!(revision);
@@ -795,6 +836,238 @@ mod tests {
     use serde::Deserialize;
 
     const CIPHERTEXT: &str = "2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+    fn profile_fixture() -> Store {
+        let mut store = setup();
+        save(&mut store, "alice", "profile-folder", "folder", None);
+        save(
+            &mut store,
+            "alice",
+            "profile-cipher",
+            "cipher",
+            Some("profile-folder"),
+        );
+        save(&mut store, "bob", "profile-foreign", "cipher", None);
+        let mut account = store.account("id", "alice").unwrap().unwrap();
+        account["name"] = json!("original name");
+        account["avatarColor"] = json!("initial");
+        account["key"] = json!("preserved-wrapped-key");
+        account["keys"] =
+            json!({"publicKey":"preserved-public","encryptedPrivateKey":"preserved-private"});
+        account["userKeyId"] = json!("preserved-key-id");
+        account["securityStamp"] = json!("preserved-stamp");
+        account["futureField"] = json!({"nested":["preserved",null,7]});
+        store
+            .db
+            .execute(
+                "UPDATE accounts SET document=?1 WHERE id='alice'",
+                [account.to_string()],
+            )
+            .unwrap();
+        store.db.execute("INSERT INTO api_keys(owner,secret,verifier) VALUES('alice','preserved-secret','preserved-verifier')",[]).unwrap();
+        store.db.execute("INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES('profile-access','profile-refresh','alice',4000000000,4000000000)",[]).unwrap();
+        let bytes: Vec<u8> = (0..=255).collect();
+        store.db.execute("INSERT INTO attachments(id,cipher_id,file_name,key,size,data) VALUES('profile-attachment','profile-cipher',?1,?1,256,?2)",params![CIPHERTEXT,bytes]).unwrap();
+        store.db.execute("INSERT INTO attachment_downloads(token,attachment_id,expires) VALUES('profile-capability','profile-attachment',4000000000)",[]).unwrap();
+        store
+    }
+
+    fn mutate_profile(
+        store: &mut Store,
+        field: &str,
+        value: Option<&str>,
+    ) -> Result<(), no_warden::ApiError> {
+        match field {
+            "name" => VaultService::new(store).update_profile(
+                "alice",
+                &ProfileUpdateRequest {
+                    name: value.expect("Name is required in this fixture."),
+                },
+            ),
+            "avatarColor" => VaultService::new(store).update_avatar(
+                "alice",
+                &AvatarUpdateRequest {
+                    avatar_color: value,
+                },
+            ),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn profile_mutations_preserve_unrelated_state_and_bump_revisions_for_repeated_values() {
+        let mut store = profile_fixture();
+        let authority = account_authority_snapshot(&store);
+        let other = snapshot(&store)
+            .into_iter()
+            .filter(|row| !row.starts_with("account:alice:"))
+            .collect::<Vec<_>>();
+        let fifty_byte_name = "é".repeat(25);
+        for (field, value) in [
+            ("name", Some(fifty_byte_name.as_str())),
+            ("name", Some(fifty_byte_name.as_str())),
+            ("name", Some("")),
+            ("name", Some("control\0\nname")),
+            ("avatarColor", Some("éabcde")),
+            ("avatarColor", Some("éabcde")),
+            ("avatarColor", None),
+            ("avatarColor", None),
+        ] {
+            let mut expected = store.account("id", "alice").unwrap().unwrap();
+            let before: String = store
+                .db
+                .query_row(
+                    "SELECT revision FROM accounts WHERE id='alice'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            mutate_profile(&mut store, field, value).unwrap();
+            let revision: String = store
+                .db
+                .query_row(
+                    "SELECT revision FROM accounts WHERE id='alice'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(
+                revision > before,
+                "Every successful profile write must advance the account revision."
+            );
+            expected[field] = json!(value);
+            expected["revisionDate"] = json!(revision);
+            assert!(
+                store.account("id", "alice").unwrap().unwrap() == expected,
+                "Profile write changed unrelated account fields."
+            );
+            assert!(
+                account_authority_snapshot(&store) == authority,
+                "Profile write changed credentials, sessions, or attachment data."
+            );
+            assert!(
+                snapshot(&store)
+                    .into_iter()
+                    .filter(|row| !row.starts_with("account:alice:"))
+                    .collect::<Vec<_>>()
+                    == other,
+                "Profile write changed vault or foreign account state."
+            );
+        }
+        let before = snapshot(&store);
+        let too_long = "é".repeat(26);
+        for (field, value) in [
+            ("name", Some(too_long.as_str())),
+            ("avatarColor", Some("")),
+            ("avatarColor", Some("🔐🔐")),
+        ] {
+            let error = mutate_profile(&mut store, field, value).unwrap_err();
+            assert_eq!(error.status_code(), 400);
+            assert!(
+                snapshot(&store) == before,
+                "Invalid UTF-8 byte length changed persisted state."
+            );
+        }
+    }
+
+    #[test]
+    fn profile_mutations_roll_back_document_revision_and_commit_failures() {
+        for field in ["name", "avatarColor"] {
+            for failure in ["document", "revision", "commit"] {
+                let mut store = profile_fixture();
+                let before = snapshot(&store);
+                let authority = account_authority_snapshot(&store);
+                let trigger = match failure {
+                    "document" => {
+                        "CREATE TRIGGER reject_profile_document BEFORE UPDATE OF document ON accounts BEGIN SELECT RAISE(ABORT,'injected profile document failure'); END;"
+                    }
+                    "revision" => {
+                        "CREATE TRIGGER reject_profile_revision BEFORE UPDATE OF revision ON accounts BEGIN SELECT RAISE(ABORT,'injected profile revision failure'); END;"
+                    }
+                    "commit" => {
+                        "CREATE TABLE failed_profile_commit(owner TEXT REFERENCES accounts(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER reject_profile_commit AFTER UPDATE OF revision ON accounts BEGIN INSERT INTO failed_profile_commit(owner) VALUES('missing-owner'); END;"
+                    }
+                    _ => unreachable!(),
+                };
+                store.db.execute_batch(trigger).unwrap();
+                assert!(
+                    mutate_profile(&mut store, field, Some("changed")).is_err(),
+                    "Injected {failure} failure must be reported."
+                );
+                assert!(
+                    snapshot(&store) == before,
+                    "Injected {failure} failure partially committed profile metadata or revision."
+                );
+                assert!(
+                    account_authority_snapshot(&store) == authority,
+                    "Injected {failure} failure changed existing authority."
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn registration_cannot_prefill_authoritative_avatar_metadata() {
+        for supplied in [
+            json!("#abcdef"),
+            json!({"injected":true}),
+            json!(7),
+            Value::Null,
+        ] {
+            let mut store = setup();
+            let document = json!({
+                "email":"new@example.test","name":"initial name","key":CIPHERTEXT,
+                "masterPasswordHash":"fixture-hash","_password":"prepared-fixture-verifier",
+                "avatarColor":supplied,"futureRegistrationField":{"preserved":true},
+            });
+            let request = RegisterRequest::deserialize(&document).unwrap();
+            store.pending = document.clone();
+            Storage::insert_account(&mut store, "new-account", &request).unwrap();
+            let saved = store.account("id", "new-account").unwrap().unwrap();
+            assert!(saved["avatarColor"].is_null());
+            assert!(crate::protocol::profile(&saved)["avatarColor"].is_null());
+            assert!(saved["futureRegistrationField"] == document["futureRegistrationField"]);
+            assert!(saved["name"] == document["name"]);
+            assert!(saved.get("_password").is_none());
+            assert!(saved.get("masterPasswordHash").is_none());
+        }
+    }
+
+    #[test]
+    fn profile_metadata_survives_private_database_reopen() {
+        let directory = std::env::temp_dir().join(format!(
+            "no-warden-profile-persistence-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let database = directory.join("vault.db");
+        let path = database.to_str().unwrap();
+        let expected;
+        {
+            let mut store = Store::open(path).unwrap();
+            store.db.execute("INSERT INTO accounts(id,email,document,password,revision) VALUES('alice','alice@example.test','{\"id\":\"alice\",\"name\":\"initial\",\"avatarColor\":null,\"keys\":{\"publicKey\":\"preserved\",\"encryptedPrivateKey\":\"preserved\"}}','test',?1)",[now()]).unwrap();
+            mutate_profile(&mut store, "name", Some("")).unwrap();
+            mutate_profile(&mut store, "avatarColor", Some("éabcde")).unwrap();
+            expected = store.account("id", "alice").unwrap().unwrap();
+        }
+        {
+            let store = Store::open(path).unwrap();
+            let saved = store.account("id", "alice").unwrap().unwrap();
+            assert!(
+                saved == expected,
+                "Profile metadata changed across database reopen."
+            );
+            let profile = crate::protocol::profile(&saved);
+            assert!(profile["name"] == "");
+            assert!(profile["avatarColor"] == "éabcde");
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn account_key_presence_distinguishes_absence_partial_pairs_and_present_empty_strings() {

@@ -39,7 +39,7 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 57 routed patterns, 31 with typed requests, 45 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 60 routed patterns, 34 with typed requests, 48 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
@@ -53,9 +53,9 @@ explicit API-key and attachment responses. Bulk cipher lists use the generic `Li
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 49 patterns, negative
-HTTP evidence for 48, and CLI command associations for 31. These are distinct
-coverage dimensions; no route has a captured CLI request trace or a verified
+The ledger records positive or restart HTTP evidence for 52 patterns, negative
+HTTP evidence for 51, 85 named HTTP cases, and 31 CLI command patterns. These are
+distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
 The client catalog is an overapproximation of shipped code, not a proof that all
@@ -186,6 +186,38 @@ patterns. Bulk changes and archive state survive two graceful restarts.
 Full-parity statuses and the formal comparison/trace receipt requirements remain
 unchanged.
 
+The profile/avatar chunk adds three previously unimplemented pinned handlers:
+
+| Method and route | Reusable metadata contract |
+| --- | --- |
+| `PUT /api/accounts/profile` | Store the exact name, up to 50 UTF-8 bytes |
+| `POST /api/accounts/profile` | Same profile-name update contract |
+| `PUT /api/accounts/avatar` | Clear an absent/null color, or store a string of exactly seven UTF-8 bytes |
+
+The [pinned handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L510-L563)
+preserve empty, whitespace, control, and Unicode names without trimming or
+normalization. Avatar strings need no hexadecimal format or `#` prefix.
+`ProfileUpdateRequest` and `AvatarUpdateRequest` borrow their strings;
+`VaultService::update_profile` and `update_avatar` validate before invoking
+`AccountProfileStorage`. The provider atomically changes only the selected field
+and account revision, preserving keys, credentials, sessions, and vault data.
+Registration validation remains unchanged.
+
+An omitted/null avatar object field or `[null]` clears the color. Empty positional
+`[]` is a schema error returning 422; a surplus sequence element is a syntax
+error returning 400. The full response remains an adapter-built profile, so
+these three new rows have no typed core response claim. Profile GET and sync use
+the [stored name directly](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/user.rs#L311-L316),
+including an empty string.
+
+All eight profile/avatar Rust HTTP cases pass against the adapter and official
+Vaultwarden `1.37.4`: 425 counted requests including two password logins. Together
+with folders and account keys, all 24 cases pass with 887 requests and seven
+logins, excluding fixture registrations. The unchanged 120-command CLI baseline
+also passes against the updated adapter; no CLI profile/avatar mutation or
+captured route trace is claimed.
+All 294 upstream entries remain tracked and all full-parity flags remain false.
+
 The account encryption-key chunk adds three previously unimplemented pinned
 routes: `GET /api/accounts/keys`, `POST /api/accounts/keys`, and
 `GET /api/users/<id>/public-key`. `AccountKeyStorage` keeps persisted key strings
@@ -300,9 +332,10 @@ than evidence that eleven implemented patterns close the family. The portable
 attachment HTTP group passes all nine tests against the release binary and
 covers all eleven patterns. All 118 real CLI commands pass against both servers, and the final nine local
 HTTP guard checks pass against the rebuilt adapter. The
-allocation-free core passes 56 unit tests, its secret-serialization doctest, and
-the Rust 1.85 and allocator-free RISC-V checks. All 22 Rust host tests pass with
-the Rust 1.89 host check. Local attachment state and bytes survive two graceful
+attachment milestone passed 56 core unit tests, its secret-serialization doctest,
+and the Rust 1.85 and allocator-free RISC-V checks, plus 22 Rust host tests with
+the Rust 1.89 host check. Current totals are in [CI and review](ci.md).
+Local attachment state and bytes survive two graceful
 restarts. Organization permissions, quotas, object
 storage, notifications, and exhaustive failure behavior remain further work;
 all full-parity flags and formal comparison/trace requirements remain unchanged.

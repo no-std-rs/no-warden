@@ -10,9 +10,10 @@ use no_warden::{
     service::ImportData,
     wire::{
         AccountKeys, AccountKeysResponse, ApiKeyResponse, AttachmentRequest, AttachmentResponse,
-        AttachmentUploadResponse, CipherIdsRequest, CipherRequest, ClientCredentialsRequest,
-        ImportRequest, InitializedAccountKeysResponse, PasswordOrOtpRequest, PreloginRequest,
-        PreloginResponse, UserPublicKeyResponse,
+        AttachmentUploadResponse, AvatarUpdateRequest, CipherIdsRequest, CipherRequest,
+        ClientCredentialsRequest, ImportRequest, InitializedAccountKeysResponse,
+        PasswordOrOtpRequest, PreloginRequest, PreloginResponse, ProfileUpdateRequest,
+        UserPublicKeyResponse,
     },
 };
 
@@ -130,6 +131,22 @@ pub extern "C" fn _start() -> ! {
         };
         let _ = black_box(serde_json_core::to_slice(&public_key, &mut key_output));
         black_box(key_output);
+    }
+    let profile = serde_json_core::from_slice::<ProfileUpdateRequest<'_>>(black_box(
+        br#"{"name":"bare-metal profile"}"#,
+    ));
+    if let Ok((profile, _)) = profile {
+        let mut output = [0u8; 128];
+        let _ = black_box(serde_json_core::to_slice(&profile, &mut output));
+        black_box(output);
+    }
+    let avatar = serde_json_core::from_slice::<AvatarUpdateRequest<'_>>(black_box(
+        br##"{"avatarColor":"#abc123"}"##,
+    ));
+    if let Ok((avatar, _)) = avatar {
+        let mut output = [0u8; 128];
+        let _ = black_box(serde_json_core::to_slice(&avatar, &mut output));
+        black_box(output);
     }
     loop {
         core::hint::spin_loop();

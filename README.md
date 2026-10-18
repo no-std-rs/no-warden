@@ -6,7 +6,8 @@ allocation-free API and business-logic core and a standalone local-storage serve
 Full Bitwarden/Vaultwarden API parity is the delivery goal. The current verified
 slice covers real Bitwarden CLI personal-vault lifecycles, JSON/CSV imports,
 archive actions, API-key login followed by password unlock, and encrypted
-attachment round trips. The remaining surface
+attachment round trips. Direct HTTP comparisons also cover personal folder,
+account encryption-key, and profile/avatar contracts. The remaining surface
 is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden
 replacement. Client-side vault encryption stays with the client.
@@ -42,8 +43,11 @@ cache and never opens your existing vault. See [test tools](tools/README.md).
 
 `tools/e2e.sh` runs the host-only `no-warden-conformance` Rust binary. It provides
 CLI orchestration, private subprocess capture, encrypted account fixtures, and
-disposable loopback TLS. Its separate Rust HTTP binary checks folder and account-key APIs
-against a configured adapter or Vaultwarden release. The existing HTTP,
+disposable loopback TLS. Its separate Rust HTTP binary checks folder, account-key,
+and profile/avatar APIs against a configured adapter or Vaultwarden release. All
+24 cases pass against both servers: 887 counted requests, including seven
+password logins and excluding fixture registrations. The reference release is
+Vaultwarden `1.37.4`. The existing HTTP,
 restart-persistence, and client-inventory checks still use JavaScript; the broader
 harness migration remains open.
 
@@ -58,9 +62,10 @@ cargo build --manifest-path checks/no-alloc/Cargo.toml \
 The library lives in [`crates/no-warden`](crates/no-warden). Its `VaultService`
 accepts a caller-provided `Storage` implementation; borrowed request models and
 bounded collections require no allocator. Opt-in `ImportStorage`,
-`CipherBulkStorage`, `IdentityStorage`, and `AttachmentStorage` providers add
-batch operations, credential services, and attachment authorization/transitions
-without adding an allocator. See [architecture](docs/architecture.md)
+`CipherBulkStorage`, `IdentityStorage`, `AccountKeyStorage`,
+`AccountProfileStorage`, and `AttachmentStorage` providers add batch operations,
+credential and account-key services, profile metadata updates, and attachment
+transitions without adding an allocator. See [architecture](docs/architecture.md)
 and [CI and review](docs/ci.md).
 
 Use the core from another application:
@@ -71,8 +76,9 @@ no-warden = { git = "https://github.com/no-std-rs/no-warden" }
 ```
 
 Supported personal-vault operations include registration, PBKDF2/Argon2 KDF
-discovery, password and API-key authentication, key retrieval/rotation, password
-refresh rotation, profile and sync, folders, encrypted ciphers, JSON/CSV import,
+discovery, password and API-key authentication, personal API-key retrieval/rotation, password
+refresh rotation, account-key retrieval/initialization/public lookup, profile
+name/avatar updates and sync, folders, encrypted ciphers, JSON/CSV import,
 bulk trash/restore/deletion, archive/unarchive, and personal attachments with
 legacy/v2 uploads, scoped downloads, metadata updates and deletion cleanup.
 Organizations, sharing, remaining attachment variants, Sends, notifications and

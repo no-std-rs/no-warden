@@ -252,3 +252,23 @@ material, changes only a completely absent pair, and commits with the account
 revision. Key response types have explicit serialization boundaries and redacted
 Debug output. The standalone adapter holds its storage lock across service checks
 and the atomic SQLite write; no persistence or clock enters the core.
+
+Profile metadata has a separate opt-in `AccountProfileStorage` provider with
+`update_profile_name` and `update_avatar_color` hooks. The borrowed
+`ProfileUpdateRequest` and `AvatarUpdateRequest` retain exact strings without
+normalization. `VaultService::update_profile` and `update_avatar` require verified
+identity and validate before calling the provider. Names may contain empty,
+whitespace, control, or Unicode values up to 50 UTF-8 bytes. A present avatar color
+must contain exactly seven UTF-8 bytes; no hexadecimal or `#` check is imposed.
+Omitted/null object fields and positional `[null]` clear the avatar, while an
+empty positional array is invalid. Registration validation remains separate.
+
+Each successful metadata write changes only its field and the account revision,
+including repeated values or clears. The provider must roll back both on failure
+and preserve keys, password/API credentials, security stamps, sessions, vault
+records, and foreign state. The standalone adapter implements this with its
+existing mutex and one SQLite transaction. These core methods return `()`;
+complete profile responses stay in the adapter builder. That builder emits the
+persisted name directly, including an empty string. The bare-metal JSON consumer
+parses and serializes both request models into caller-owned buffers; it does not
+link HTTP, persistence, or the full profile builder into the core.

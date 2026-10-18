@@ -226,6 +226,32 @@ pub struct UserKeyIdRequest<'a> {
     pub user_key_id: &'a str,
 }
 
+/// Profile mutation input. The service checks UTF-8 byte length without normalization.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+pub struct ProfileUpdateRequest<'a> {
+    pub name: &'a str,
+}
+
+impl core::fmt::Debug for ProfileUpdateRequest<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ProfileUpdateRequest([REDACTED])")
+    }
+}
+
+/// An omitted/null object field or positional `[null]` clears the avatar.
+/// An empty positional array is invalid. Present string values remain opaque.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvatarUpdateRequest<'a> {
+    pub avatar_color: Option<&'a str>,
+}
+
+impl core::fmt::Debug for AvatarUpdateRequest<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("AvatarUpdateRequest([REDACTED])")
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreloginResponse {
@@ -640,6 +666,76 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
 mod tests {
     use super::*;
     use std::string::ToString;
+    #[test]
+    fn profile_requests_borrow_raw_names_and_keep_upstream_single_field_sequence_shape() {
+        for input in [r#"{"name":"  café 🔐  "}"#, r#"["  café 🔐  "]"#] {
+            let request: ProfileUpdateRequest<'_> = serde_json::from_str(input).unwrap();
+            assert_eq!(request.name, "  café 🔐  ");
+            let start = input.as_ptr() as usize;
+            assert!((start..start + input.len()).contains(&(request.name.as_ptr() as usize)));
+            assert_eq!(
+                serde_json::to_value(request).unwrap(),
+                serde_json::json!({"name":"  café 🔐  "})
+            );
+            assert!(!std::format!("{request:?}").contains("café"));
+        }
+        let document = serde_json::json!({"name":"quoted\"\n\t雪"});
+        assert_eq!(
+            ProfileUpdateRequest::deserialize(&document).unwrap().name,
+            "quoted\"\n\t雪"
+        );
+        for input in [
+            "{}",
+            "[]",
+            "null",
+            r#"{"name":null}"#,
+            r#"{"name":7}"#,
+            r#"["name",null]"#,
+        ] {
+            assert!(serde_json::from_str::<ProfileUpdateRequest<'_>>(input).is_err());
+        }
+    }
+
+    #[test]
+    fn avatar_requests_distinguish_opaque_present_values_from_missing_or_null_clears() {
+        for input in ["{}", r#"{"avatarColor":null}"#, "[null]"] {
+            let request: AvatarUpdateRequest<'_> = serde_json::from_str(input).unwrap();
+            assert_eq!(request.avatar_color, None);
+            assert_eq!(
+                serde_json::to_value(request).unwrap(),
+                serde_json::json!({"avatarColor":null})
+            );
+        }
+        for input in [r#"{"avatarColor":"aé🔐"}"#, r#"["aé🔐"]"#] {
+            let request: AvatarUpdateRequest<'_> = serde_json::from_str(input).unwrap();
+            assert_eq!(request.avatar_color, Some("aé🔐"));
+            assert!(!std::format!("{request:?}").contains("aé🔐"));
+        }
+        for input in [
+            "[]",
+            "null",
+            r#"{"avatarColor":7}"#,
+            r#"{"avatarColor":false}"#,
+            r#"{"avatarColor":[]}"#,
+            r#"{"avatarColor":{}}"#,
+            r#"[null,null]"#,
+        ] {
+            assert!(serde_json::from_str::<AvatarUpdateRequest<'_>>(input).is_err());
+        }
+        assert_eq!(
+            serde_json::from_str::<AvatarUpdateRequest<'_>>("[]")
+                .unwrap_err()
+                .classify(),
+            serde_json::error::Category::Data,
+        );
+        assert_eq!(
+            serde_json::from_str::<AvatarUpdateRequest<'_>>("[null,null]")
+                .unwrap_err()
+                .classify(),
+            serde_json::error::Category::Syntax,
+        );
+    }
+
     #[test]
     fn account_key_requests_borrow_opaque_strings_and_use_private_then_public_sequence_order() {
         let input = r#"["opaque-private:future","opaque-public:future"]"#;

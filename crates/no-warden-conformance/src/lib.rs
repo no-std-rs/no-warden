@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod account_keys;
+pub mod account_profile;
 pub mod capture;
 pub mod cli;
 pub mod fixture;

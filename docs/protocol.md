@@ -449,3 +449,33 @@ preserves spelling and returns 422 for malformed IDs.
 
 These contracts remain partial until complete upstream behavior, configuration,
 error-envelope, and client-path comparisons have been established.
+
+## Account profile and avatar updates
+
+The [pinned metadata handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L510-L563)
+accept authenticated owner updates:
+
+| Method and route | Input |
+| --- | --- |
+| `PUT /api/accounts/profile`, `POST /api/accounts/profile` | Required string `name`, at most 50 UTF-8 bytes |
+| `PUT /api/accounts/avatar` | Optional string/null `avatarColor`; present strings require exactly seven UTF-8 bytes |
+
+Names remain exact, including empty values, whitespace, control characters, and
+Unicode. The byte limit is not a character count. Avatar validation follows the
+source’s length check; it does not require a hex value or a leading hash. Missing
+or null avatar values clear the color. Both `{}` and `[null]` clear it; an empty
+sequence `[]` fails the required sequence-field shape with 422. Unknown request fields have no authority
+over identity, credentials, keys, or the other metadata field.
+
+Successful updates return the existing profile envelope, and the new field also
+appears in profile reads and sync. The
+[pinned profile model](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/user.rs#L310-L340)
+returns the raw stored name, including an empty name. The provider commits only
+the requested metadata field and the account revision. Existing keys, passwords,
+API credentials, sessions, vault data, and other accounts stay intact. Repeating a
+valid update still advances the revision. JSON schema failures return 422,
+syntax failures return 400, and invalid byte lengths return 400.
+
+The borrowed request DTOs and provider-driven mutation rules are allocation-free.
+The complete profile response remains an adapter builder, with its broader
+account, organization, and authentication variants still tracked as partial.

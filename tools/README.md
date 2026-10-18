@@ -8,8 +8,8 @@ server have separate platform requirements.
 The host-only `no-warden-conformance` Rust crate runs the default CLI suite,
 including private subprocess capture, encrypted account fixtures, and disposable
 loopback TLS. `tools/e2e.sh` invokes it through Cargo. Rust HTTP groups cover
-folder and account-key contracts; the existing HTTP, restart-persistence,
-and client-inventory checks still use JavaScript; the broader migration remains
+folder, account-key, and profile/avatar contracts; the existing HTTP,
+restart-persistence, and client-inventory checks still use JavaScript; the broader migration remains
 unfinished.
 
 ```sh
@@ -111,8 +111,9 @@ uploads empty, all-byte-value, and 2 MiB plus 37-byte fixtures, including a quot
 Unicode filename. Downloads go to private files and are compared byte for byte;
 binary contents never pass through text stdout capture. The test edits the
 parent item, trashes/restores it, discards the client cache, syncs and downloads
-all attachments again, then deletes them. The complete suite executes 120 real
-CLI commands. The Rust runner checks the cumulative 37, 51, 66, 92, and 120-command
+all attachments again, then deletes them. That baseline executes 118 real CLI
+commands; the fingerprint extension below brings the current total to 120.
+The Rust runner checks the cumulative 37, 51, 66, 92, and 120-command
 milestones. Fixture and downloaded files remain inside private temporary
 directories and are removed when the run returns, including on an error.
 
@@ -180,7 +181,7 @@ binary payloads never enter assertion output. Build `no-warden-server` first, or
 set `NO_WARDEN_BIN` to its binary path. The test stops its child processes and
 removes the temporary database on success or failure.
 
-## Rust folder and account-key HTTP contracts
+## Rust folder, account-key, and profile HTTP contracts
 
 The portable folder checks use the Rust fixture library and two disposable
 accounts. They exercise the existing seven folder routes, JSON decoding and
@@ -193,10 +194,13 @@ BW_E2E_SERVER=http://127.0.0.1:8001 cargo run --locked \
   -p no-warden-conformance --bin no-warden-http-conformance
 ```
 
-`BW_FOLDER_RECEIPT` and `BW_ACCOUNT_KEYS_RECEIPT` optionally name new private
-result files for their respective groups. These HTTP
-groups make five fixture logins in total; use a fresh disposable reference process before
-this group and again before the complete CLI comparison. Its default login
+`BW_FOLDER_RECEIPT`, `BW_ACCOUNT_KEYS_RECEIPT`, and `BW_PROFILE_RECEIPT` optionally
+name new private result files for their respective groups. Existing paths are
+rejected; files are created with mode 0600 and contain authored case names,
+statuses, request counts, and login counts, without request or response values.
+These HTTP groups make seven fixture logins in total; use a fresh disposable
+reference process before the combined suite and again before the complete CLI
+comparison. Its default login
 limits remain unchanged. Other HTTP and persistence groups still use their
 existing JavaScript tools.
 
@@ -206,9 +210,36 @@ The fixture helper retains a valid generated pair privately for initialization;
 it omits that pair from the actual registration request. Public-key lookup is
 verified across accounts, while private retrieval always uses the bearer’s owner.
 Initialization checks include positional JSON, opaque/empty values, and rejection
-of an existing pair without any mutation. Both groups preserve response bodies,
-credentials, and encrypted key material inside the process; receipts contain only
+of an existing pair without any mutation. All three groups preserve response
+bodies, credentials, and encrypted key material inside the process; receipts contain only
 authored case names, statuses, and counts. No authentication or mutation is retried.
+
+The profile/avatar group adds two disposable accounts and one password login
+per account. It checks both `PUT` and `POST /api/accounts/profile` and
+`PUT /api/accounts/avatar`. Names preserve empty strings, whitespace, control
+characters, and Unicode without normalization, subject to a 50-byte UTF-8 limit.
+Present avatar colors require exactly seven UTF-8 bytes, without hexadecimal or
+`#` validation. `{}`, `{"avatarColor":null}`, and `[null]` clear the avatar;
+`[]` rejects with 422. The suite also checks schema/syntax errors, ignored fields,
+unauthenticated requests, repeated writes, and full account/vault snapshots.
+Full profile responses remain adapter-built; the core provides mutation request
+models and provider-driven services. The unchanged 120-command CLI suite also
+passes against the updated adapter; its upstream 120-command baseline was
+verified in the preceding account-key chunk.
+
+The final HTTP receipts pass against both the adapter and official Vaultwarden
+`1.37.4` with the same counts:
+
+| Rust HTTP group | Cases | Counted requests | Password logins |
+| --- | --- | --- | --- |
+| Folders | 8 | 220 | 2 |
+| Account keys | 8 | 242 | 3 |
+| Profile/avatar | 8 | 425 | 2 |
+| Combined | 24 | 887 | 7 |
+
+Login requests are included in the request counts; fixture registrations are
+excluded. These receipts do not establish captured CLI route traces or complete
+upstream API parity.
 
 ## Compare against upstream Vaultwarden
 

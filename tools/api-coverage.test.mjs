@@ -30,9 +30,10 @@ test("source enumeration includes the runtime and real-client checks", () => {
   const hashes = sourceHashes();
   assert(Object.hasOwn(hashes, "crates/no-warden/src/lib.rs"));
   assert(Object.hasOwn(hashes, "crates/no-warden/src/account_keys.rs"));
+  assert(Object.hasOwn(hashes, "crates/no-warden/src/account_profile.rs"));
   assert(Object.hasOwn(hashes, "checks/no-alloc/src/main.rs"));
   assert(Object.hasOwn(hashes, "crates/no-warden-conformance/src/cli.rs"));
-  for (const file of ["fixture.rs", "capture.rs", "transport.rs", "folders.rs", "account_keys.rs", "bin/no-warden-http-conformance.rs"]) assert(Object.hasOwn(hashes, `crates/no-warden-conformance/src/${file}`));
+  for (const file of ["fixture.rs", "capture.rs", "transport.rs", "folders.rs", "account_keys.rs", "account_profile.rs", "bin/no-warden-http-conformance.rs"]) assert(Object.hasOwn(hashes, `crates/no-warden-conformance/src/${file}`));
   assert(Object.hasOwn(hashes, "crates/no-warden-conformance/Cargo.toml"));
   assert(Object.hasOwn(hashes, "tools/e2e.sh"));
   assert(Object.hasOwn(hashes, "tools/seed-account.mjs"));
@@ -68,10 +69,10 @@ test("changing the Rust folder cases or HTTP entry point invalidates coverage ev
   }
 });
 
-test("account-key core, HTTP cases, and no-allocator consumer are bound to audited evidence", () => {
-  for (const file of ["crates/no-warden/src/account_keys.rs", "crates/no-warden-conformance/src/account_keys.rs", "checks/no-alloc/src/main.rs"]) {
+test("account core, HTTP cases, and no-allocator consumer are bound to audited evidence", () => {
+  for (const file of ["crates/no-warden/src/account_keys.rs", "crates/no-warden-conformance/src/account_keys.rs", "crates/no-warden/src/account_profile.rs", "crates/no-warden-conformance/src/account_profile.rs", "checks/no-alloc/src/main.rs"]) {
     const hashes = sourceHashes();
-    assert(Object.hasOwn(hashes, file), "Account-key behavior and response-link evidence must be enumerated");
+    assert(Object.hasOwn(hashes, file), "Account behavior and no-allocator link evidence must be enumerated");
     hashes[file] = "0".repeat(64);
     assert.throws(() => validateCoverage(snapshot, hashes), /sources changed/);
   }

@@ -33,6 +33,8 @@ pub enum Route<'a> {
     AccountKeysInitialize,
     UserPublicKey(&'a str),
     Profile,
+    ProfileUpdate,
+    AvatarUpdate,
     UserKeyId,
     RevisionDate,
     Token,
@@ -108,6 +110,8 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (Get, "/api/accounts/keys") => Some(AccountKeysGet),
         (Post, "/api/accounts/keys") => Some(AccountKeysInitialize),
         (Get, "/api/accounts/profile") => Some(Profile),
+        (Put | Post, "/api/accounts/profile") => Some(ProfileUpdate),
+        (Put, "/api/accounts/avatar") => Some(AvatarUpdate),
         (Post, "/api/accounts/key-management/user-key-id") => Some(UserKeyId),
         (Get, "/api/accounts/revision-date") => Some(RevisionDate),
         (Post, "/identity/connect/token") => Some(Token),
@@ -228,6 +232,39 @@ fn valid_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn profile_and_avatar_mutation_routes_require_authentication_and_exact_methods() {
+        for (method, path, expected) in [
+            (Method::Put, "/api/accounts/profile", Route::ProfileUpdate),
+            (
+                Method::Post,
+                "/api/accounts/profile/?future=true",
+                Route::ProfileUpdate,
+            ),
+            (Method::Put, "/api/accounts/avatar", Route::AvatarUpdate),
+        ] {
+            assert_eq!(classify(method, path), Some(expected));
+            assert!(expected.requires_authentication());
+        }
+        assert_eq!(
+            classify(Method::Get, "/api/accounts/profile"),
+            Some(Route::Profile)
+        );
+        for method in [Method::Delete, Method::Options] {
+            assert!(classify(method, "/api/accounts/profile").is_none());
+        }
+        for method in [Method::Get, Method::Post, Method::Delete, Method::Options] {
+            assert!(classify(method, "/api/accounts/avatar").is_none());
+        }
+        for path in [
+            "/api/accounts/profile/unknown",
+            "/api/accounts/avatar/unknown",
+            "/api/accounts/avatar-update",
+        ] {
+            assert!(classify(Method::Put, path).is_none());
+        }
+    }
+
     #[test]
     fn account_key_routes_require_authentication_and_preserve_identifier_spelling() {
         for (method, path, expected) in [
