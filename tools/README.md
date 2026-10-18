@@ -9,6 +9,7 @@ npm ci --prefix tools
 Build and start the standalone Rust server, then run the checks:
 
 ```sh
+node --test tools/cli-process.test.mjs
 tools/e2e.sh
 node --test tools/server-tests.mjs
 node tools/persistence.mjs
@@ -31,6 +32,15 @@ valid Bitwarden PBKDF2, AES-CBC/HMAC, and RSA keys. The CLI uses a temporary
 `BITWARDENCLI_APPDATA_DIR`, which is deleted even if the test fails. The test
 does not access an existing user's CLI account or vault. Account passwords,
 session tokens, and vault contents are never printed.
+
+CLI subprocess stdout goes through a temporary 0600 regular file inside a 0700
+directory, which is deleted in `finally`. This avoids the documented Node.js
+pipe-write hazard when the unmodified CLI exits immediately after printing.
+The helper retains a 90-second timeout, the 4 MiB stderr buffer limit, and a 4 MiB
+stdout size check before reading the captured file. An empty login result still
+fails the suite; its diagnostic includes only byte counts, process metadata, and
+the CLI authentication status. The observed intermittent cloud failure has not
+been conclusively attributed to stdout flushing. No command is retried.
 
 The CLI suite checks incorrect-password rejection, password login, key
 decryption, encrypted folder and login item CRUD, custom fields, Unicode notes,
