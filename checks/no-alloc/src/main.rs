@@ -5,9 +5,13 @@
 
 use core::{hint::black_box, panic::PanicInfo};
 use no_warden::{
+    identity::Secret,
     route::{Method, classify},
     service::ImportData,
-    wire::{CipherIdsRequest, CipherRequest, ImportRequest, PreloginRequest, PreloginResponse},
+    wire::{
+        ApiKeyResponse, CipherIdsRequest, CipherRequest, ClientCredentialsRequest, ImportRequest,
+        PasswordOrOtpRequest, PreloginRequest, PreloginResponse,
+    },
 };
 
 #[unsafe(no_mangle)]
@@ -53,6 +57,25 @@ pub extern "C" fn _start() -> ! {
         let _ = black_box(serde_json_core::to_slice(&ids, &mut encoded));
         black_box(encoded);
     }
+    let proof = serde_json_core::from_slice::<PasswordOrOtpRequest<'_>>(black_box(
+        br#"{"masterPasswordHash":"test-only-authorization-hash"}"#,
+    ));
+    if let Ok((proof, _)) = proof {
+        let _ = black_box(proof.proof());
+    }
+    let credentials = serde_json_core::from_slice::<ClientCredentialsRequest<'_>>(black_box(
+        br#"{"grant_type":"client_credentials","client_id":"user.opaque:ID","client_secret":"test-only-key","scope":"api","deviceIdentifier":"device","deviceName":"bare metal","deviceType":"iOS"}"#,
+    ));
+    let _ = black_box(credentials);
+    let mut encoded = [0u8; 256];
+    let _ = black_box(serde_json_core::to_slice(
+        &ApiKeyResponse {
+            api_key: Secret::new(black_box("test-only-key")),
+            revision_date: "2026-01-01T00:00:00Z",
+        },
+        &mut encoded,
+    ));
+    black_box(encoded);
     loop {
         core::hint::spin_loop();
     }

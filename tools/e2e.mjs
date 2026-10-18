@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { seedAccount } from "./seed-account.mjs";
+import { registration, seedAccount } from "./seed-account.mjs";
 import { runCliProcess } from "./cli-process.mjs";
 
 const toolsDir = dirname(fileURLToPath(import.meta.url));
@@ -87,6 +87,24 @@ function login() {
     assert.fail(`CLI did not return an unlock session: ${JSON.stringify({ ...metadata, authStatus })}`);
   }
   env.BW_SESSION = session;
+}
+
+async function apiRequest(path, { method = "POST", token, body, form } = {}) {
+  const headers = {};
+  if (token) headers.authorization = `Bearer ${token}`;
+  if (body) headers["content-type"] = "application/json";
+  if (form) headers["content-type"] = "application/x-www-form-urlencoded";
+  const response = await fetch(`${server}${path}`, {
+    method, headers, signal: AbortSignal.timeout(15_000),
+    body: form ? new URLSearchParams(form) : body ? JSON.stringify(body) : undefined,
+  });
+  assert.equal(response.status, 200, `${method} ${path}: HTTP ${response.status}`);
+  return response.json();
+}
+
+function apiUnlock() {
+  env.BW_SESSION = run(["unlock", "--passwordenv", "BW_E2E_PASSWORD", "--raw"]);
+  assert(env.BW_SESSION.length > 20, "API-key login must unlock with the master password before decrypting");
 }
 
 try {
@@ -301,7 +319,62 @@ try {
   assert.equal(unarchived.folderId, archiveItem.folderId);
   run(["logout"]);
   assert.equal(commands, 66, "The archive extension must exercise all 66 CLI commands");
-  console.log(`PASS: ${commands} real CLI commands; original 51 lifecycle/import commands plus archive, fresh-cache decryption, and unarchive verified.`);
+
+  stage("Authenticate with a personal API key, then unlock and decrypt with the master password");
+  delete env.BW_SESSION;
+  const masterPasswordHash = registration(email, password).masterPasswordHash;
+  const passwordBearer = await apiRequest("/identity/connect/token", {
+    form: {
+      grant_type: "password", username: email, password: masterPasswordHash,
+      scope: "api offline_access", client_id: "cli", deviceType: "8",
+      deviceIdentifier: randomUUID(), deviceName: "CLI API-key fixture",
+    },
+  });
+  const profile = await apiRequest("/api/accounts/profile", { method: "GET", token: passwordBearer.access_token });
+  const key = await apiRequest("/api/accounts/api-key", {
+    token: passwordBearer.access_token, body: { masterPasswordHash },
+  });
+  assert(typeof key.apiKey === "string" && /^[A-Za-z0-9]{30}$/.test(key.apiKey), "API key response must contain a valid secret");
+  env.BW_CLIENTID = `user.${profile.id}`;
+  env.BW_CLIENTSECRET = key.apiKey;
+  run(["login", "--apikey"], { failure: true, env: { BW_CLIENTSECRET: `${key.apiKey}-incorrect` } });
+  run(["login", "--apikey"]);
+  assert.equal(json(["status"]).status, "locked");
+  apiUnlock();
+  assert.equal(json(["status"]).status, "unlocked");
+  run(["sync"]);
+  const apiItem = json(["get", "item", archiveItem.id]);
+  assert(apiItem.login.password === importItems[0].login.password, "API-key login and password unlock must decrypt the item");
+  run(["logout"]);
+  delete env.BW_SESSION;
+  rmSync(appdata, { recursive: true, force: true });
+  run(["config", "server", clientServer]);
+  run(["login", "--apikey"]);
+  assert.equal(json(["status"]).status, "locked");
+  apiUnlock();
+  run(["sync"]);
+  verifyImports(json(["list", "items"]), json(["list", "folders"]));
+  const apiFresh = json(["get", "item", archiveItem.id]);
+  assert(apiFresh.notes === importItems[0].notes, "Fresh-cache API login must decrypt encrypted notes");
+  run(["logout"]);
+  delete env.BW_SESSION;
+
+  stage("Rotate the personal API key, reject the old secret, and decrypt after login with the new key");
+  const rotated = await apiRequest("/api/accounts/rotate-api-key", {
+    token: passwordBearer.access_token, body: { masterPasswordHash },
+  });
+  assert(typeof rotated.apiKey === "string" && rotated.apiKey !== key.apiKey, "Rotation must replace the API secret");
+  run(["login", "--apikey"], { failure: true });
+  env.BW_CLIENTSECRET = rotated.apiKey;
+  run(["login", "--apikey"]);
+  assert.equal(json(["status"]).status, "locked");
+  apiUnlock();
+  run(["sync"]);
+  const rotatedItem = json(["get", "item", archiveItem.id]);
+  assert(rotatedItem.login.password === importItems[0].login.password, "Rotated API-key login must preserve decryptability");
+  run(["logout"]);
+  assert.equal(commands, 90, "API-key authentication must retain the original 66 and exercise all 90 CLI commands");
+  console.log(`PASS: ${commands} real CLI commands; original 66 plus API-key login, password unlock, fresh-cache decryption, and key rotation verified.`);
 } finally {
   proxy?.kill();
   rmSync(appdata, { recursive: true, force: true });

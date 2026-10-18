@@ -11,6 +11,7 @@
 pub mod bounded;
 pub mod bulk;
 pub mod error;
+pub mod identity;
 pub mod import;
 pub mod route;
 pub mod service;

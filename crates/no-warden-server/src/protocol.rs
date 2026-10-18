@@ -162,3 +162,28 @@ pub fn token_fields(account: &Value) -> Value {
         },
     })
 }
+
+/// Personal API-key grants have access-only authority and a distinct upstream
+/// decryption fragment. Token issuance itself belongs to the authenticated host.
+pub fn api_key_token_fields(account: &Value) -> Value {
+    let mut response = token_fields(account);
+    let fields = response.as_object_mut().expect("token fields");
+    fields.remove("MasterPasswordPolicy");
+    fields["UserDecryptionOptions"]
+        .as_object_mut()
+        .expect("decryption options")
+        .remove("UserKeyId");
+    if let Some(keys) = fields.get_mut("AccountKeys").and_then(Value::as_object_mut) {
+        if let Some(object) = keys.remove("object") {
+            keys.insert("Object".into(), object);
+        }
+        if let Some(pair) = keys
+            .get_mut("publicKeyEncryptionKeyPair")
+            .and_then(Value::as_object_mut)
+            && let Some(object) = pair.remove("object")
+        {
+            pair.insert("Object".into(), object);
+        }
+    }
+    response
+}

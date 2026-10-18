@@ -117,6 +117,50 @@ async function lifecycleFixture(user, overrides = {}) {
   }), "lifecycle fixture create");
 }
 
+function apiGrantForm(clientId, clientSecret, overrides = {}) {
+  return {
+    grant_type: "client_credentials", scope: "api", client_id: clientId, client_secret: clientSecret,
+    deviceIdentifier: randomUUID(), deviceName: "HTTP API-key tests", deviceType: "8", ...overrides,
+  };
+}
+function apiKeyResponse(response) {
+  assert.equal(response.status, 200, "Personal API-key request must succeed");
+  const data = response.data;
+  assert.equal(data.object, "apiKey");
+  assert(typeof data.apiKey === "string" && /^[A-Za-z0-9]{30}$/.test(data.apiKey), "API secret must be 30 ASCII alphanumeric characters");
+  assert(Number.isFinite(Date.parse(data.revisionDate)), "API-key revision must be a timestamp");
+  return data;
+}
+async function apiKeyFixture(user) {
+  const token = user.token.access_token;
+  const profile = ok(await request("/api/accounts/profile", { token }), "API-key owner profile");
+  const key = apiKeyResponse(await request("/api/accounts/api-key", {
+    method: "POST", token, body: { masterPasswordHash: user.registration.masterPasswordHash },
+  }));
+  return { ...key, clientId: `user.${profile.id}`, userId: profile.id };
+}
+function apiTokenResponse(response, user, clientId) {
+  assert.equal(response.status, 200, "Personal client_credentials request must succeed");
+  const token = response.data;
+  assert.equal(token.scope, "api");
+  assert.equal(token.token_type, "Bearer");
+  assert(Number.isInteger(token.expires_in) && token.expires_in >= 7195 && token.expires_in <= 7200,
+    "API-key access must advertise the remaining two-hour lifetime");
+  assert.equal(Object.hasOwn(token, "refresh_token"), false, "API-key tokens must not issue a refresh token");
+  assert(typeof token.access_token === "string" && token.access_token.length > 20, "API-key access token must be present");
+  assert(token.Key === user.registration.key, "API token must retain the master-password-wrapped user key");
+  assert(token.PrivateKey === user.registration.keys.encryptedPrivateKey, "API token must retain the wrapped private key");
+  assert.equal(token.Kdf, user.registration.kdf);
+  assert.equal(token.KdfIterations, user.registration.kdfIterations);
+  assert.equal(token.UserDecryptionOptions.HasMasterPassword, true);
+  assert.equal(token.UserDecryptionOptions.MasterPasswordUnlock.Salt, user.registration.email);
+  const claims = JSON.parse(Buffer.from(token.access_token.split(".")[1], "base64url").toString("utf8"));
+  assert.equal(claims.client_id, clientId);
+  assert.deepEqual(claims.scope, ["api"]);
+  assert.equal(claims.exp - claims.nbf, 7200);
+  return token;
+}
+
 await test("standalone adapter enforces authentication, isolation, and JSON preservation", async (t) => {
   const alice = await account('Alice "quoted" \\ café 🔐');
   const bob = await account();
@@ -858,4 +902,157 @@ await test("standalone bulk transactions preserve opaque JSON and roll back mixe
       }
     }
   }
+});
+
+// Run each API-key parent against a fresh upstream process: its default login
+// limiter allows ten requests per IP burst. Every group below stays under ten.
+await test("personal API-key management requires reauthentication and keeps secrets private", async (t) => {
+  const owner = await account("API-key owner");
+  const other = await account("API-key foreign owner");
+  const token = owner.token.access_token;
+  const proof = { masterPasswordHash: owner.registration.masterPasswordHash };
+  let first;
+
+  await t.test("first retrieval creates a key and repeated retrieval preserves its key and revision", async () => {
+    const before = await vaultState(token);
+    await delay(5);
+    first = await apiKeyFixture(owner);
+    assert((await vaultState(token)).revision > before.revision, "Lazy API-key creation must advance account revision");
+    const revision = (await vaultState(token)).revision;
+    const repeated = apiKeyResponse(await request("/api/accounts/api-key", {
+      method: "POST", token, body: { MasterPasswordHash: owner.registration.masterPasswordHash },
+    }));
+    assert(repeated.apiKey === first.apiKey, "Retrieval must reuse the existing API key");
+    assert.equal(repeated.revisionDate, first.revisionDate);
+    assert.equal((await vaultState(token)).revision, revision, "Repeated API-key retrieval must not change account revision");
+  });
+
+  await t.test("both management routes require a bearer and exactly one valid owner proof", async () => {
+    const before = await vaultState(token);
+    for (const path of ["/api/accounts/api-key", "/api/accounts/rotate-api-key"]) {
+      for (const bearer of [undefined, "forged-api-key-bearer"]) {
+        denied(await request(path, { method: "POST", token: bearer, body: proof }), "API-key management authentication", [401, 403]);
+      }
+      for (const body of [
+        {}, { masterPasswordHash: null }, { masterPasswordHash: "incorrect-proof" },
+        { masterPasswordHash: other.registration.masterPasswordHash },
+        { ...proof, otp: "123456" }, { otp: "123456" },
+      ]) {
+        assert.equal((await request(path, { method: "POST", token, body })).status, 400,
+          "Management requires exactly one valid owner proof; protected OTP is unavailable in this fixture");
+      }
+    }
+    unchanged(await vaultState(token), before, "Rejected API-key management must preserve vault data and revision");
+    const after = await apiKeyFixture(owner);
+    assert(after.apiKey === first.apiKey, "Rejected rotation must preserve the existing API secret");
+  });
+
+  await t.test("profile and sync never expose a recoverable API secret", async () => {
+    const profile = ok(await request("/api/accounts/profile", { token }), "private API-key profile");
+    const sync = ok(await request("/api/sync", { token }), "private API-key sync");
+    assert(!JSON.stringify({ profile, sync }).includes(first.apiKey), "API secrets must never be present in profile or sync JSON");
+  });
+});
+
+await test("personal API-key credentials require the correct owner and exact scope", async (t) => {
+  const owner = await account("API-grant owner");
+  const other = await account("API-grant foreign owner");
+  const key = await apiKeyFixture(owner);
+  const otherKey = await apiKeyFixture(other);
+
+  await t.test("API grants return owner-bound two-hour access tokens and password-unlock metadata without refresh tokens", async () => {
+    const token = apiTokenResponse(await request("/identity/connect/token", {
+      method: "POST", form: apiGrantForm(key.clientId, key.apiKey),
+    }), owner, key.clientId);
+    const profile = ok(await request("/api/accounts/profile", { token: token.access_token }), "API-grant owner profile");
+    assert.equal(profile.id, key.userId);
+  });
+
+  await t.test("wrong secrets, swapped owner keys, malformed or unknown clients, and wrong or missing scopes are rejected", async () => {
+    const before = await vaultState(owner.token.access_token);
+    for (const overrides of [
+      { client_secret: `${key.apiKey}-incorrect` }, { client_secret: otherKey.apiKey },
+      { client_id: key.userId }, { client_id: `user.${randomUUID()}` },
+      { scope: "api offline_access" }, { scope: undefined },
+    ]) {
+      const form = apiGrantForm(key.clientId, key.apiKey, overrides);
+      for (const field of Object.keys(form)) if (form[field] === undefined) delete form[field];
+      assert.equal((await request("/identity/connect/token", { method: "POST", form })).status, 400,
+        "Invalid personal API credentials or scope must be rejected");
+    }
+    unchanged(await vaultState(owner.token.access_token), before, "Rejected API grants must preserve vault data and revision");
+  });
+});
+
+await test("personal API-key device fields require presence and accept upstream form aliases", async (t) => {
+  const owner = await account("API-device owner");
+  const key = await apiKeyFixture(owner);
+
+  await t.test("missing client credentials or any required device field are rejected", async () => {
+    for (const field of ["client_id", "client_secret", "deviceIdentifier", "deviceName", "deviceType"]) {
+      const form = apiGrantForm(key.clientId, key.apiKey);
+      delete form[field];
+      assert.equal((await request("/identity/connect/token", { method: "POST", form })).status, 400,
+        "Missing API-grant credentials or device fields must be rejected");
+    }
+  });
+
+  await t.test("present empty device strings and a nonnumeric device type follow upstream permissive parsing", async () => {
+    apiTokenResponse(await request("/identity/connect/token", {
+      method: "POST", form: apiGrantForm(key.clientId, key.apiKey, {
+        deviceIdentifier: "", deviceName: "", deviceType: "not-a-number",
+      }),
+    }), owner, key.clientId);
+  });
+
+  await t.test("case-insensitive compact and underscored form aliases authenticate", async () => {
+    apiTokenResponse(await request("/identity/connect/token", {
+      method: "POST", form: {
+        GRANTTYPE: "client_credentials", CLIENTID: key.clientId, CLIENTSECRET: key.apiKey, SCOPE: "api",
+        DEVICE_IDENTIFIER: randomUUID(), DEVICE_NAME: "API-key alias fixture", DEVICE_TYPE: "8",
+      },
+    }), owner, key.clientId);
+  });
+});
+
+await test("personal API-key rotation replaces login credentials while preserving issued sessions", async (t) => {
+  const owner = await account("API-rotation owner");
+  const token = owner.token.access_token;
+  const first = await apiKeyFixture(owner);
+  const apiBearer = apiTokenResponse(await request("/identity/connect/token", {
+    method: "POST", form: apiGrantForm(first.clientId, first.apiKey),
+  }), owner, first.clientId);
+  let rotated;
+
+  await t.test("rotation changes key and revision but preserves API/password access and password refresh authority", async () => {
+    const revision = (await vaultState(token)).revision;
+    await delay(5);
+    rotated = apiKeyResponse(await request("/api/accounts/rotate-api-key", {
+      method: "POST", token, body: { masterPasswordHash: owner.registration.masterPasswordHash },
+    }));
+    assert(rotated.apiKey !== first.apiKey, "Rotation must produce a different API secret");
+    assert(Date.parse(rotated.revisionDate) > Date.parse(first.revisionDate));
+    assert((await vaultState(token)).revision > revision);
+    ok(await request("/api/sync", { token: apiBearer.access_token }), "API bearer remains authorized after key rotation");
+    const refreshed = ok(await request("/identity/connect/token", {
+      method: "POST", form: { grant_type: "refresh_token", refresh_token: owner.token.refresh_token, client_id: "cli" },
+    }), "password refresh remains authorized after API-key rotation");
+    ok(await request("/api/sync", { token }), "original password bearer remains authorized after API-key rotation");
+    ok(await request("/api/sync", { token: refreshed.access_token }), "refreshed password bearer after API-key rotation");
+    const retrieved = await apiKeyFixture(owner);
+    assert(retrieved.apiKey === rotated.apiKey, "Retrieval after rotation must return the new key");
+  });
+
+  await t.test("the old secret cannot log in again and the new secret supports repeated client-credentials authentication", async () => {
+    assert.equal((await request("/identity/connect/token", {
+      method: "POST", form: apiGrantForm(first.clientId, first.apiKey),
+    })).status, 400, "The replaced API secret must not grant another access token");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const granted = apiTokenResponse(await request("/identity/connect/token", {
+        method: "POST", form: apiGrantForm(first.clientId, rotated.apiKey),
+      }), owner, first.clientId);
+      ok(await request("/api/sync", { token: granted.access_token }), "new API-key access");
+    }
+    ok(await request("/api/sync", { token: apiBearer.access_token }), "old issued API bearer after old-secret rejection");
+  });
 });

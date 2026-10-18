@@ -1,9 +1,15 @@
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use no_warden::{
     Storage,
     bulk::{CipherBulkOperation, CipherBulkStorage, ValidatedCipherBulk},
+    identity::{ApiKeyDevice, IdentityStorage, ReauthenticationProof, Secret},
     import::{ImportData, ImportStorage, ValidatedImport},
     service::ItemMetadata,
-    wire::{CipherRequest, FolderRequest, RegisterRequest},
+    wire::{ApiKeyResponse, CipherRequest, FolderRequest, RegisterRequest},
+};
+use rand::{
+    distributions::{Alphanumeric, DistString},
+    rngs::OsRng,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
@@ -13,6 +19,8 @@ pub struct Store {
     pub pending: Value,
     owner: String,
     key_id: Option<String>,
+    api_key_secret: Option<String>,
+    api_key_revision: Option<String>,
 }
 
 pub fn now() -> String {
@@ -58,6 +66,16 @@ fn require_change(changed: usize) -> rusqlite::Result<()> {
     } else {
         Err(rusqlite::Error::QueryReturnedNoRows)
     }
+}
+
+fn verify_credential(encoded: Option<&str>, supplied: &str) -> rusqlite::Result<bool> {
+    let Some(encoded) = encoded else {
+        return Ok(false);
+    };
+    let hash = PasswordHash::new(encoded).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    Ok(Argon2::default()
+        .verify_password(supplied.as_bytes(), &hash)
+        .is_ok())
 }
 
 fn item(db: &Connection, owner: &str, id: &str, kind: &str) -> rusqlite::Result<Option<Value>> {
@@ -135,6 +153,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS items(id TEXT PRIMARY KEY, owner TEXT NOT NULL REFERENCES accounts(id), kind TEXT NOT NULL, document TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, revision TEXT NOT NULL, created TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS items_owner ON items(owner,kind);
             CREATE TABLE IF NOT EXISTS cipher_archives(cipher_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE, owner TEXT NOT NULL REFERENCES accounts(id), archived_at TEXT, PRIMARY KEY(cipher_id,owner));
+            CREATE TABLE IF NOT EXISTS api_keys(owner TEXT PRIMARY KEY REFERENCES accounts(id), secret TEXT NOT NULL, verifier TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS sessions(access TEXT PRIMARY KEY, refresh TEXT UNIQUE NOT NULL, owner TEXT NOT NULL REFERENCES accounts(id), access_expires INTEGER NOT NULL, refresh_expires INTEGER NOT NULL);")?;
         // SQLite inherits the private database mode for new sidecars. Also
         // narrow sidecars left behind by an earlier permissive installation.
@@ -145,7 +164,67 @@ impl Store {
             pending: Value::Null,
             owner: String::new(),
             key_id: None,
+            api_key_secret: None,
+            api_key_revision: None,
         })
+    }
+
+    fn prepare_api_key(&mut self, owner: &str, rotate: bool) -> rusqlite::Result<()> {
+        let tx = self.db.transaction()?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM api_keys WHERE owner=?1)",
+            [owner],
+            |row| row.get(0),
+        )?;
+        if rotate || !exists {
+            let secret = Alphanumeric.sample_string(&mut OsRng, 30);
+            let salt = SaltString::generate(&mut OsRng);
+            let verifier = Argon2::default()
+                .hash_password(secret.as_bytes(), &salt)
+                .map_err(|_| rusqlite::Error::InvalidQuery)?
+                .to_string();
+            let revision = next_revision(&tx, owner)?;
+            tx.execute(
+                "INSERT INTO api_keys(owner,secret,verifier) VALUES(?1,?2,?3)
+                ON CONFLICT(owner) DO UPDATE SET secret=excluded.secret,verifier=excluded.verifier",
+                params![owner, secret, verifier],
+            )?;
+            bump(&tx, owner, &revision)?;
+        }
+        // The key must remain recoverable for the authenticated retrieval API.
+        // Its Argon2 verifier supplies constant-time credential verification.
+        let (secret, revision) = tx.query_row(
+            "SELECT k.secret,a.revision FROM api_keys k JOIN accounts a ON a.id=k.owner WHERE k.owner=?1",
+            [owner], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?;
+        tx.commit()?;
+        self.api_key_secret = Some(secret);
+        self.api_key_revision = Some(revision);
+        Ok(())
+    }
+
+    fn verify_authorization_hash(&self, owner: &str, supplied: &str) -> rusqlite::Result<bool> {
+        let encoded: Option<String> = self
+            .db
+            .query_row(
+                "SELECT password FROM accounts WHERE id=?1",
+                [owner],
+                |row| row.get(0),
+            )
+            .optional()?;
+        verify_credential(encoded.as_deref(), supplied)
+    }
+
+    fn verify_api_secret(&self, owner: &str, supplied: &str) -> rusqlite::Result<bool> {
+        let encoded: Option<String> = self
+            .db
+            .query_row(
+                "SELECT verifier FROM api_keys WHERE owner=?1",
+                [owner],
+                |row| row.get(0),
+            )
+            .optional()?;
+        verify_credential(encoded.as_deref(), supplied)
     }
 
     pub fn account(&self, field: &str, value: &str) -> rusqlite::Result<Option<Value>> {
@@ -362,6 +441,55 @@ impl ImportStorage for Store {
     }
 }
 
+impl IdentityStorage for Store {
+    fn verify_reauthentication(
+        &mut self,
+        owner: &str,
+        proof: ReauthenticationProof<'_>,
+    ) -> Result<bool, Self::Error> {
+        match proof {
+            ReauthenticationProof::MasterPasswordHash(secret) => {
+                self.verify_authorization_hash(owner, secret.expose_secret())
+            }
+            // Protected-action email OTP issuance/consumption is a separate API family.
+            ReauthenticationProof::ProtectedActionOtp(_) => Ok(false),
+        }
+    }
+
+    fn get_or_create_api_key(&mut self, owner: &str) -> Result<ApiKeyResponse<'_>, Self::Error> {
+        self.prepare_api_key(owner, false)?;
+        Ok(ApiKeyResponse {
+            api_key: Secret::new(self.api_key_secret.as_deref().expect("prepared API key")),
+            revision_date: self
+                .api_key_revision
+                .as_deref()
+                .expect("prepared API key revision"),
+        })
+    }
+
+    fn rotate_api_key(&mut self, owner: &str) -> Result<ApiKeyResponse<'_>, Self::Error> {
+        self.prepare_api_key(owner, true)?;
+        Ok(ApiKeyResponse {
+            api_key: Secret::new(self.api_key_secret.as_deref().expect("prepared API key")),
+            revision_date: self
+                .api_key_revision
+                .as_deref()
+                .expect("prepared API key revision"),
+        })
+    }
+
+    fn verify_api_key(
+        &mut self,
+        user_id: &str,
+        secret: &Secret<'_>,
+        _device: ApiKeyDevice<'_>,
+    ) -> Result<bool, Self::Error> {
+        // This conformance host creates enabled password accounts. Disabled-account,
+        // device administration and login-abuse policies remain provider responsibilities.
+        self.verify_api_secret(user_id, secret.expose_secret())
+    }
+}
+
 impl CipherBulkStorage for Store {
     fn commit_cipher_bulk(
         &mut self,
@@ -537,6 +665,103 @@ mod tests {
     use serde::Deserialize;
 
     const CIPHERTEXT: &str = "2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+    #[test]
+    fn api_keys_are_recoverable_stable_and_verified_independently_from_passwords() {
+        let mut store = setup();
+        let first = IdentityStorage::get_or_create_api_key(&mut store, "alice").unwrap();
+        let key = first.api_key.expose_secret().to_owned();
+        let revision = first.revision_date.to_owned();
+        assert_eq!(key.len(), 30);
+        assert!(key.bytes().all(|byte| byte.is_ascii_alphanumeric()));
+        let again = IdentityStorage::get_or_create_api_key(&mut store, "alice").unwrap();
+        assert!(
+            again.api_key.expose_secret() == key,
+            "Retrieval must preserve the credential"
+        );
+        assert_eq!(again.revision_date, revision);
+        assert!(store.verify_api_secret("alice", &key).unwrap());
+        assert!(!store.verify_api_secret("bob", &key).unwrap());
+        assert!(!store.verify_api_secret("alice", "wrong").unwrap());
+        assert!(!store.verify_api_secret("absent", &key).unwrap());
+        let rotated = IdentityStorage::rotate_api_key(&mut store, "alice").unwrap();
+        let next = rotated.api_key.expose_secret().to_owned();
+        assert!(next != key, "Rotation must replace the credential");
+        assert_ne!(rotated.revision_date, revision);
+        assert!(!store.verify_api_secret("alice", &key).unwrap());
+        assert!(store.verify_api_secret("alice", &next).unwrap());
+        let salt = SaltString::generate(&mut OsRng);
+        let encoded = Argon2::default()
+            .hash_password(b"server-authorization-hash", &salt)
+            .unwrap()
+            .to_string();
+        store
+            .db
+            .execute(
+                "UPDATE accounts SET password=?1 WHERE id='alice'",
+                [encoded],
+            )
+            .unwrap();
+        assert!(
+            store
+                .verify_authorization_hash("alice", "server-authorization-hash")
+                .unwrap()
+        );
+        assert!(!store.verify_authorization_hash("alice", &next).unwrap());
+        assert!(
+            !IdentityStorage::verify_reauthentication(
+                &mut store,
+                "alice",
+                ReauthenticationProof::ProtectedActionOtp(Secret::new("unsupported"))
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn api_key_creation_and_rotation_roll_back_with_the_account_revision() {
+        for failure in ["revision", "response"] {
+            for rotate in [false, true] {
+                let mut store = setup();
+                if rotate {
+                    store.prepare_api_key("alice", false).unwrap();
+                }
+                let before = snapshot(&store);
+                let credential = |store: &Store| {
+                    store
+                        .db
+                        .query_row(
+                            "SELECT secret,verifier FROM api_keys WHERE owner='alice'",
+                            [],
+                            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                        )
+                        .optional()
+                        .unwrap()
+                };
+                let previous = credential(&store);
+                let trigger = if failure == "revision" {
+                    "CREATE TRIGGER reject_key_revision BEFORE UPDATE OF revision ON accounts
+                BEGIN SELECT RAISE(ABORT,'injected key revision failure'); END;"
+                } else {
+                    // Make the response query fail after the new key and revision
+                    // were written. The entire operation must still roll back.
+                    "CREATE TRIGGER remove_key_before_response AFTER UPDATE OF revision ON accounts
+                 BEGIN DELETE FROM api_keys WHERE owner=NEW.id; END;"
+                };
+                store.db.execute_batch(trigger).unwrap();
+                assert!(store.prepare_api_key("alice", rotate).is_err());
+                assert!(
+                    credential(&store) == previous,
+                    "Failed key persistence changed credentials"
+                );
+                assert_eq!(
+                    snapshot(&store),
+                    before,
+                    "Failed key persistence changed the account"
+                );
+            }
+        }
+    }
 
     fn bulk(
         store: &mut Store,

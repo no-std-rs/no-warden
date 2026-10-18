@@ -15,13 +15,17 @@ restore and permanent deletion. A per-run trusted loopback TLS proxy meets the
 current CLI's HTTPS requirement without changing the client or disabling
 certificate validation.
 
-The expanded suite passes 66 CLI commands against both servers. It imports
+The expanded suite passes 90 CLI commands against both servers. It imports
 Bitwarden JSON containing login, secure-note, card, and identity items (types
 1–4), and Bitwarden CSV containing login and secure-note items (types 1–2).
 It verifies decrypted imported fields and folder assignments after sync and a
 fresh client cache. CSV folder normalization and ancestor folders are generated
 by the client. The suite also archives an imported login, decrypts its password
 and notes after a fresh cache login, and restores it from the archive.
+It then obtains a personal API key through HTTP, logs in with `bw login --apikey`,
+checks that the vault is locked, unlocks with the master password, and decrypts
+vault data. The flow repeats with a fresh client cache and a rotated key; the
+old secret is rejected. API login output alone does not establish vault unlock.
 Real-client blob, SSH-key, and other import variants still need their own fixtures.
 
 | API surface | Standalone behavior | Verification |
@@ -30,6 +34,8 @@ Real-client blob, SSH-key, and other import variants still need their own fixtur
 | `POST /api/accounts/register` | Registration with encrypted keys | Cryptographic fixture |
 | Prelogin legacy and identity aliases | PBKDF2/Argon2 parameters | Latest CLI and HTTP |
 | `POST /identity/connect/token` | Password grant, expiring sessions, rotating refresh | CLI and HTTP |
+| `POST /api/accounts/api-key`, `POST /api/accounts/rotate-api-key` | Password-reauthenticated personal key retrieval, lazy creation, rotation | Core, HTTP comparison with upstream, rollback and restart tests; keys used by real CLI |
+| Personal `client_credentials` at `POST /identity/connect/token` | `user.<id>`, exact `api` scope, access token without refresh token | Real CLI API login, password unlock and decryption; core and HTTP comparison with upstream |
 | `POST /api/accounts/key-management/user-key-id` | One-time key-ID migration | SDK login and HTTP |
 | Profile, revision date, sync | Personal account and opaque encrypted vault | CLI and HTTP |
 | Folder CRUD | Encrypted names, owner isolation, clear references on deletion | CLI, HTTP, storage tests |
@@ -49,9 +55,11 @@ Real-client blob, SSH-key, and other import variants still need their own fixtur
 | Provider conflict errors | `Storage::map_error` can preserve an HTTP 409 conflict | Core provider tests |
 
 The allocation-free core's models include login, secure note, card, identity,
-and SSH-key items, plus optional opaque blob data. Its 36 unit tests cover the
+and SSH-key items, plus optional opaque blob data. Its 45 unit tests cover the
 typed fields, bounded collections and import decoding, validation, ownership,
-lifecycle rules, folder mapping, and the atomic import and bulk provider contracts.
+lifecycle rules, folder mapping, the atomic import and bulk provider contracts,
+and API-key proof selection and authorization. A compile-fail doctest verifies
+that `Secret` cannot be serialized through the general Serde interface.
 Real-client import evidence covers the types listed above; broader operations
 for those types and blob encryption need their own client fixtures. Keeping
 encrypted passkey records in a login item does not
@@ -63,14 +71,43 @@ desktop and mobile are not covered by the CLI result. Full organization,
 attachment, Send, notification and account-management compatibility remains on
 the [roadmap](../ROADMAP.md).
 
-The expanded HTTP regression suite passes all 38 tests against the rebuilt
-standalone server, with 13 Rust host tests covering storage and transport rules.
+The expanded HTTP regression suite passes all 52 tests against the rebuilt
+standalone server, with 17 Rust host tests covering storage and transport rules.
 These establish wire preservation and authorization for the new shapes,
 aliases, and personal imports independently of the CLI evidence.
 They do not prove that a real client can decrypt a blob or use stored passkey
 credentials.
 User-key-ID migration is a one-time identifier backfill, not a key-rotation
 implementation.
+
+The personal API-key chunk follows the pinned
+[key-management handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1476-L1501).
+Both endpoints require an authenticated caller and reauthentication. A repeated
+key retrieval preserves the secret and account revision; lazy creation and
+rotation issue a 30-character alphanumeric secret and advance the revision.
+Rotation changes future API-key logins without revoking existing access tokens
+or password-grant refresh tokens. The recoverable secret is confidential server
+credential data, not encrypted vault content exposed by profile or sync.
+
+The [upstream proof model](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/mod.rs#L49-L75)
+accepts exactly one of `masterPasswordHash` (`MasterPasswordHash` alias) or `otp`.
+The core delegates proof verification to its provider. The host accepts only the
+client-derived password authentication hash; protected-action email OTP and
+passwordless account flows remain unsupported. An OTP is not a TOTP login code.
+
+The [personal token handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L600-L748)
+requires `client_id=user.<account-id>`, a matching `client_secret`, exact
+`scope=api`, and device identifier, name, and type. It returns a two-hour access
+token and encrypted key/KDF/decryption metadata, with no refresh token. The
+[shipped client renews API tokens](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/services/api.service.ts#L1464-L1478)
+by repeating that grant. Its TypeScript API-key login strategy preserves the
+credentials; the password-account unlock command separately invokes SDK crypto.
+All 14 portable API-key HTTP tests pass against the actual Vaultwarden 1.37.4
+binary in four isolated processes with unchanged upstream rate-limit settings.
+Local rollback tests cover failed key creation and rotation, and keys, rotations,
+and issued API bearers survive two graceful restarts. Organization credentials,
+KeyConnector, protected-action OTP, upstream rate limiting, two-factor policy,
+and device notification behavior are not established by this personal subset.
 
 Personal import follows the pinned
 [Vaultwarden folder mapping and creation rules](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L613-L678):

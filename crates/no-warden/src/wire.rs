@@ -2,7 +2,7 @@
 //!
 //! Strings borrow the decoder's input. JSON decoders that cannot borrow escaped strings
 //! should use a caller-owned decoding buffer. Cipher payload strings are encrypted by clients.
-use crate::bounded::BoundedList;
+use crate::{bounded::BoundedList, identity::Secret};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_URIS: usize = 32;
@@ -10,6 +10,57 @@ pub const MAX_FIELDS: usize = 64;
 pub const MAX_PASSWORD_HISTORY: usize = 32;
 pub const MAX_FIDO2_CREDENTIALS: usize = 16;
 pub const MAX_COLLECTION_IDS: usize = 64;
+
+/// Exactly one proof must be supplied. The password field is the client's server-
+/// authorization hash; `otp` is a protected-action proof, not an account TOTP code.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PasswordOrOtpRequest<'a> {
+    #[serde(borrow, alias = "MasterPasswordHash")]
+    pub master_password_hash: Option<Secret<'a>>,
+    #[serde(borrow)]
+    pub otp: Option<Secret<'a>>,
+}
+
+/// Deliberate secret-bearing response for the authenticated API-key management endpoints.
+///
+/// This response is the explicit serialization boundary. `Secret` itself does not implement
+/// `Serialize`, and formatting this response redacts its key.
+#[derive(Debug)]
+pub struct ApiKeyResponse<'a> {
+    pub api_key: Secret<'a>,
+    pub revision_date: &'a str,
+}
+
+impl Serialize for ApiKeyResponse<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut response = serializer.serialize_struct("ApiKeyResponse", 3)?;
+        response.serialize_field("apiKey", self.api_key.expose_secret())?;
+        response.serialize_field("revisionDate", self.revision_date)?;
+        response.serialize_field("object", "apiKey")?;
+        response.end()
+    }
+}
+
+/// Borrowed user API-key grant fields after transport decoding.
+///
+/// Missing fields remain distinguishable from present blank strings. Device fields retain
+/// their raw values, including nonnumeric device types; normalization is a host concern.
+#[derive(Debug, Deserialize)]
+pub struct ClientCredentialsRequest<'a> {
+    pub grant_type: Option<&'a str>,
+    pub client_id: Option<&'a str>,
+    #[serde(borrow)]
+    pub client_secret: Option<Secret<'a>>,
+    pub scope: Option<&'a str>,
+    #[serde(rename = "deviceIdentifier", alias = "device_identifier")]
+    pub device_identifier: Option<&'a str>,
+    #[serde(rename = "deviceName", alias = "device_name")]
+    pub device_name: Option<&'a str>,
+    #[serde(rename = "deviceType", alias = "device_type")]
+    pub device_type: Option<&'a str>,
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -314,6 +365,53 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
 mod tests {
     use super::*;
     use std::string::ToString;
+    #[test]
+    fn identity_requests_borrow_raw_secrets_and_explicit_responses_reveal_only_their_contract() {
+        let proof: PasswordOrOtpRequest<'_> =
+            serde_json::from_str(r#"{"MasterPasswordHash":"authorization-hash"}"#).unwrap();
+        assert_eq!(
+            proof.master_password_hash.as_ref().unwrap().expose_secret(),
+            "authorization-hash"
+        );
+        let proof_debug = std::format!("{proof:?}");
+        assert!(proof_debug.contains("REDACTED"));
+        assert!(!proof_debug.contains("authorization-hash"));
+
+        let response = ApiKeyResponse {
+            api_key: Secret::new("test-only-secret"),
+            revision_date: "revision",
+        };
+        assert!(!std::format!("{response:?}").contains("test-only-secret"));
+        assert_eq!(
+            serde_json::to_value(response).unwrap(),
+            serde_json::json!({"apiKey":"test-only-secret","revisionDate":"revision","object":"apiKey"})
+        );
+
+        let large_secret = "opaque-input".repeat(8192);
+        let document = serde_json::json!({
+            "grant_type":"client_credentials", "client_id":"user.opaque:User/Case",
+            "client_secret":large_secret, "scope":"api", "deviceIdentifier":"",
+            "deviceName":"", "deviceType":"iOS"
+        });
+        let request = ClientCredentialsRequest::deserialize(&document).unwrap();
+        assert_eq!(request.client_id, Some("user.opaque:User/Case"));
+        assert_eq!(request.device_identifier, Some(""));
+        assert_eq!(request.device_type, Some("iOS"));
+        assert_eq!(
+            request
+                .client_secret
+                .as_ref()
+                .unwrap()
+                .expose_secret()
+                .len(),
+            large_secret.len()
+        );
+        assert!(!std::format!("{request:?}").contains("opaque-input"));
+        assert!(serde_json::from_str::<PasswordOrOtpRequest<'_>>(r#"{"otp":7}"#).is_err());
+        assert!(
+            serde_json::from_str::<ClientCredentialsRequest<'_>>(r#"{"client_secret":7}"#).is_err()
+        );
+    }
     #[test]
     fn selected_cipher_ids_are_required_exact_strings_with_caller_selected_capacity() {
         let input = r#"{"ids":["opaque:One/id","opaque:One/id","opaque:one/id"]}"#;

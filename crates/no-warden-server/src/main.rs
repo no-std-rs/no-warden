@@ -17,10 +17,12 @@ use hmac::{Hmac, Mac};
 use no_warden::{
     ApiError, VaultService,
     bulk::CipherBulkOperation,
+    identity::{AuthorizedApiKeyGrant, Secret},
     import::ImportView,
     route::{self, Route},
     wire::{
-        CipherRequest, FolderRelationship, FolderRequest, ImportFolderRequest, RegisterRequest,
+        CipherRequest, ClientCredentialsRequest, FolderRelationship, FolderRequest,
+        ImportFolderRequest, PasswordOrOtpRequest, RegisterRequest,
     },
 };
 use rand::{RngCore, rngs::OsRng};
@@ -180,13 +182,32 @@ async fn dispatch(
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
     if route == Route::Token {
-        let form: BTreeMap<String, String> =
-            serde_urlencoded::from_bytes(&body).map_err(|_| invalid())?;
-        let grant = form
-            .get("grant_type")
-            .map(String::as_str)
-            .ok_or_else(invalid)?;
+        let form = parse_connect_form(&body)?;
+        let grant = connect_field(&form, &["grant_type", "granttype"])?.ok_or_else(invalid)?;
         let account = match grant {
+            "client_credentials" => {
+                let request = ClientCredentialsRequest {
+                    grant_type: Some(grant),
+                    client_id: connect_field(&form, &["client_id", "clientid"])?,
+                    client_secret: connect_field(&form, &["client_secret", "clientsecret"])?
+                        .map(Secret::new),
+                    scope: connect_field(&form, &["scope"])?,
+                    device_identifier: connect_field(
+                        &form,
+                        &["device_identifier", "deviceidentifier"],
+                    )?,
+                    device_name: connect_field(&form, &["device_name", "devicename"])?,
+                    device_type: connect_field(&form, &["device_type", "devicetype"])?,
+                };
+                let grant = VaultService::new(&mut *store).authenticate_api_key(&request)?;
+                let account = store.account("id", grant.user_id())?.ok_or_else(invalid)?;
+                return Ok(json_response(issue_token_grant(
+                    &app,
+                    &store.db,
+                    &account,
+                    Some(&grant),
+                )?));
+            }
             "password" => {
                 let email = form
                     .get("username")
@@ -254,6 +275,20 @@ async fn dispatch(
     let owner = owner.ok_or_else(unauthorized)?;
     let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
     match route {
+        Route::AccountApiKey => {
+            let document: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
+            let request = PasswordOrOtpRequest::deserialize(&document).map_err(|_| invalid())?;
+            let mut service = VaultService::new(&mut *store);
+            let response = service.get_api_key(&owner, &request)?;
+            Ok(Json(response).into_response())
+        }
+        Route::AccountRotateApiKey => {
+            let document: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
+            let request = PasswordOrOtpRequest::deserialize(&document).map_err(|_| invalid())?;
+            let mut service = VaultService::new(&mut *store);
+            let response = service.rotate_api_key(&owner, &request)?;
+            Ok(Json(response).into_response())
+        }
         Route::CipherBulkTrash => cipher_bulk(route, &owner, &body, &mut store),
         Route::CipherBulkRestore => cipher_bulk(route, &owner, &body, &mut store),
         Route::CipherBulkDelete => cipher_bulk(route, &owner, &body, &mut store),
@@ -500,16 +535,60 @@ fn cipher_bulk(
     }
 }
 
+// Rocket's pinned ConnectData accepts explicit underscore/compact aliases without
+// regard to ASCII case. Ambiguous alias submissions fail rather than choosing a value.
+fn parse_connect_form(body: &[u8]) -> Result<BTreeMap<String, String>, Failure> {
+    let fields: Vec<(String, String)> =
+        serde_urlencoded::from_bytes(body).map_err(|_| invalid())?;
+    let mut form = BTreeMap::new();
+    for (key, value) in fields {
+        if form.insert(key, value).is_some() {
+            return Err(invalid());
+        }
+    }
+    Ok(form)
+}
+
+fn connect_field<'a>(
+    form: &'a BTreeMap<String, String>,
+    aliases: &[&str],
+) -> Result<Option<&'a str>, Failure> {
+    let mut matches = form
+        .iter()
+        .filter(|(key, _)| aliases.iter().any(|alias| key.eq_ignore_ascii_case(alias)));
+    let value = matches.next().map(|(_, value)| value.as_str());
+    if matches.next().is_some() {
+        return Err(invalid());
+    }
+    Ok(value)
+}
+
 fn issue_tokens(app: &App, db: &rusqlite::Connection, account: &Value) -> Result<Value, Failure> {
+    issue_token_grant(app, db, account, None)
+}
+
+fn issue_token_grant(
+    app: &App,
+    db: &rusqlite::Connection,
+    account: &Value,
+    api: Option<&AuthorizedApiKeyGrant<'_>>,
+) -> Result<Value, Failure> {
     let timestamp = chrono::Utc::now().timestamp();
     db.execute(
         "DELETE FROM sessions WHERE access_expires<=?1 AND refresh_expires<=?1",
         [timestamp],
     )?;
+    let expires_in = api.map_or(3600_i64, |grant| i64::from(grant.expires_in()));
+    let client_id = api.map_or("cli", |grant| grant.client_id());
+    let scopes = if api.is_some() {
+        vec!["api"]
+    } else {
+        vec!["api", "offline_access"]
+    };
     let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
     let claims = json!({"sub":account["id"],"email":account["email"],"email_verified":true,
-        "name":account["name"],"premium":true,"iss":app.base,"iat":timestamp,"nbf":timestamp,"exp":timestamp+3600,
-        "client_id":"cli","scope":["api","offline_access"],"amr":["Application"],"sstamp":account["id"],"jti":random_token()});
+        "name":account["name"],"premium":true,"iss":app.base,"iat":timestamp,"nbf":timestamp,"exp":timestamp+expires_in,
+        "client_id":client_id,"scope":scopes,"amr":["Application"],"sstamp":account["id"],"jti":random_token()});
     let unsigned = format!("{header}.{}", URL_SAFE_NO_PAD.encode(claims.to_string()));
     let mut mac = Hmac::<Sha256>::new_from_slice(&app.signing_key).expect("HMAC key size");
     mac.update(unsigned.as_bytes());
@@ -517,20 +596,153 @@ fn issue_tokens(app: &App, db: &rusqlite::Connection, account: &Value) -> Result
         "{unsigned}.{}",
         URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
     );
-    let refresh = random_token();
-    db.execute("INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES(?1,?2,?3,?4,?5)",params![digest(&access),digest(&refresh),account["id"].as_str(),timestamp+3600,timestamp+30*24*3600])?;
-    let mut response = protocol::token_fields(account);
+    let refresh = api.is_none().then(random_token);
+    let refresh_digest = refresh
+        .as_deref()
+        .map(digest)
+        .unwrap_or_else(|| format!("access-only:{}", digest(&access)));
+    let refresh_expires = if refresh.is_some() {
+        timestamp + 30 * 24 * 3600
+    } else {
+        0
+    };
+    db.execute("INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES(?1,?2,?3,?4,?5)",params![digest(&access),refresh_digest,account["id"].as_str(),timestamp+expires_in,refresh_expires])?;
+    let mut response = if api.is_some() {
+        protocol::api_key_token_fields(account)
+    } else {
+        protocol::token_fields(account)
+    };
     response["access_token"] = json!(access);
-    response["refresh_token"] = json!(refresh);
+    if let Some(refresh) = refresh {
+        response["refresh_token"] = json!(refresh);
+    }
     response["token_type"] = json!("Bearer");
-    response["expires_in"] = json!(3600);
-    response["scope"] = json!("api offline_access");
+    response["expires_in"] = json!(expires_in);
+    response["scope"] = json!(if api.is_some() {
+        "api"
+    } else {
+        "api offline_access"
+    });
     Ok(response)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn api_key_issuance_has_only_access_authority_and_rotation_keeps_sessions() {
+        let app = App {
+            store: Arc::new(Mutex::new(Store::open(":memory:").unwrap())),
+            base: "http://127.0.0.1".into(),
+            signing_key: [1; 32],
+        };
+        let mut store = app.store.lock().unwrap();
+        let account = json!({"id":"alice","email":"alice@example.test","name":"Alice"});
+        store.db.execute("INSERT INTO accounts(id,email,document,password,revision) VALUES('alice','alice@example.test',?1,'test',?2)",
+            params![account.to_string(),store::now()]).unwrap();
+        let password_tokens = issue_tokens(&app, &store.db, &account)
+            .unwrap_or_else(|_| panic!("Password token issuance failed"));
+        let key = no_warden::identity::IdentityStorage::get_or_create_api_key(&mut *store, "alice")
+            .unwrap()
+            .api_key
+            .expose_secret()
+            .to_owned();
+        let request = ClientCredentialsRequest {
+            grant_type: Some("client_credentials"),
+            client_id: Some("user.alice"),
+            client_secret: Some(Secret::new(&key)),
+            scope: Some("api"),
+            device_identifier: Some("device"),
+            device_name: Some("CLI"),
+            device_type: Some("8"),
+        };
+        let grant = VaultService::new(&mut *store)
+            .authenticate_api_key(&request)
+            .unwrap();
+        let tokens = issue_token_grant(&app, &store.db, &account, Some(&grant))
+            .unwrap_or_else(|_| panic!("API token issuance failed"));
+        assert_eq!(tokens["scope"], "api");
+        assert_eq!(tokens["expires_in"], 7200);
+        assert!(tokens.get("refresh_token").is_none());
+        assert!(tokens.get("MasterPasswordPolicy").is_none());
+        let access = tokens["access_token"].as_str().unwrap();
+        let claims: Value = serde_json::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(access.split('.').nth(1).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(claims["client_id"], "user.alice");
+        assert_eq!(claims["scope"], json!(["api"]));
+        assert_eq!(
+            claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap(),
+            7200
+        );
+        let refresh_expiry: i64 = store
+            .db
+            .query_row(
+                "SELECT refresh_expires FROM sessions WHERE access=?1",
+                [digest(access)],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(refresh_expiry, 0);
+        no_warden::identity::IdentityStorage::rotate_api_key(&mut *store, "alice").unwrap();
+        for bearer in [access, password_tokens["access_token"].as_str().unwrap()] {
+            let live: bool = store
+                .db
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sessions WHERE access=?1 AND access_expires>?2)",
+                    params![digest(bearer), chrono::Utc::now().timestamp()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(live, "Rotation must preserve existing bearer authority");
+        }
+        let live_refresh: bool = store
+            .db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sessions WHERE refresh=?1 AND refresh_expires>?2)",
+                params![
+                    digest(password_tokens["refresh_token"].as_str().unwrap()),
+                    chrono::Utc::now().timestamp()
+                ],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            live_refresh,
+            "Rotation must preserve password refresh authority"
+        );
+    }
+
+    #[test]
+    fn connect_form_aliases_preserve_values_and_reject_ambiguity() {
+        assert!(parse_connect_form(b"client_id=user.alice&client_id=user.bob").is_err());
+        assert!(parse_connect_form(b"client_id=user.alice&client%5Fid=user.bob").is_err());
+        let form = BTreeMap::from([
+            ("CLIENTID".into(), "user.MixedCase".into()),
+            ("Device_Type".into(), "unknown-kind".into()),
+        ]);
+        assert_eq!(
+            connect_field(&form, &["client_id", "clientid"])
+                .unwrap_or_else(|_| panic!("Client alias resolution failed")),
+            Some("user.MixedCase")
+        );
+        assert_eq!(
+            connect_field(&form, &["device_type", "devicetype"])
+                .unwrap_or_else(|_| panic!("Device alias resolution failed")),
+            Some("unknown-kind")
+        );
+        assert_eq!(
+            connect_field(&form, &["scope"]).unwrap_or_else(|_| panic!("Scope resolution failed")),
+            None
+        );
+        let mut ambiguous = form;
+        ambiguous.insert("client_id".into(), "different".into());
+        assert!(connect_field(&ambiguous, &["client_id", "clientid"]).is_err());
+    }
 
     #[test]
     fn token_issuance_purges_only_sessions_with_no_live_authority() {
