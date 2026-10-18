@@ -36,7 +36,8 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | API surface | Standalone behavior | Verification |
 | --- | --- | --- |
 | `GET /api/config` | Endpoint discovery | Real CLI |
-| `POST /api/accounts/register` | Registration with encrypted keys | Cryptographic fixture |
+| `POST /api/accounts/register` | Legacy strict registration with encrypted keys | Cryptographic fixture |
+| `POST /identity/accounts/register/send-verification-email`, `POST /identity/accounts/register/finish` | No-SMTP new-account verification token and canonical atomic completion; old/current credential shapes | Eight matching corrected Rust HTTP cases on both actual servers; borrowed opt-in core/provider and host parser, token, rollback/reopen and HTTP-dispatch tests; fresh unchanged CLI regression remains separate |
 | Prelogin legacy and identity aliases | PBKDF2/Argon2 parameters | Latest CLI and HTTP |
 | `POST /identity/connect/token` | Password grant, expiring sessions, rotating refresh | CLI and HTTP |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
@@ -72,7 +73,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Provider conflict errors | `Storage::map_error` can preserve an HTTP 409 conflict | Core provider tests |
 
 The allocation-free core's models include login, secure note, card, identity,
-and SSH-key items, plus optional opaque blob data. Its 136 unit tests cover the
+and SSH-key items, plus optional opaque blob data. Its 150 unit tests cover the
 typed fields, bounded collections and import decoding, validation, ownership,
 lifecycle rules, folder mapping, the atomic import and bulk provider contracts,
 API-key proof selection and authorization, and attachment lifecycle and provider
@@ -80,7 +81,7 @@ rules, account-key initialization, profile/avatar byte validation, and equivalen
 views, serialization, schema and atomic provider boundaries, plus device
 discovery, owner checks, explicit projections, push-provider ordering and
 auth-request creation/discovery, decisions, code-protected reads and one-use
-approved-request login. A compile-fail
+approved-request login, and separate opaque modern registration. A compile-fail
 doctest verifies that `Secret` cannot be serialized through the general Serde interface.
 Real-client import evidence covers the types listed above; broader operations
 for those types and blob encryption need their own client fixtures. Keeping
@@ -96,10 +97,10 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 104 Rust host tests pass and cover storage and transport rules, including
-the new login variant. The expanded workspace contains 299 active unit tests:
-136 core, 104 host and 59 support tests, with one additional ignored test.
-Required CI checks the workspace, its core
+All 330 active workspace unit tests pass: 150 core, 118 host and 62 support,
+plus one ignored support test. They include modern registration, deferred email
+validation and the corrected concurrency fixtures. Clippy with warnings denied
+and minimum-Rust-version checks pass. Required CI also checks the core
 doctest, formatting, Clippy with warnings denied, minimum Rust versions,
 no-allocator, bare-metal and embedded consumers. The verified 61 JavaScript HTTP
 checks and restart-persistence regression remain required final-head checks.
@@ -132,7 +133,7 @@ string/null type without rewriting those documents.
 `AccountProfileStorage` supplies atomic field/revision writes through the
 reusable `update_profile` and `update_avatar` services. The provider preserves
 keys, credentials, sessions, vault contents, and foreign accounts, including on
-failure. Registration validation remains unchanged. Complete profile responses
+failure. Legacy registration validation remains unchanged. Complete profile responses
 remain adapter-built; these three new routes add no typed core full-profile
 response or CLI mutation claim. The unchanged 120-command CLI baseline also
 passes a fresh regression against the updated adapter. Full account lifecycle
@@ -154,10 +155,11 @@ one rejected password) and one refresh. The reference `personal` and `devices`
 runs use separate fresh processes with unchanged upstream login rate limits;
 their combined login attempts would exceed the reference's ten-request login
 burst. The prior local `--suite all` subtotal passed 56 cases and 2272 counted
-HTTP requests. The subsequent local milestone passes 64 cases and 2594 counted
-requests before the login extension. Reference comparisons select `personal`, `devices`, `device-tokens`,
-`auth-requests` and `auth-responses` in separate fresh processes; no combined
-64-case reference run is claimed. Fixture registration requests are outside the counted suite requests.
+HTTP requests. The prior local milestone with login passes 72 cases and 3038
+counted requests. Reference comparisons select `personal`, `devices`,
+`device-tokens`, `auth-requests`, `auth-responses` and `auth-login` in separate
+fresh processes; no combined 72-case reference run is claimed. Fixture
+registration requests are outside those counted suite requests.
 
 The device comparison verifies public known-device headers, trailing-padding
 removal, strict base64url and UTF-8 handling, email lowercasing without trimming,
@@ -411,8 +413,73 @@ The CLI fingerprint extension compares the cached active user’s fingerprint wi
 `bw get fingerprint <user-id>`, whose UUID branch performs the authenticated public
 lookup. Fingerprints stay private. This flow supplies client evidence for public
 lookup only; it does not establish CLI key-pair initialization or captured request
-traces. Modern registration, complete key rotation/account lifecycle, exhaustive
-errors, content-type handling, and transport-size parity remain open.
+traces. Modern registration has the separate no-SMTP scope below. SMTP/invited
+registration, complete key rotation/account lifecycle, exhaustive errors,
+content-type handling, and transport-size parity remain open.
+
+Modern registration has a separate opt-in `RegistrationStorage` contract;
+`RegisterRequest` and the historical fixture endpoint retain strict validation.
+The new no-SMTP path implements verification-token issuance and ordinary
+new-account finish with old/current credential shapes. The host mirrors the
+pinned old-first flattened decoder and aliases, preserving opaque string
+hash/key/key-pair values and signed KDF metadata. Its programmatic borrowed
+finish view, private validated plan and explicit response serializers preserve
+the core's no-allocation boundary. Full JSON compatibility parsing, email
+normalization, JWTs, hashing, clocks and persistence remain host duties.
+
+The token retains the raw email and optional name, uses the canonical configured
+origin plus `|register_verify`, expires in thirty minutes, and has
+`verified:false`. The host's separate private HMAC key persists across reopen;
+concurrent initialization reads one authoritative key. Signature/purpose/time
+checks include 30-second leeway and Unicode whitespace compatibility. Upstream
+uses RS256 rather than the adapter's HS256, so cross-server token use and full
+JWT equivalence remain outside this claim. JSON versus plain-text token output
+follows the preferred `Accept` media type, with Rocket's weighting/specificity
+rules. Quoted separators, escaped quotes and UTF-8 parameter values remain
+intact; only a first `q` parameter of at most five value bytes supplies a weight.
+Long or later quality parameters are unweighted, while malformed short quality
+values reject the header. Verification can issue a token for a long name or invalid-looking email;
+finish applies the claim-name limit of 50 UTF-8 bytes.
+
+Current-format KDF/salt mismatch returns 422 before missing/bad token or
+unsupported invitation proof. Both salts use trimmed/lowercased email; token
+subject matching uses exact raw email, and account storage lowercases without
+trimming. Only the verified claim name sets the name, with email fallback when
+absent; root finish names and verification flags are ignored. Hints trim to null
+when blank. PBKDF2 minimum is 100,000 with no new maximum; Argon2 requires at
+least one iteration, memory 15–1024 and parallelism 1–16. Other signed KDF IDs
+are preserved and non-Argon2 memory/parallelism normalize to null. Finish then
+applies upstream account-save mailbox and URL-domain validation; invalid emails
+reject with 400 after proof/policy/KDF checks and create no account. Verification
+issuance still accepts those inputs. The host-only `email_address` 0.2.9 parser
+preserves supported Unicode/display forms; no parser dependency enters the core.
+
+Successful finish returns exactly `{object:"registerFinish"}`. Any existing host
+account rejects with 400. Canonical storage excludes raw verification tokens,
+client hashes, nested credential documents and unknown extensions. An Argon2
+verifier and private verification flag commit atomically with the new account.
+No-SMTP profile/JWT output remains verified under upstream policy even though
+the stored claim flag is false. Tests inject four account/metadata/write/commit
+failures, prove retry without token consumption, and preserve existing accounts,
+credentials, sessions, attachments and vault state. Reopen retains both issued
+tokens and completed account state. These are host/provider guarantees.
+
+All eight corrected modern HTTP cases pass against both the actual adapter and
+official Vaultwarden `1.37.4`: 541 counted requests each, including 69 verification
+requests, 64 finish requests, ten prelogins and nine successful password logins.
+Public attempts stay at most 44 per peer with the reference limits unchanged.
+These HTTP results are independent of provider rollback/reopen guarantees. A
+fresh official CLI `2026.10.0` run also passes all 120 commands against both
+corrected servers. That unchanged baseline uses legacy fixture registration and
+adds no modern-registration command or route-trace claim.
+The prior combined local milestone remains 72 cases/3038 requests, including
+the selected eight-case login comparison with 444 requests against each server.
+The expanded default selection contains 80 cases; its final combined result is
+separate. SMTP, invitations/emergency access,
+placeholder completion, signup/configuration policy, rate controls,
+notifications, complete header grammar, error envelopes and transport limits
+remain partial. This chunk
+does not claim complete registration or upstream API parity.
 
 The folder chunk corrects the behavior of the seven existing
 [pinned folder routes](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/folders.rs#L14-L110).

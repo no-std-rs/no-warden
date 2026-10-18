@@ -5,6 +5,146 @@
 use crate::{bounded::BoundedList, identity::Secret};
 use serde::{Deserialize, Serialize};
 
+/// Public no-SMTP registration verification input. Names and emails remain opaque here;
+/// the verified claim's name length is checked only when registration is finished.
+#[derive(Deserialize)]
+pub struct RegistrationVerificationRequest<'a> {
+    pub email: &'a str,
+    pub name: Option<&'a str>,
+}
+impl core::fmt::Debug for RegistrationVerificationRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("RegistrationVerificationRequest")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Signed upstream KDF metadata, separate from the existing strict embedding policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistrationKdf {
+    #[serde(alias = "kdfType")]
+    pub kdf: i32,
+    #[serde(alias = "iterations")]
+    pub kdf_iterations: i32,
+    #[serde(alias = "memory")]
+    pub kdf_memory: Option<i32>,
+    #[serde(alias = "parallelism")]
+    pub kdf_parallelism: Option<i32>,
+}
+
+#[derive(Deserialize)]
+pub struct RegistrationAuthentication<'a> {
+    #[serde(alias = "Kdf")]
+    pub kdf: RegistrationKdf,
+    #[serde(alias = "Salt")]
+    pub salt: &'a str,
+    #[serde(
+        borrow,
+        alias = "masterPasswordAuthenticationHash",
+        alias = "MasterPasswordAuthenticationHash"
+    )]
+    pub hash: Secret<'a>,
+}
+impl core::fmt::Debug for RegistrationAuthentication<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("RegistrationAuthentication")
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RegistrationUnlock<'a> {
+    pub kdf: RegistrationKdf,
+    pub salt: &'a str,
+    #[serde(borrow, alias = "masterKeyWrappedUserKey")]
+    pub key: Secret<'a>,
+}
+impl core::fmt::Debug for RegistrationUnlock<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("RegistrationUnlock").finish_non_exhaustive()
+    }
+}
+
+/// Explicit semantic selection after transport decoding. The pinned flattened, untagged
+/// JSON union tries a valid legacy representation first; adapters must preserve that order.
+/// This enum deliberately does not derive Deserialize with alloc-dependent buffering.
+pub enum RegistrationCredentials<'a> {
+    Legacy {
+        kdf: RegistrationKdf,
+        master_password_hash: Secret<'a>,
+        key: Secret<'a>,
+    },
+    Nested {
+        authentication: RegistrationAuthentication<'a>,
+        unlock: RegistrationUnlock<'a>,
+    },
+}
+impl core::fmt::Debug for RegistrationCredentials<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("RegistrationCredentials")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Borrowed ordinary-registration semantic view, not a full RegisterData JSON decoder.
+///
+/// The adapter resolves aliases/legacy-first union selection and the verification-proof
+/// tuple. Only a sole email-verification token maps to Some; missing, mixed or unsupported
+/// organization/emergency proof shapes map to None. Keep credentials even in those cases
+/// so nested format errors retain their upstream precedence over a missing proof. Finish
+/// body names have no authority and are deliberately absent from this view.
+pub struct RegistrationFinishRequest<'a> {
+    pub email: &'a str,
+    pub credentials: RegistrationCredentials<'a>,
+    pub email_verification_token: Option<Secret<'a>>,
+    pub keys: Option<AccountKeys<'a>>,
+    pub master_password_hint: Option<&'a str>,
+}
+impl core::fmt::Debug for RegistrationFinishRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("RegistrationFinishRequest")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Deliberate token transport boundary. JSON serializes a bare string; an HTTP adapter
+/// can explicitly expose the same value for a plain-text response after Accept negotiation.
+/// Debug is redacted independently of the provider token type's formatting capabilities.
+pub struct RegistrationVerificationToken<T: AsRef<str>> {
+    token: T,
+}
+impl<T: AsRef<str>> RegistrationVerificationToken<T> {
+    pub const fn new(token: T) -> Self {
+        Self { token }
+    }
+    pub fn expose_token(&self) -> &str {
+        self.token.as_ref()
+    }
+}
+impl<T: AsRef<str>> core::fmt::Debug for RegistrationVerificationToken<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("RegistrationVerificationToken")
+            .finish_non_exhaustive()
+    }
+}
+impl<T: AsRef<str>> Serialize for RegistrationVerificationToken<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.expose_token())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RegistrationFinishResponse;
+impl Serialize for RegistrationFinishResponse {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut value = serializer.serialize_struct("RegistrationFinishResponse", 1)?;
+        value.serialize_field("object", "registerFinish")?;
+        value.end()
+    }
+}
+
 /// Authentication-request password-grant fields after form decoding. All fields must be
 /// present, including an opaque access code in `password`; present blank strings are not
 /// missing fields. This convenience decoder is not a complete HTTP form/alias parser.
@@ -1205,6 +1345,92 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registration_verification_input_borrows_raw_email_and_defers_name_limits() {
+        for input in [
+            r#"{"email":" opaque雪 ","name":"","unknown":true}"#,
+            r#"[" opaque雪 ",""]"#,
+        ] {
+            let request: RegistrationVerificationRequest<'_> = serde_json::from_str(input).unwrap();
+            assert_eq!(request.email, " opaque雪 ");
+            assert_eq!(request.name, Some(""));
+            let ptr = request.email.as_ptr() as usize;
+            assert!(
+                (input.as_ptr() as usize..input.as_ptr() as usize + input.len()).contains(&ptr)
+            );
+            assert!(!std::format!("{request:?}").contains("opaque雪"));
+        }
+        let request: RegistrationVerificationRequest<'_> =
+            serde_json::from_str(r#"{"email":""}"#).unwrap();
+        assert!(request.email.is_empty() && request.name.is_none());
+        for input in [
+            "{}",
+            "[]",
+            r#"["email"]"#,
+            r#"{"email":null}"#,
+            r#"{"email":"e","name":false}"#,
+        ] {
+            assert!(serde_json::from_str::<RegistrationVerificationRequest<'_>>(input).is_err());
+        }
+    }
+
+    #[test]
+    fn registration_components_keep_signed_kdf_aliases_and_borrowed_opaque_secrets() {
+        let canonical =
+            r#"{"kdf":-7,"kdfIterations":-2147483648,"kdfMemory":-1,"kdfParallelism":2147483647}"#;
+        let aliases =
+            r#"{"kdfType":-7,"iterations":-2147483648,"memory":-1,"parallelism":2147483647}"#;
+        let kdf: RegistrationKdf = serde_json::from_str(canonical).unwrap();
+        assert_eq!(kdf, serde_json::from_str(aliases).unwrap());
+        assert_eq!(kdf.kdf_iterations, i32::MIN);
+        for input in [
+            r#"{"kdf":0,"kdfIterations":2147483648}"#,
+            r#"{"kdf":0,"kdfIterations":-2147483649}"#,
+            r#"{"kdf":0,"kdfType":1,"kdfIterations":100000}"#,
+        ] {
+            assert!(serde_json::from_str::<RegistrationKdf>(input).is_err());
+        }
+        for input in [
+            r#"{"Kdf":{"kdfType":0,"iterations":100000},"Salt":"opaque雪","MasterPasswordAuthenticationHash":""}"#,
+            r#"{"kdf":{"kdf":0,"kdfIterations":100000},"salt":"opaque雪","masterPasswordAuthenticationHash":""}"#,
+        ] {
+            let value: RegistrationAuthentication<'_> = serde_json::from_str(input).unwrap();
+            assert_eq!(value.salt, "opaque雪");
+            assert!(value.hash.expose_secret().is_empty());
+            assert!(!std::format!("{value:?}").contains("opaque雪"));
+        }
+        let value: RegistrationUnlock<'_> = serde_json::from_str(r#"{"kdf":{"kdf":0,"kdfIterations":100000},"salt":"opaque雪","masterKeyWrappedUserKey":"future-key雪"}"#).unwrap();
+        assert_eq!(value.key.expose_secret(), "future-key雪");
+        assert!(!std::format!("{value:?}").contains("future-key"));
+        // Unlock aliases are intentionally narrower than authentication aliases.
+        assert!(
+            serde_json::from_str::<RegistrationUnlock<'_>>(
+                r#"{"Kdf":{"kdf":0,"kdfIterations":100000},"Salt":"salt","key":"key"}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn registration_response_serialization_exposes_only_the_explicit_token_or_finish_marker() {
+        struct OpaqueToken(&'static str); // No Debug or Serialize implementation required.
+        impl AsRef<str> for OpaqueToken {
+            fn as_ref(&self) -> &str {
+                self.0
+            }
+        }
+        let response = RegistrationVerificationToken::new(OpaqueToken("private-test-token\0雪"));
+        assert!(!std::format!("{response:?}").contains("private-test-token"));
+        assert!(response.expose_token() == "private-test-token\0雪");
+        assert!(
+            serde_json::to_value(&response).unwrap() == serde_json::json!("private-test-token\0雪")
+        );
+        assert_eq!(
+            serde_json::to_value(RegistrationFinishResponse).unwrap(),
+            serde_json::json!({"object":"registerFinish"})
+        );
+    }
 
     #[test]
     fn auth_request_login_input_borrows_opaque_proof_and_preserves_absence_and_form_values() {

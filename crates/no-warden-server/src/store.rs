@@ -12,6 +12,7 @@ use no_warden::{
     domains::{DomainSettingsData, DomainSettingsStorage},
     identity::{ApiKeyDevice, IdentityStorage, ReauthenticationProof, Secret},
     import::{ImportData, ImportStorage, ValidatedImport},
+    registration::{RegistrationState, RegistrationStorage, ValidatedRegistration},
     service::ItemMetadata,
     wire::{
         AccountKeys, ApiKeyResponse, AuthRequestCreateRequest, AuthRequestUpdateRequest,
@@ -31,6 +32,8 @@ pub struct Store {
     pub pending: Value,
     pub download_base: String,
     pub(crate) pending_attachment_data: Vec<u8>,
+    pub(crate) registration_issuer: String,
+    pub(crate) registration_policy: crate::registration::Policy,
     pub(crate) attachment_metadata_cache: Option<crate::attachments::Record>,
     owner: String,
     key_id: Option<String>,
@@ -197,6 +200,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS auth_requests(id TEXT PRIMARY KEY, owner TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, request_device_identifier TEXT NOT NULL, device_type INTEGER NOT NULL, request_ip TEXT NOT NULL, access_code TEXT NOT NULL, public_key TEXT NOT NULL, encrypted_key TEXT, master_password_hash TEXT, approved INTEGER, creation_date TEXT NOT NULL, response_date TEXT, response_device_id TEXT, authentication_date TEXT);
             CREATE INDEX IF NOT EXISTS auth_requests_owner_device ON auth_requests(owner,request_device_identifier,creation_date DESC);
             CREATE TABLE IF NOT EXISTS session_devices(access TEXT PRIMARY KEY REFERENCES sessions(access) ON DELETE CASCADE, owner TEXT NOT NULL, identifier TEXT NOT NULL, FOREIGN KEY(owner,identifier) REFERENCES device_registry(owner,identifier) ON DELETE CASCADE);")?;
+        db.execute_batch(crate::registration::SCHEMA)?;
         // SQLite inherits the private database mode for new sidecars. Also
         // narrow sidecars left behind by an earlier permissive installation.
         #[cfg(unix)]
@@ -206,6 +210,8 @@ impl Store {
             pending: Value::Null,
             download_base: String::new(),
             pending_attachment_data: Vec::new(),
+            registration_issuer: String::new(),
+            registration_policy: crate::registration::Policy::default(),
             attachment_metadata_cache: None,
             owner: String::new(),
             key_id: None,
@@ -622,6 +628,96 @@ impl CipherBulkStorage for Store {
             }
             bump(&tx, owner, &revision)?;
         }
+        tx.commit()
+    }
+}
+
+impl RegistrationStorage for Store {
+    type Token = String;
+    type Claims = crate::registration::Claims;
+    fn registration_verification_allowed(&mut self, _email: &str) -> rusqlite::Result<bool> {
+        Ok(self.registration_policy.signups_allowed)
+    }
+    fn issue_registration_token(
+        &mut self,
+        request: &no_warden::wire::RegistrationVerificationRequest<'_>,
+    ) -> rusqlite::Result<String> {
+        let key = crate::registration::signing_key(&self.db)?;
+        crate::registration::issue_token(
+            &key,
+            &self.registration_issuer,
+            request.email,
+            request.name,
+            chrono::Utc::now().timestamp(),
+        )
+        .map_err(|_| rusqlite::Error::InvalidQuery)
+    }
+    fn verify_registration_token(
+        &mut self,
+        token: &Secret<'_>,
+    ) -> rusqlite::Result<Option<Self::Claims>> {
+        let key = crate::registration::signing_key(&self.db)?;
+        Ok(crate::registration::verify_token(
+            &key,
+            &self.registration_issuer,
+            token,
+            chrono::Utc::now().timestamp(),
+        ))
+    }
+    fn registration_state(&mut self, email: &str) -> rusqlite::Result<RegistrationState> {
+        // Existing host accounts are initialized. Invitation/placeholder
+        // completion is a separate, currently unsupported adapter capability.
+        let exists = self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM accounts WHERE email=?1)",
+            [email],
+            |row| row.get(0),
+        )?;
+        Ok(RegistrationState {
+            registration_allowed: self.registration_policy.signups_allowed,
+            has_password: exists,
+            password_hints_allowed: self.registration_policy.password_hints_allowed,
+            email_valid: crate::registration::valid_storage_email(email),
+        })
+    }
+    fn finish_registration(&mut self, plan: &ValidatedRegistration<'_>) -> rusqlite::Result<()> {
+        if !self.registration_policy.signups_allowed
+            || (!self.registration_policy.password_hints_allowed
+                && plan.master_password_hint().is_some())
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let salt = SaltString::generate(&mut OsRng);
+        let verifier = Argon2::default()
+            .hash_password(
+                plan.master_password_hash().expose_secret().as_bytes(),
+                &salt,
+            )
+            .map_err(|_| rusqlite::Error::InvalidQuery)?
+            .to_string();
+        let id = uuid::Uuid::new_v4().to_string();
+        let revision = now();
+        let kdf = plan.kdf();
+        let keys=plan.keys().map(|keys|json!({"publicKey":keys.public_key,"encryptedPrivateKey":keys.encrypted_private_key}));
+        // Store only canonical account fields. The raw token, client hash,
+        // nested proof document and untrusted extensions never enter this JSON.
+        let document = json!({"id":id,"email":plan.email(),"name":plan.name().unwrap_or(plan.email()),"key":plan.key().expose_secret(),"keys":keys,"masterPasswordHint":plan.master_password_hint(),"kdf":kdf.kdf,"kdfIterations":kdf.kdf_iterations,"kdfMemory":kdf.kdf_memory,"kdfParallelism":kdf.kdf_parallelism,"avatarColor":null,"userKeyId":null,"creationDate":revision,"revisionDate":revision});
+        let tx = self.db.savepoint()?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM accounts WHERE email=?1)",
+            [plan.email()],
+            |row| row.get(0),
+        )?;
+        if exists {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        tx.execute(
+            "INSERT INTO accounts(id,email,document,password,revision) VALUES(?1,?2,?3,?4,?5)",
+            params![id, plan.email(), document.to_string(), verifier, revision],
+        )?;
+        tx.execute(
+            "INSERT INTO registration_metadata(owner,email_verified) VALUES(?1,?2)",
+            params![id, plan.email_verified()],
+        )?;
         tx.commit()
     }
 }
@@ -1074,6 +1170,309 @@ impl Storage for Store {
 mod tests {
     use super::*;
 
+    fn modern_token(store: &mut Store, email: &str, name: Option<&str>) -> String {
+        store.registration_issuer =
+            crate::registration::issuer("https://ORIGIN.example.test:443/path")
+                .unwrap_or_else(|_| panic!("Origin fixture failed."));
+        no_warden::VaultService::new(store)
+            .request_registration_verification(&no_warden::wire::RegistrationVerificationRequest {
+                email,
+                name,
+            })
+            .unwrap()
+            .expose_token()
+            .to_owned()
+    }
+    fn modern_document(email: &str, token: &str) -> Value {
+        json!({"email":email,"emailVerificationToken":token,"masterPasswordHash":"opaque-private-proof\0雪","key":"future-key\0雪","kdf":-7,"kdfIterations":-8,"kdfMemory":-9,"kdfParallelism":-10,"keys":{"publicKey":"","encryptedPrivateKey":"opaque-private-key"},"masterPasswordHint":"  hint 雪  ","name":"FORGED","emailVerified":true,"verified":true,"enabled":false,"id":"forged-owner","avatarColor":"forged","userKeyId":"forged-key-id","_password":"forged-verifier","future":{"forged":true},"devices":[{"identifier":"forged-device"}]})
+    }
+    fn modern_finish(
+        store: &mut Store,
+        document: &Value,
+    ) -> Result<Value, no_warden::registration::RegistrationError> {
+        let input = crate::registration::parse_finish(&serde_json::to_vec(document).unwrap())
+            .unwrap_or_else(|_| panic!("Registration fixture schema failed."));
+        let storage = input.email.to_lowercase();
+        let salt = input.email.trim().to_lowercase();
+        no_warden::VaultService::new(store)
+            .finish_registration(
+                &input.request(),
+                &no_warden::registration::RegistrationEmail {
+                    storage_email: &storage,
+                    salt_email: &salt,
+                },
+            )
+            .map(|response| serde_json::to_value(response).unwrap())
+    }
+    #[test]
+    fn modern_registration_invalid_storage_email_rejects_after_verification_without_account_writes()
+    {
+        let mut store = profile_fixture();
+        let before = snapshot(&store);
+        let authority = account_authority_snapshot(&store);
+        for email in [
+            "not-an-email",
+            "",
+            " user@example.test",
+            "user@example.test ",
+            "user@127.0.0.1",
+            "user@[127.0.0.1]",
+            "user@example.test/path",
+            "user@example.test?query",
+            "user@example.test\0",
+        ] {
+            let token = modern_token(&mut store, email, None);
+            let result = modern_finish(&mut store, &modern_document(email, &token));
+            let Err(error) = result else {
+                panic!("Invalid email reached account storage.")
+            };
+            assert_eq!(error.status_code(), 400);
+            assert!(
+                snapshot(&store) == before && account_authority_snapshot(&store) == authority,
+                "Rejected email changed an account or vault."
+            );
+        }
+    }
+    #[test]
+    fn modern_registration_canonical_state_uses_only_claim_authority_and_preserves_existing_vaults()
+    {
+        let mut store = profile_fixture();
+        let before = snapshot(&store);
+        let authority = account_authority_snapshot(&store);
+        let devices = device_rows(&store);
+        let email = "MiXeD@EXAMPLE.TEST";
+        let token = modern_token(&mut store, email, Some("NUL\0claim 雪"));
+        let document = modern_document(email, &token);
+        assert!(
+            modern_finish(&mut store, &document).unwrap() == json!({"object":"registerFinish"})
+        );
+        let account = store
+            .account("email", "mixed@example.test")
+            .unwrap()
+            .unwrap();
+        assert!(
+            account["name"] == "NUL\0claim 雪"
+                && account["key"] == "future-key\0雪"
+                && account["masterPasswordHint"] == "hint 雪"
+                && account["kdf"] == -7
+                && account["kdfIterations"] == -8
+                && account["kdfMemory"].is_null()
+                && account["kdfParallelism"].is_null()
+        );
+        assert!(
+            account["avatarColor"].is_null()
+                && account["userKeyId"].is_null()
+                && account["keys"]["publicKey"] == ""
+        );
+        for field in [
+            "emailVerificationToken",
+            "masterPasswordHash",
+            "masterPasswordAuthentication",
+            "masterPasswordUnlock",
+            "_password",
+            "emailVerified",
+            "verified",
+            "enabled",
+            "future",
+            "devices",
+        ] {
+            assert!(
+                account.get(field).is_none(),
+                "Untrusted or secret registration input was persisted."
+            );
+        }
+        let id = account["id"].as_str().unwrap();
+        assert!(uuid::Uuid::parse_str(id).is_ok() && id != "forged-owner");
+        let verified: bool = store
+            .db
+            .query_row(
+                "SELECT email_verified FROM registration_metadata WHERE owner=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!verified);
+        let verifier: String = store
+            .db
+            .query_row("SELECT password FROM accounts WHERE id=?1", [id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(
+            Argon2::default()
+                .verify_password(
+                    b"opaque-private-proof\0\xe9\x9b\xaa",
+                    &PasswordHash::new(&verifier).unwrap()
+                )
+                .is_ok()
+        );
+        let mut after = snapshot(&store);
+        after.retain(|row| !row.starts_with(&format!("account:{id}:")));
+        let mut after_authority = account_authority_snapshot(&store);
+        after_authority.retain(|row| !row.starts_with(&format!("password:{id}:")));
+        assert!(after == before && after_authority == authority && device_rows(&store) == devices);
+        let profile = crate::protocol::profile(&account);
+        assert!(profile["emailVerified"] == true && profile["name"] == "NUL\0claim 雪");
+        let projected = crate::protocol::prelogin(&account, false);
+        assert!(projected["kdf"] == -7 && projected["kdfIterations"] == -8);
+    }
+    #[test]
+    fn modern_registration_bad_proofs_duplicates_and_authoritative_policy_never_write_accounts() {
+        let mut store = profile_fixture();
+        let token = modern_token(&mut store, "new@example.test", None);
+        let before = snapshot(&store);
+        let authority = account_authority_snapshot(&store);
+        for case in 0..7 {
+            let mut document = modern_document("new@example.test", &token);
+            match case {
+                0 => document["emailVerificationToken"] = json!("invalid"),
+                1 => document["email"] = json!("NEW@example.test"),
+                2 => {
+                    document
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("emailVerificationToken");
+                }
+                3 => document["organizationUserId"] = json!("opaque-invitation"),
+                4 => store.registration_policy.signups_allowed = false,
+                5 => store.registration_policy.password_hints_allowed = false,
+                _ => {
+                    document["email"] = json!("alice@example.test");
+                    document["emailVerificationToken"] =
+                        json!(modern_token(&mut store, "alice@example.test", None));
+                }
+            }
+            assert!(modern_finish(&mut store, &document).is_err());
+            assert!(
+                snapshot(&store) == before && account_authority_snapshot(&store) == authority,
+                "Rejected registration changed an account or vault."
+            );
+            store.registration_policy = crate::registration::Policy::default();
+        }
+        let token = modern_token(&mut store, "long-name@example.test", Some(&"a".repeat(51)));
+        assert!(
+            modern_finish(
+                &mut store,
+                &modern_document("long-name@example.test", &token)
+            )
+            .is_err()
+        );
+        assert!(snapshot(&store) == before);
+        let mut document = modern_document(
+            "new@example.test",
+            &modern_token(&mut store, "new@example.test", None),
+        );
+        document["masterPasswordHint"] = json!(" \n\t ");
+        document["keys"] = Value::Null;
+        modern_finish(&mut store, &document).unwrap();
+        let account = store.account("email", "new@example.test").unwrap().unwrap();
+        assert!(
+            account["name"] == "new@example.test"
+                && account["masterPasswordHint"].is_null()
+                && account["keys"].is_null()
+        );
+        let before = snapshot(&store);
+        let authority = account_authority_snapshot(&store);
+        assert!(modern_finish(&mut store, &document).is_err());
+        assert!(snapshot(&store) == before && account_authority_snapshot(&store) == authority);
+    }
+    #[test]
+    fn modern_registration_late_insert_metadata_and_commit_failures_are_atomic_and_retryable() {
+        for phase in 0..4 {
+            let mut store = profile_fixture();
+            let token = modern_token(&mut store, "new@example.test", Some("Claim"));
+            let document = modern_document("new@example.test", &token);
+            let before = snapshot(&store);
+            let authority = account_authority_snapshot(&store);
+            store.db.execute_batch(match phase {
+                0=>"CREATE TRIGGER fail_registration BEFORE INSERT ON accounts BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                1=>"CREATE TRIGGER fail_registration AFTER INSERT ON accounts BEGIN SELECT RAISE(FAIL,'fixture'); END;",
+                2=>"CREATE TRIGGER fail_registration BEFORE INSERT ON registration_metadata BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                _=>"CREATE TABLE failed_registration_commit(owner TEXT REFERENCES accounts(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_registration AFTER INSERT ON registration_metadata BEGIN INSERT INTO failed_registration_commit(owner) VALUES('missing'); END;",
+            }).unwrap();
+            assert!(modern_finish(&mut store, &document).is_err());
+            assert!(
+                snapshot(&store) == before && account_authority_snapshot(&store) == authority,
+                "Failed registration escaped its transaction."
+            );
+            let metadata: i64 = store
+                .db
+                .query_row("SELECT COUNT(*) FROM registration_metadata", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(metadata, 0);
+            store
+                .db
+                .execute_batch("DROP TRIGGER fail_registration")
+                .unwrap();
+            assert!(
+                modern_finish(&mut store, &document).is_ok(),
+                "Failure consumed the registration token."
+            );
+        }
+    }
+    #[test]
+    fn modern_registration_signing_authority_survives_reopen_and_has_one_concurrent_initializer() {
+        let directory =
+            std::env::temp_dir().join(format!("no-warden-registration-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("vault.sqlite");
+        drop(Store::open(path.to_str().unwrap()).unwrap());
+        // Finish all fallible setup before any worker can wait at the barrier.
+        let stores: Vec<_> = (0..2)
+            .map(|_| {
+                let store = Store::open(path.to_str().unwrap()).unwrap();
+                store
+                    .db
+                    .busy_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                store
+            })
+            .collect();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = stores
+            .into_iter()
+            .map(|store| {
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    crate::registration::signing_key(&store.db).unwrap()
+                })
+            })
+            .collect();
+        let keys: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        assert!(keys[0] == keys[1]);
+        let mut store = Store::open(path.to_str().unwrap()).unwrap();
+        let token = modern_token(&mut store, "reopen@example.test", Some(""));
+        let document = modern_document("reopen@example.test", &token);
+        drop(store);
+        let mut reopened = Store::open(path.to_str().unwrap()).unwrap();
+        reopened.registration_issuer =
+            crate::registration::issuer("https://origin.example.test/path")
+                .unwrap_or_else(|_| panic!("Origin fixture failed."));
+        assert!(crate::registration::signing_key(&reopened.db).unwrap() == keys[0]);
+        modern_finish(&mut reopened, &document).unwrap();
+        let account = reopened
+            .account("email", "reopen@example.test")
+            .unwrap()
+            .unwrap();
+        assert!(account["name"] == "");
+        let rows = snapshot(&reopened);
+        drop(reopened);
+        let mut reopened = Store::open(path.to_str().unwrap()).unwrap();
+        reopened.registration_issuer = crate::registration::issuer("https://origin.example.test")
+            .unwrap_or_else(|_| panic!("Origin fixture failed."));
+        assert!(snapshot(&reopened) == rows);
+        assert!(modern_finish(&mut reopened, &document).is_err());
+        assert!(snapshot(&reopened) == rows);
+        drop(reopened);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     fn auth_login_request<'a>(
         id: &'a str,
         code: &'a str,
@@ -1353,18 +1752,24 @@ mod tests {
             .execute("VACUUM INTO ?1", [path.to_str().unwrap()])
             .unwrap();
         drop(store);
-        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
-        let handles: Vec<_> = (0..2)
+        // A setup error must surface on this thread before workers can wait.
+        let stores: Vec<_> = (0..2)
             .map(|_| {
-                let path = path.clone();
+                let store = Store::open(path.to_str().unwrap()).unwrap();
+                store
+                    .db
+                    .busy_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                store
+            })
+            .collect();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = stores
+            .into_iter()
+            .map(|mut store| {
                 let id = id.clone();
                 let barrier = barrier.clone();
                 std::thread::spawn(move || {
-                    let mut store = Store::open(path.to_str().unwrap()).unwrap();
-                    store
-                        .db
-                        .busy_timeout(std::time::Duration::from_secs(5))
-                        .unwrap();
                     barrier.wait();
                     store
                         .consume_auth_request_login(

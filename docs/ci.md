@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 299 active Rust tests: 136 core, 104 host, and 59 conformance
+The workspace has 330 active Rust tests: 150 core, 118 host, and 62 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -41,8 +41,9 @@ against Vaultwarden `1.37.4`: 199 requests, including five login attempts (four
 successful and one rejected) and one refresh. They verify known-device headers,
 exact owner-only projections, path guards, login metadata retention, API-key
 registration and refresh identity without changing account/vault state.
-The default adapter job runs all 72 cases, including authentication-request login
-and real-time expiry. All 72 cases passed locally with 3038 counted requests.
+The default adapter job runs all 80 cases, including authentication-request login,
+real-time expiry and modern registration. All 80 cases passed locally with
+3579 counted requests.
 The eight authentication-request login cases also passed against Vaultwarden
 `1.37.4`: 444 requests per server, including 43 identity requests and a real
 301-second expiry check.
@@ -52,7 +53,7 @@ and authentication/path/JSON guard order. The public clears use the reference
 configuration with push disabled; actual relay behavior remains open.
 Reference comparisons use `--suite personal`, `--suite devices`, and
 `--suite device-tokens`, `--suite auth-requests`, `--suite auth-responses`,
-and `--suite auth-login` in separate
+`--suite auth-login`, and `--suite registration` in separate
 fresh disposable Vaultwarden processes. The separate reference CLI comparison starts another fresh process, preserving the
 reference's default ten-login limit.
 The required client job reruns the unchanged 120-command CLI flow for the final
@@ -60,14 +61,22 @@ head. Its verified baseline covers both servers; it establishes no domain
 mutation, settings request trace or device-route trace.
 `BW_FOLDER_RECEIPT`, `BW_ACCOUNT_KEYS_RECEIPT`, `BW_PROFILE_RECEIPT`,
 `BW_DOMAINS_RECEIPT`, `BW_DEVICES_RECEIPT`, `BW_DEVICE_TOKENS_RECEIPT`,
-`BW_AUTH_REQUESTS_RECEIPT`, `BW_AUTH_RESPONSES_RECEIPT`, and
-`BW_AUTH_LOGIN_RECEIPT`
+`BW_AUTH_REQUESTS_RECEIPT`, `BW_AUTH_RESPONSES_RECEIPT`,
+`BW_AUTH_LOGIN_RECEIPT`, and `BW_REGISTRATION_RECEIPT`
 select optional private per-group
 receipts. The domain
 receipt also records the public catalog count and fingerprint, without account
 settings or response values.
 The device receipt separates identity requests, login attempts, successful
 logins and refreshes; a refresh is not counted as a login.
+The selected registration comparison passed eight cases against both the adapter
+and Vaultwarden `1.37.4`, with 541 counted requests each: 69 verification, 64
+finish, ten prelogin and nine successful password logins. The unchanged official
+CLI `2026.10.0` separately passed 120 commands against each server.
+The registration selection checks token transport and purpose, exact claim authority,
+legacy/nested credentials, signed KDF fields, deferred email validation, guards,
+retry and duplicate-account isolation. It uses direct per-case loopback peers
+without changing reference limits. SMTP and invitation variants remain open.
 The existing HTTP, restart-persistence, and client-inventory orchestration still
 uses JavaScript, so the broader migration
 remains unfinished.

@@ -429,7 +429,8 @@ root, including scalar dotted/bracketed suffixes; form decoding converts `+` to
 space and `%2B` to plus exactly once. The operation neither grants a session nor
 consumes a request for login. Eight focused HTTP cases pass against the adapter
 and Vaultwarden `1.37.4`: 322 requests and four successful logins per server.
-The preceding combined local HTTP milestone passes 64 cases and 2594 requests.
+The prior combined local HTTP milestone passes 72 cases and 3038 requests,
+including the separately described login comparison.
 Current client and login-comparison results are recorded in
 [verified compatibility](compatibility.md). Notifications/events, expiry jobs,
 proxy parity and public rate controls remain open.
@@ -486,3 +487,78 @@ refreshes. Twelve creations and twelve public polls include a real 301-second
 expiry fixture: login expires while polling remains readable. Required CI reruns
 the unchanged verified 120-command CLI baseline; this adds no CLI auth-request
 route claim.
+
+Modern ordinary registration has its own opt-in `RegistrationStorage` provider.
+The existing strict `RegisterRequest`, `VaultService::register` and
+`Storage::insert_account` APIs retain their validation and legacy host behavior.
+The new provider accepts borrowed opaque hash/key strings and signed `i32` KDF
+fields. Verification input, nested authentication/unlock fragments, explicit
+token-string serialization and the finish response work without allocating in
+the core. `RegistrationFinishRequest` is a programmatic semantic view; the full
+flattened/untagged JSON decoder stays in the host.
+
+The owned host guard mirrors the pinned old-first credential selection and
+aliases before borrowing that view. The caller supplies separately normalized
+storage email (Unicode lowercase without trimming) and salt email (trim then
+lowercase). The core checks nested KDF equality and both salts before token
+verification, returning 422 for that format mismatch. It then requires verified
+token claims with the exact raw email subject, limits the optional claim name to
+50 UTF-8 bytes, applies signup/hint/account state, and validates KDF policy.
+Name is never taken from the finish document. Hints are trimmed and blank hints
+become absent. Opaque client hash/key/key-pair values receive no new base64 or
+encrypted-string validation; this is separate from the legacy strict policy.
+
+PBKDF2 requires at least 100,000 iterations with no added maximum. Argon2 requires
+at least one iteration, memory 15–1024 and parallelism 1–16. Other signed KDF IDs
+remain opaque; non-Argon2 memory/parallelism normalize to null. The host's shared
+KDF response builder preserves signed values through prelogin and decryption
+metadata instead of silently projecting them as defaults. Before commit, core
+state also requires a host-supplied email-validity result. The host uses the
+upstream `email_address` 0.2.9 mailbox parser and URL domain/path/query checks on
+the storage email, with no extra ASCII-only policy. Invalid addresses return
+400 after proof, account-policy and KDF checks; verification still issues tokens
+for them. The parser and URL dependencies stay outside the allocation-free core.
+
+The standalone adapter fixes registration to the ordinary no-SMTP, signup-allowed
+new-account flow. It returns a verification token directly as JSON or plain text
+according to Rocket-style preferred `Accept` selection. Its cursor parser
+preserves quoted delimiters/escapes and reads quality only from a first `q`
+parameter of at most five bytes; weighting/specificity selection remains ordered.
+An invalid-looking email
+or long name can receive a token; the name limit belongs to finish. The token
+contains the raw email, optional name and `verified:false`, with a 30-minute
+lifetime and canonical configured `origin|register_verify` issuer. A separate
+32-byte HMAC signing authority persists in private SQLite storage, independent
+of the legacy access-token key. Constant-time signature verification checks the
+fixed algorithm, issuer, expiry and not-before time with 30-second leeway;
+Unicode whitespace removal matches the pinned decoder. A restart retains issued
+registration tokens, and concurrent initialization selects one stored key.
+
+Only a canonical account document and Argon2 verifier reach account storage.
+IDs/revisions/default avatar and key-ID state are server-owned; the name is the
+verified claim or lowercased email fallback. Raw verification tokens, client
+hashes, nested proof objects and unknown extensions never enter that document.
+A private metadata table retains the actual verification flag. No-SMTP profile
+and JWT projections remain verified, matching upstream's policy even when the
+token claim is false. Request fields cannot forge either authority.
+
+Account insertion and private verification metadata commit in one savepoint.
+Failures after account insertion, metadata writes or deferred commit restore
+existing accounts, credentials, sessions, attachments and vault state. The token
+is not consumed by a failed finish; repeating a completed finish rejects as a
+duplicate without replacement. The host treats every existing account as a
+duplicate; invitation/placeholder completion is not exposed. Provider and host
+tests cover these boundaries and persistence. All eight corrected modern HTTP
+cases pass against the adapter and actual Vaultwarden `1.37.4`: 541 counted
+requests per server. A fresh unchanged 120-command CLI regression also passes
+against both servers. The HTTP registration proof stays separate from that
+client baseline, whose fixture uses legacy registration; no CLI registration
+command or route trace is attributed to it.
+
+SMTP delivery/verification, invitation and emergency-access enrollment,
+placeholder completion, registration configuration, signup-domain policy,
+notifications, rate controls, full JWT interoperability, complete header grammar,
+error envelopes and
+transport-limit parity remain open. The adapter's encoded-body cap remains
+16 MiB, below upstream's 20-MB JSON limit. This provider does not complete the
+registration or upstream API parity goal.

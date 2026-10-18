@@ -148,10 +148,113 @@ Newer registration may instead provide `masterPasswordAuthentication` and
 The former carries `hash` / `masterPasswordAuthenticationHash`; the latter
 carries `key` / `masterKeyWrappedUserKey`. Vaultwarden accepts `userAsymmetricKeys`
 as an alias for `keys`, and `userSymmetricKey` as an alias for the old `key`.
-An adapter may expose a local fixture endpoint separately; that is not evidence
-that upstream public registration is implemented.
+The adapter now implements this ordinary two-step flow with SMTP disabled.
+The historical `/api/accounts/register` fixture path and strict embedding API
+remain separate; their client baseline does not establish modern-flow parity.
 
 Source: [Vaultwarden identity registration](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs).
+
+## Modern ordinary registration contract
+
+The adapter's new ordinary no-SMTP flow follows the
+[verification handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L1031-L1103)
+and [finish normalization](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L88-L478).
+These sections are also unchanged in the examined Vaultwarden `1.37.4` release.
+The corrected HTTP comparison below verifies this focused flow separately from
+the legacy registration fixture. It establishes no CLI registration-command or
+request-trace claim.
+
+Verification requires string `email` and accepts optional/null string `name`.
+It does not apply email-format or 50-byte name validation at this stage. With
+SMTP disabled it returns the signed token directly: a JSON string only when
+the preferred `Accept` media type is exactly `application/json`, otherwise plain
+text. Media-type comparison ignores case and parameters; wildcard and `+json`
+types alone do not select JSON. Rocket's ordered weighting/specificity behavior,
+including `q=0` and ties, is part of the comparison matrix. The
+[pinned parameter grammar](https://github.com/rwf2/Rocket/blob/v0.5.1/core/http/src/parse/media_type.rs#L15-L35)
+preserves quoted comma/semicolon content and escaped quotes. Only the
+[first parameter named `q`, with value length at most five](https://github.com/rwf2/Rocket/blob/v0.5.1/core/http/src/parse/accept.rs#L12-L29),
+supplies a weight; a later/longer `q` is unweighted. Quoted quality text is not
+escape-decoded before numeric parsing. Malformed input falls back to plain text.
+Neither endpoint has
+a `format=json` route filter; valid JSON is decoded even with missing, plain-text
+or `application/problem+json` content types. Syntax errors return 400 and known
+schema/duplicate-field errors return 422.
+
+The token's [claims](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth.rs#L451-L478)
+are `nbf`, `exp`, `iss`, raw-email `sub`, optional `name` and `verified:false`.
+The issuer is canonical configured origin plus `|register_verify`; the URL path
+is excluded. Lifetime is thirty minutes. Signature, exact issuer, expiry and
+not-before validation use the pinned decoder's 30-second leeway and removal of
+Unicode whitespace. The adapter signs HS256 with a separate persistent private
+key; upstream signs RS256. Cross-server token portability and complete JWT
+equivalence are not claimed. A client treats the token as an opaque finish proof.
+
+Finish requires raw string `email`, valid `emailVerificationToken`, and one
+credential shape. The owned decoder tries the flat old shape first, even when
+both complete shapes are supplied:
+
+| Shape | Required credential fields and aliases |
+| --- | --- |
+| Old | Signed `kdf`/`kdfType`, `kdfIterations`/`iterations`; `key`/`userSymmetricKey`; `master_password_hash`/`masterPasswordHash` |
+| Current | `masterPasswordAuthentication`/`MasterPasswordAuthentication` and `masterPasswordUnlock`/`MasterPasswordUnlock` |
+| Authentication | `kdf`/`Kdf`, `salt`/`Salt`, and `hash`/`masterPasswordAuthenticationHash`/`MasterPasswordAuthenticationHash` |
+| Unlock | `kdf`, `salt`, and `key`/`masterKeyWrappedUserKey` |
+| Optional key pair | `keys`/`userAsymmetricKeys`, containing required string `encryptedPrivateKey` and `publicKey` |
+
+Each KDF also accepts optional signed `kdfMemory`/`memory` and
+`kdfParallelism`/`parallelism`. The optional key pair may be omitted or null.
+Credential strings remain opaque, including empty/NUL/Unicode values. This
+provider does not reuse legacy base64, EncString, email or key-size validation.
+
+For current credentials, both complete KDF structs must be equal and both salts
+must equal `email.trim().to_lowercase()`. A mismatch returns 422 before token or
+unsupported invitation-proof rejection. The token subject must equal the exact
+raw email, including case/whitespace; its name alone may set the account name.
+That optional name is limited to 50 UTF-8 bytes at finish, and an absent claim
+defaults a new account's name to the storage email. Root finish `name`, ID,
+verification flags and other unknown fields grant no authority. Storage email
+is Unicode-lowercased without trimming. Password hints trim whitespace and turn
+blank values into null; the adapter's fixed policy permits hints.
+
+The [KDF setter](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L690-L725)
+requires PBKDF2 iterations at least 100,000, with no new maximum. Argon2 requires
+iterations at least one, memory 15–1024 and parallelism 1–16. Other signed KDF IDs
+are accepted; non-Argon2 memory/parallelism store null. Signed metadata is retained
+in prelogin and token/decryption projections. Finish then applies the upstream
+[account-save email validation](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/util.rs#L533-L541):
+`email_address` 0.2.9 parsing followed by a URL with a domain, path `/` and no
+query. This preserves supported Unicode/display mailbox forms while rejecting
+invalid, space-wrapped, IP-only and malformed domain/path inputs. The provider
+reports validity to the core, which rejects with 400 after earlier proof/policy/
+KDF checks and before account storage. Verification remains permissive.
+
+Successful finish returns exactly `{"object":"registerFinish"}` with status 200.
+An existing host account rejects with 400. Unsupported or mixed organization and
+emergency-access proof slots reject instead of being treated as ordinary signup.
+The provider atomically stores canonical account fields, an Argon2 verifier and
+private verification metadata; it excludes the raw token/hash, nested proof
+objects and unknown extras. No-SMTP profile/JWT verification remains true under
+upstream policy, independently of the false token claim. A failed commit leaves
+existing account/vault state unchanged and permits retry; tokens survive restart.
+
+`RegistrationStorage`, owned verified-claims handles, borrowed semantic finish
+data and explicit response serializers keep JWTs, Unicode normalization, JSON
+compatibility parsing, hashing, clocks and persistence outside the no-allocation
+core. The full finish view has no flattened/untagged decoder in the core. The
+strict legacy registration API remains available unchanged.
+SMTP delivery, invitation/emergency enrollment, placeholder completion, domain
+restrictions/configuration, rate controls, notifications, complete header grammar,
+detailed errors and
+transport-limit parity remain open. The adapter's 16-MiB request cap differs
+from upstream's 20-MB JSON limit. All eight corrected modern HTTP cases pass
+against both the adapter and actual Vaultwarden `1.37.4`: 541 counted requests
+per server, including 69 verification requests, 64 finish requests, ten prelogins
+and nine successful password logins. Public attempts stay at most 44 per peer
+under unchanged reference limits. A fresh official CLI `2026.10.0` regression
+also passes all 120 commands against both servers. That unchanged client flow
+uses legacy fixture registration; it adds no CLI registration-command trace
+or full-parity flag.
 
 ## Password login and refresh
 
@@ -431,7 +534,8 @@ official Vaultwarden `1.37.4`: 322 counted requests and four successful logins
 per server. Eleven creates and 33 guard-valid polls produce 44 admitted public
 attempts; six additional query/path guard rejections do not reach the handler
 rate limiter. The reference retains its public burst of 50. The combined local
-HTTP milestone passes 64 cases and 2594 requests. Current client and login
+HTTP milestone passes 72 cases and 3038 requests, including the login group.
+Current client and login
 comparison results are recorded in [verified compatibility](compatibility.md).
 Notifications/events, expiry cleanup, trusted proxy policy and local rate controls
 remain open; this is not full authentication parity.
@@ -724,8 +828,9 @@ requires bearer authentication:
 | `GET /api/users/<id>/public-key` | Return that user’s public key to an authenticated caller; 404 for an absent user or public key |
 
 The initialization input requires two JSON strings. They remain opaque, including
-empty strings and future formats; registration’s stricter validation does not
-apply to this route. Schema failures return 422 and syntax failures return 400.
+empty strings and future formats. The legacy `RegisterRequest` embedding API
+retains stricter validation; this key route and the separate modern registration
+provider use opaque key strings. Schema failures return 422 and syntax failures return 400.
 Successful initialization returns `privateKey`, `publicKey`, and `object: "keys"`.
 The provider saves the pair atomically with the account revision and preserves
 the symmetric account key, password verifier, sessions, API credentials, and vault.

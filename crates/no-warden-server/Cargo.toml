@@ -22,3 +22,4 @@ hmac = "0.12"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 url = "2"
+email_address = "=0.2.9"

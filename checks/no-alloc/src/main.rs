@@ -10,6 +10,7 @@ use no_warden::{
     devices::{DeviceRecord, PendingDeviceAuthRequest},
     domains::{DomainProjection, DomainSettingsView, GlobalDomain},
     identity::Secret,
+    registration::RegistrationEmail,
     route::{Method, classify},
     service::ImportData,
     wire::{
@@ -21,7 +22,9 @@ use no_warden::{
         DomainSettingsResponse, DomainSettingsUpdateResponse, ImportRequest,
         InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
         PasswordOrOtpRequest, PreloginRequest, PreloginResponse, ProfileUpdateRequest,
-        UserPublicKeyResponse,
+        RegistrationAuthentication, RegistrationCredentials, RegistrationFinishRequest,
+        RegistrationFinishResponse, RegistrationUnlock, RegistrationVerificationRequest,
+        RegistrationVerificationToken, UserPublicKeyResponse,
     },
 };
 
@@ -30,6 +33,44 @@ pub extern "C" fn _start() -> ! {
     let input = black_box(br#"{"email":"bare-metal@example.com"}"#);
     let request = serde_json_core::from_slice::<PreloginRequest<'_>>(input);
     let _ = black_box(request);
+    let registration = serde_json_core::from_slice::<RegistrationVerificationRequest<'_>>(input);
+    let _ = black_box(registration);
+    let authentication = serde_json_core::from_slice::<RegistrationAuthentication<'_>>(black_box(
+        br#"{"kdf":{"kdf":0,"kdfIterations":100000},"salt":"bare-metal@example.com","hash":"opaque-proof"}"#,
+    ));
+    let unlock = serde_json_core::from_slice::<RegistrationUnlock<'_>>(black_box(
+        br#"{"kdf":{"kdf":0,"kdfIterations":100000},"salt":"bare-metal@example.com","key":"opaque-wrapped-key"}"#,
+    ));
+    if let (Ok((authentication, _)), Ok((unlock, _))) = (authentication, unlock) {
+        black_box(RegistrationFinishRequest {
+            email: "bare-metal@example.com",
+            credentials: RegistrationCredentials::Nested {
+                authentication,
+                unlock,
+            },
+            email_verification_token: Some(Secret::new("opaque-verification-token")),
+            keys: None,
+            master_password_hint: None,
+        });
+    }
+    black_box(RegistrationEmail {
+        storage_email: "bare-metal@example.com",
+        salt_email: "bare-metal@example.com",
+    });
+    let mut registration_output = [0u8; 128];
+    let _ = black_box(serde_json_core::to_slice(
+        &RegistrationVerificationToken::new(black_box("opaque-verification-token")),
+        &mut registration_output,
+    ));
+    let _ = black_box(serde_json_core::to_slice(
+        &RegistrationFinishResponse,
+        &mut registration_output,
+    ));
+    black_box(registration_output);
+    black_box(classify(
+        Method::Post,
+        black_box("/identity/accounts/register/finish"),
+    ));
     black_box(classify(
         Method::Get,
         black_box("/api/sync?excludeDomains=true"),

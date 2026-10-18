@@ -97,7 +97,7 @@ export function validateCoverage(coverage, hashes = sourceHashes(), readSource =
       assert.equal(route[flag], models.length > 0, `${key}: typed dimension requires model references`);
       for (const model of models) {
         const name = model.split("<")[0];
-        assert(/^[A-Za-z_]\w*$/.test(name) && new RegExp(`^pub (?:struct|enum|type) ${name}(?:[<( {=])`, "m").test(wire), `${key}: missing wire model ${model}`);
+        assert(/^[A-Za-z_]\w*$/.test(name) && new RegExp(`^pub (?:struct|enum|type) ${name}(?:[<( {=;])`, "m").test(wire), `${key}: missing wire model ${model}`);
       }
     }
     assert.equal(route.core_service_implemented, route.core_service !== null, `${key}: service dimension requires a source reference`);

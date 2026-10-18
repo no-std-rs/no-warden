@@ -15,4 +15,5 @@ pub mod devices;
 pub mod domains;
 pub mod fixture;
 pub mod folders;
+pub mod registration;
 pub mod transport;
