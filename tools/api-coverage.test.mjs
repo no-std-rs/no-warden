@@ -32,6 +32,7 @@ test("source enumeration includes the runtime and real-client checks", () => {
   assert(Object.hasOwn(hashes, "tools/e2e.mjs"));
   for (const file of ["seed-account.mjs", "cli-process.mjs", "tls-proxy.mjs"]) assert(Object.hasOwn(hashes, `tools/${file}`));
   assert(Object.hasOwn(hashes, "tools/package-lock.json"));
+  for (const file of ["Cargo.toml", "Cargo.lock", "checks/no-alloc/Cargo.lock", "checks/embedded-vault/Cargo.lock"]) assert(Object.hasOwn(hashes, file));
   assert(Object.values(hashes).every(hash => /^[a-f0-9]{64}$/.test(hash)));
 });
 
@@ -77,4 +78,51 @@ test("rejects an unexplained parameter-name mapping", () => {
   const data = structuredClone(snapshot);
   data.upstream_routes.find(row => Object.keys(row.parameter_mapping).length > 0).parameter_mapping = {};
   assert.throws(() => validateCoverage(data), /parameter mapping/);
+});
+
+for (const [dimension, mutate] of [
+  ["request model", route => { route.typed_request = true; route.core_models.requests = ["InventedRequest"]; }],
+  ["response model", route => { route.typed_response = true; route.core_models.responses = ["InventedResponse"]; }],
+  ["service", route => { route.core_service_implemented = true; route.core_service = { file: "missing.rs", line: 999, owner: "InventedService", symbol: "run" }; }],
+  ["handler", route => { route.server_implemented = true; route.server_handler = "missing.rs:999"; }],
+  ["classifier", route => { route.classifier_enum = "InventedRoute"; }],
+]) {
+  test(`rejects an invented ${dimension} without source changes`, () => {
+    const data = structuredClone(snapshot);
+    mutate(data.routes[0]);
+    assert.throws(() => validateCoverage(data), /missing wire model|Unaudited source reference|missing classifier symbol/);
+  });
+}
+
+test("workspace dependency drift invalidates audited coverage", () => {
+  const hashes = sourceHashes();
+  hashes["Cargo.lock"] = "0".repeat(64);
+  assert.throws(() => validateCoverage(snapshot, hashes), /sources changed/);
+});
+
+function fullParityAttempt() {
+  const data = structuredClone(snapshot);
+  const route = data.routes.find(row => row.http_test_names.positive.length > 0 && row.server_implemented);
+  const key = `${route.method} ${route.path}`;
+  route.full_upstream_parity_verified = true;
+  route.parity_evidence = { upstream_comparison_cases: ["invented comparison"], remaining_variants: [] };
+  return { data, route, key };
+}
+
+test("rejects invented upstream comparison case names", () => {
+  const { data } = fullParityAttempt();
+  assert.throws(() => validateCoverage(data), /unknown upstream comparison case/);
+});
+
+test("an audited comparison case still requires a successful runtime receipt", () => {
+  const { data, route, key } = fullParityAttempt();
+  data.upstream_comparison_catalog["invented comparison"] = { route: key, upstream_commit: data.upstream_pin, test_name: route.http_test_names.positive[0] };
+  assert.throws(() => validateCoverage(data, undefined, undefined, {}), /missing successful current upstream comparison receipt/);
+});
+
+test("comparison receipts must match the current audited dependency and source hashes", () => {
+  const { data, route, key } = fullParityAttempt();
+  data.upstream_comparison_catalog["invented comparison"] = { route: key, upstream_commit: data.upstream_pin, test_name: route.http_test_names.positive[0] };
+  const receipts = { "invented comparison": { passed: true, route: key, upstream_commit: data.upstream_pin, source_sha256: {} } };
+  assert.throws(() => validateCoverage(data, undefined, undefined, receipts), /comparison receipt must match current audited sources/);
 });

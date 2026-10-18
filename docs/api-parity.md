@@ -104,9 +104,19 @@ traces. Updating a receipt requires inspecting the source expression and its
 SDK/helper trace again; refreshing aggregate counts cannot validate a new claim.
 
 Implementation and test source hashes, including local helpers and the tool
-dependency lock, keep coverage claims tied to the audited code. HTTP coverage
+dependency lock, workspace manifests, and Rust lockfiles keep coverage claims
+tied to the audited code. Model and service references must resolve to source
+symbols, and handler references must cite the matching classifier arm. A Rust
+test checks every local coverage route against the compiled classifier. HTTP coverage
 flags must agree with their positive, negative, or restart evidence. An
 implementation change must update the affected records and references,
 then refresh `source_sha256` using `node tools/check-api-coverage.mjs
 --source-hashes`. Review that metadata diff with the code change; refreshing
 hashes alone does not establish new behavior. Counts are computed from records.
+
+The upstream comparison catalog is initially empty. A full-parity assertion must
+reference an audited comparison case for the same route and upstream revision,
+plus a successful runtime receipt matching all current source/dependency hashes.
+There are no such receipts in this baseline; case names or an empty list of
+remaining variants cannot establish parity. Comparison runners can supply receipts
+through `API_COMPARISON_RECEIPTS` as they are implemented and verified.

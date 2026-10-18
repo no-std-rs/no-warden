@@ -17,10 +17,11 @@ export function sourceHashes(root = repositoryRoot) {
       if (entry.name === "target") continue;
       const path = join(directory, entry.name);
       if (entry.isDirectory()) walk(path);
-      else if (entry.isFile() && (entry.name.endsWith(".rs") || entry.name === "Cargo.toml")) paths.push(path);
+      else if (entry.isFile() && (entry.name.endsWith(".rs") || ["Cargo.toml", "Cargo.lock"].includes(entry.name))) paths.push(path);
     }
   }
   for (const directory of ["crates", "checks"]) walk(join(root, directory));
+  for (const file of ["Cargo.toml", "Cargo.lock"]) paths.push(join(root, file));
   // Include helpers and subprocess entry points as well as the test entry points.
   for (const entry of readdirSync(join(root, "tools"), { withFileTypes: true })) {
     if (entry.isFile() && (entry.name.endsWith(".mjs") || ["package.json", "package-lock.json"].includes(entry.name))) {
@@ -32,7 +33,7 @@ export function sourceHashes(root = repositoryRoot) {
   ]));
 }
 
-export function validateCoverage(coverage, hashes = sourceHashes(), readSource = path => readFileSync(join(repositoryRoot, path), "utf8")) {
+export function validateCoverage(coverage, hashes = sourceHashes(), readSource = path => readFileSync(join(repositoryRoot, path), "utf8"), comparisonReceipts = process.env.API_COMPARISON_RECEIPTS ? JSON.parse(readFileSync(process.env.API_COMPARISON_RECEIPTS, "utf8")) : {}) {
   assert.equal(coverage.schema_version, 1);
   assert.match(coverage.snapshot_commit, /^[a-f0-9]{40}$/);
   assert.deepEqual(coverage.source_sha256, hashes, "Implementation or test sources changed: audit and update the coverage snapshot");
@@ -49,6 +50,25 @@ export function validateCoverage(coverage, hashes = sourceHashes(), readSource =
     const source = readSource(file);
     for (const name of names) assert(source.includes(`fn ${name}(`), `Missing core test: ${name}`);
   }
+  function auditedLine(reference) {
+    assert(reference && typeof reference === "string", "Source reference must name a file and line");
+    const match = /^(.*):(\d+)$/.exec(reference);
+    assert(match && Object.hasOwn(hashes, match[1]), `Unaudited source reference: ${reference}`);
+    const line = readSource(match[1]).split("\n")[Number(match[2]) - 1];
+    assert.equal(typeof line, "string", `Invalid source line: ${reference}`);
+    return line;
+  }
+  const wire = readSource("crates/no-warden/src/wire.rs");
+  const routing = readSource("crates/no-warden/src/route.rs");
+  const variants = /pub enum Route[^\{]*\{([\s\S]*?)^\}/m.exec(routing)?.[1];
+  assert(variants, "Missing Route enum source");
+  const comparisons = coverage.upstream_comparison_catalog;
+  assert(comparisons && typeof comparisons === "object" && !Array.isArray(comparisons), "Comparison catalog must be explicit");
+  for (const [id, entry] of Object.entries(comparisons)) {
+    assert(rows.has(entry.route), `Unknown comparison route: ${id}`);
+    assert.equal(entry.upstream_commit, coverage.upstream_pin, `Wrong comparison upstream: ${id}`);
+    assert(tests.has(entry.test_name), `Unknown audited comparison test: ${id}`);
+  }
   for (const route of coverage.routes) {
     assert(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"].includes(route.method));
     assert.equal(typeof route.path, "string");
@@ -58,6 +78,30 @@ export function validateCoverage(coverage, hashes = sourceHashes(), readSource =
     unique.add(key);
     for (const field of ["routed", "typed_request", "typed_response", "core_service_implemented", "server_implemented", "http_tested", "http_positive_tested", "http_negative_tested", "cli_route_trace_tested", "full_upstream_parity_verified"]) {
       assert.equal(typeof route[field], "boolean", `${key}: ${field} must be explicit`);
+    }
+    const classifier = route.classifier_enum.split("(")[0];
+    assert(/^[A-Za-z_]\w*$/.test(classifier), `${key}: invalid classifier symbol`);
+    if (route.routed) assert(new RegExp(`^\\s*${classifier}(?:\\(|,)`, "m").test(variants), `${key}: missing classifier symbol`);
+    for (const [dimension, flag] of [["requests", "typed_request"], ["responses", "typed_response"]]) {
+      const models = route.core_models[dimension];
+      assert.equal(route[flag], models.length > 0, `${key}: typed dimension requires model references`);
+      for (const model of models) {
+        const name = model.split("<")[0];
+        assert(/^[A-Za-z_]\w*$/.test(name) && new RegExp(`^pub (?:struct|enum|type) ${name}(?:[< {=])`, "m").test(wire), `${key}: missing wire model ${model}`);
+      }
+    }
+    assert.equal(route.core_service_implemented, route.core_service !== null, `${key}: service dimension requires a source reference`);
+    if (route.core_service_implemented) {
+      const service = route.core_service;
+      assert(service && typeof service === "object" && /^[A-Za-z_]\w*$/.test(service.symbol) && /^[A-Za-z_]\w*$/.test(service.owner), `${key}: invalid service symbol reference`);
+      const line = auditedLine(`${service.file}:${service.line}`);
+      assert(new RegExp(`^\\s*pub (?:async )?fn ${service.symbol}\\s*[<(]`).test(line), `${key}: missing service method`);
+      assert(new RegExp(`impl[^\\n]*\\b${service.owner}\\b`).test(readSource(service.file).split("\n").slice(0, service.line - 1).join("\n")), `${key}: missing service owner`);
+    }
+    assert.equal(route.server_implemented, route.server_handler !== null, `${key}: server dimension requires a handler reference`);
+    if (route.server_implemented) {
+      const line = auditedLine(route.server_handler);
+      assert(new RegExp(`\\bRoute::${classifier}\\b`).test(line) && (/=>/.test(line) || /^\s*if route == Route::/.test(line)), `${key}: handler must cite its classifier arm or condition`);
     }
     for (const name of [...route.http_test_names.positive, ...route.http_test_names.negative]) {
       assert(tests.has(name), `${key}: unknown HTTP test ${name}`);
@@ -75,6 +119,13 @@ export function validateCoverage(coverage, hashes = sourceHashes(), readSource =
     if (route.full_upstream_parity_verified) {
       assert(route.routed && route.server_implemented && route.http_positive_tested, `${key}: parity requires behavior and HTTP evidence`);
       assert(Array.isArray(route.parity_evidence?.upstream_comparison_cases) && route.parity_evidence.upstream_comparison_cases.length > 0, `${key}: parity requires upstream comparison cases`);
+      for (const id of route.parity_evidence.upstream_comparison_cases) {
+        assert(Object.hasOwn(comparisons, id), `${key}: unknown upstream comparison case ${id}`);
+        assert.equal(comparisons[id].route, key, `${key}: comparison must target this route`);
+        const receipt = comparisonReceipts[id];
+        assert(receipt?.passed === true && receipt.route === key && receipt.upstream_commit === coverage.upstream_pin, `${key}: missing successful current upstream comparison receipt`);
+        assert.deepEqual(receipt.source_sha256, hashes, `${key}: comparison receipt must match current audited sources`);
+      }
       assert.deepEqual(route.parity_evidence.remaining_variants, [], `${key}: unresolved variants prevent full parity`);
     }
   }

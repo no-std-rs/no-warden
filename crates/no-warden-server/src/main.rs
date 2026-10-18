@@ -471,4 +471,38 @@ mod tests {
         assert!(remaining.iter().any(|access| access == "live-access"));
         assert!(remaining.iter().any(|access| access == "live-refresh"));
     }
+
+    #[test]
+    fn coverage_records_match_the_compiled_route_classifier() {
+        let coverage: Value = serde_json::from_str(include_str!(
+            "../../../compatibility/no-warden-coverage.json"
+        ))
+        .unwrap();
+        for record in coverage["routes"].as_array().unwrap() {
+            let method = route::Method::parse(record["method"].as_str().unwrap()).unwrap();
+            let path = record["path"]
+                .as_str()
+                .unwrap()
+                .replace("{id}", "inventory-id");
+            let actual = route::classify(method, &path);
+            assert_eq!(
+                actual.is_some(),
+                record["routed"].as_bool().unwrap(),
+                "{path}"
+            );
+            if let Some(actual) = actual {
+                let expected = record["classifier_enum"]
+                    .as_str()
+                    .unwrap()
+                    .split('(')
+                    .next()
+                    .unwrap();
+                assert_eq!(
+                    format!("{actual:?}").split('(').next().unwrap(),
+                    expected,
+                    "{path}"
+                );
+            }
+        }
+    }
 }

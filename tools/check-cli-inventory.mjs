@@ -140,6 +140,11 @@ export function validateCliInventory(inventory, evidence) {
   assert.deepEqual(constructions.sort(), evidence.discovered.requests.map(requestKey).sort(), "Inventory must cover every discovered request construction and symbolic variant");
   const generic = inventory.openObligations.filter(row => ["generic_transport", "generic_request"].includes(row.kind));
   assert.deepEqual(generic.map(genericKey).sort(), evidence.discovered.generic.map(genericKey).sort(), "Every generic transport must remain an explicit obligation");
+  const obligationIds = inventory.openObligations.map(row => row.id);
+  assert.equal(new Set(obligationIds).size, obligationIds.length, "Obligation IDs must be unique");
+  const dynamic = inventory.openObligations.filter(row => row.kind === "dynamic_http_operation");
+  const expectedDynamic = inventory.operations.filter(row => row.resolution === "dynamic_destination_or_expression").map(row => ({ id: `dynamic-${row.id}`, kind: "dynamic_http_operation", record: row.id, method: row.method, template: row.template, source: row.source }));
+  assert.deepEqual(dynamic.toSorted((a, b) => a.id.localeCompare(b.id)), expectedDynamic.toSorted((a, b) => a.id.localeCompare(b.id)), "Every dynamic operation must retain its matching obligation");
   const counts = {
     operationRecords: inventory.operations.length,
     uniqueMethodPathPairs: new Set(inventory.operations.map(row => `${row.method} ${row.path}`)).size,

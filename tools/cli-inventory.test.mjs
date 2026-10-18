@@ -87,6 +87,18 @@ test("rejects omission of an unresolved generic transport", () => {
   assert.throws(() => validateCliInventory(data, evidence), /Every generic transport/);
 });
 
+for (const [name, mutate] of [
+  ["omission", data => { data.openObligations.splice(data.openObligations.findIndex(row => row.kind === "dynamic_http_operation"), 1); data.summary.openObligations--; }],
+  ["duplicate", data => { data.openObligations.push(structuredClone(data.openObligations.find(row => row.kind === "dynamic_http_operation"))); data.summary.openObligations++; }],
+  ["changed destination", data => { data.openObligations.find(row => row.kind === "dynamic_http_operation").template = "/invented"; }],
+]) {
+  test(`rejects dynamic obligation ${name}`, () => {
+    const data = structuredClone(inventory);
+    mutate(data);
+    assert.throws(() => validateCliInventory(data, evidence), /Every dynamic operation|Obligation IDs/);
+  });
+}
+
 test("rejects relabeling pinned revisions despite refreshed URLs and receipts", () => {
   for (const field of ["commit", "sdk"]) {
     const data = structuredClone(inventory);
