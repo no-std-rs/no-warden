@@ -9,6 +9,10 @@ use crate::{
     wire::{CipherCreateRequest, CipherRequest, FolderRequest, RegisterRequest},
 };
 
+pub use crate::attachment::{
+    AttachmentAction, AttachmentMetadata, AttachmentStorage, AttachmentWrite,
+    AuthorizedAttachmentDownload, ValidatedAttachment,
+};
 pub use crate::bulk::{CipherAccess, CipherBulkOperation, CipherBulkStorage, ValidatedCipherBulk};
 pub use crate::identity::{
     ApiKeyDevice, AuthorizedApiKeyGrant, IdentityStorage, ReauthenticationProof, Secret,

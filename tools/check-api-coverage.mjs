@@ -111,7 +111,7 @@ export function validateCoverage(coverage, hashes = sourceHashes(), readSource =
     assert.equal(route.server_implemented, route.server_handler !== null, `${key}: server dimension requires a handler reference`);
     if (route.server_implemented) {
       const line = auditedLine(route.server_handler);
-      assert(new RegExp(`\\bRoute::${classifier}\\b`).test(line) && (/=>/.test(line) || /^\s*if route == Route::/.test(line)), `${key}: handler must cite its classifier arm or condition`);
+      assert(new RegExp(`\\bRoute::${classifier}\\b`).test(line) && (/=>/.test(line) || /^\s*if route == Route::/.test(line) || /^\s*if let Route::\w+\([^)]*\) = route \{\s*$/.test(line)), `${key}: handler must cite its classifier arm or condition`);
     }
     for (const name of [...route.http_test_names.positive, ...route.http_test_names.negative]) {
       assert(tests.has(name), `${key}: unknown HTTP test ${name}`);

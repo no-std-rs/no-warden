@@ -5,14 +5,18 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The core has 45 unit tests and a compile-fail doctest proving that `Secret`
-cannot be serialized implicitly. The host has thirteen storage tests and four
-transport/session/coverage tests on Unix. The expanded HTTP suite passes 52 tests,
+The core has 56 unit tests and a compile-fail doctest proving that `Secret`
+cannot be serialized implicitly. The host has 22 Rust tests on Unix, including
+attachment byte/revision rollback, capability expiry and deletion cleanup.
+The expanded HTTP suite has 61 tests,
 including imports, bulk lifecycle/archive contracts, and API-key reauthentication,
-rotation, scope, device fields, and session authority. The CLI suite includes
+rotation, scope, device fields, session authority, and all 11 pinned attachment
+route patterns. The CLI suite includes
 JSON/CSV import, archive/unarchive, API-key login followed by password unlock,
-and fresh-cache decryption. Restart persistence checks cover vault state, archive
-annotations, recoverable API credentials, rotation, and access-only sessions.
+fresh-cache decryption, and encrypted attachment upload/download/deletion.
+Restart persistence checks cover vault state, archive annotations, recoverable API
+credentials, rotation, access-only sessions, exact attachment bytes and metadata,
+unexpired download capabilities, and permanent-deletion cleanup.
 The core's minimum Rust version is 1.85; the standalone
 server is also checked with its minimum version, 1.89. Bare-metal compilation
 and the allocator-free consumer link pass independently of the host suites.

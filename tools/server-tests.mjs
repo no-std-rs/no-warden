@@ -8,15 +8,26 @@ import { registration } from "./seed-account.mjs";
 
 const server = (process.env.BW_E2E_SERVER ?? "http://127.0.0.1:8000").replace(/\/$/, "");
 
-async function request(path, { method = "GET", token, body, form } = {}) {
+async function request(path, { method = "GET", token, body, form, multipart, binary = false } = {}) {
   const headers = { accept: "application/json" };
   if (token) headers.authorization = `Bearer ${token}`;
   if (body !== undefined) headers["content-type"] = "application/json";
   if (form) headers["content-type"] = "application/x-www-form-urlencoded";
-  const response = await fetch(`${server}${path}`, {
+  const target = new URL(path, `${server}/`);
+  assert.equal(target.origin, new URL(server).origin, "HTTP fixtures only fetch the configured test server");
+  let payload = form ? new URLSearchParams(form) : multipart ?? (body !== undefined ? JSON.stringify(body) : undefined);
+  if (multipart) {
+    // Send one bounded body, including rejection probes whose server can close
+    // the connection before a streamed FormData writer finishes. Never retry.
+    const encoded = new Request(target, { method, body: multipart });
+    headers["content-type"] = encoded.headers.get("content-type");
+    payload = Buffer.from(await encoded.arrayBuffer());
+  }
+  const response = await fetch(target, {
     method, headers, signal: AbortSignal.timeout(15_000),
-    body: form ? new URLSearchParams(form) : body !== undefined ? JSON.stringify(body) : undefined,
+    body: payload,
   });
+  if (binary) return { status: response.status, bytes: Buffer.from(await response.arrayBuffer()) };
   const text = await response.text();
   let data;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
@@ -89,9 +100,21 @@ async function vaultState(token) {
   const sync = ok(await request("/api/sync", { token }), "lifecycle sync");
   const sorted = values => [...values].sort((a, b) => a.id.localeCompare(b.id));
   return {
-    ciphers: sorted(sync.ciphers), folders: sorted(sync.folders),
+    ciphers: sorted(sync.ciphers.map(stableCipher)), folders: sorted(sync.folders),
     revision: ok(await request("/api/accounts/revision-date", { token }), "lifecycle account revision"),
   };
+}
+function stableCipher(item) {
+  // Every metadata read may mint a new signed download URL. Keep all stored fields.
+  return Array.isArray(item.attachments)
+    ? { ...item, attachments: item.attachments.map(({ url, ...metadata }) => metadata) }
+    : item;
+}
+function attachmentForm(bytes, fileName, key) {
+  const form = new FormData();
+  if (key !== undefined) form.append("key", key);
+  if (bytes !== undefined) form.append("data", new Blob([bytes], { type: "application/octet-stream" }), fileName);
+  return form;
 }
 function unchanged(actual, expected, context) {
   // Failure messages must not serialize encrypted vault contents.
@@ -1054,5 +1077,243 @@ await test("personal API-key rotation replaces login credentials while preservin
       ok(await request("/api/sync", { token: granted.access_token }), "new API-key access");
     }
     ok(await request("/api/sync", { token: apiBearer.access_token }), "old issued API bearer after old-secret rejection");
+  });
+});
+
+await test("personal attachments preserve opaque bytes and enforce the pinned lifecycle contracts", async (t) => {
+  const owner = await account("Attachment owner");
+  const other = await account("Attachment foreign owner");
+  const token = owner.token.access_token;
+  const otherToken = other.token.access_token;
+  const item = await lifecycleFixture(owner);
+  const second = await lifecycleFixture(owner);
+  const foreign = await lifecycleFixture(other);
+  const ownerId = ok(await request("/api/accounts/profile", { token }), "attachment owner profile").id;
+  const base = id => `/api/ciphers/${id}/attachment`;
+  const deletionAliases = [
+    { method: "DELETE", suffix: "" }, { method: "DELETE", suffix: "/admin" },
+    { method: "POST", suffix: "/delete" }, { method: "POST", suffix: "/delete-admin" },
+  ];
+  const payload = Buffer.from(Array.from({ length: 256 }, (_, index) => index));
+  async function metadata(cipherId, attachmentId) {
+    const data = ok(await request(`${base(cipherId)}/${attachmentId}`, { token }), "attachment metadata");
+    assert.equal(data.id, attachmentId);
+    assert.equal(data.object, "attachment");
+    assert.equal(typeof data.size, "string");
+    assert.equal(typeof data.sizeName, "string");
+    assert(new URL(data.url).searchParams.get("token"), "Direct download must have a scoped capability token");
+    return data;
+  }
+  async function download(url, bytes, status = 200) {
+    const response = await request(url, { binary: true });
+    assert.equal(response.status, status, "Attachment download status");
+    if (status === 200) assert(response.bytes.equals(bytes), "Every opaque attachment byte must survive transport");
+  }
+  async function reserve(cipherId, size, overrides = {}) {
+    const response = await request(`${base(cipherId)}/v2`, {
+      method: "POST", token,
+      body: { key: owner.registration.key, fileName: owner.registration.key, fileSize: size, ...overrides },
+    });
+    assert.equal(response.status, 200, "Attachment reservation");
+    const data = response.data;
+    assert.equal(data.object, "attachment-fileUpload");
+    assert.equal(data.fileUploadType, 0);
+    assert(data.url === `/ciphers/${cipherId}/attachment/${data.attachmentId}`, "Reservation must return the relative direct-upload path");
+    assert.equal((overrides.adminRequest ? data.cipherMiniResponse : data.cipherResponse).id, cipherId);
+    return data.attachmentId;
+  }
+  async function upload(cipherId, attachmentId, bytes) {
+    emptyLifecycle(await request(`${base(cipherId)}/${attachmentId}`, {
+      method: "POST", token, multipart: attachmentForm(bytes, "ignored-v2-name", "ignored-v2-key"),
+    }), "V2 upload");
+  }
+  async function attached(cipherId, bytes = payload) {
+    const id = await reserve(cipherId, bytes.length);
+    await upload(cipherId, id, bytes);
+    return metadata(cipherId, id);
+  }
+
+  await t.test("v2 pending slots, numeric/string sizes, admin responses, empty and large bytes match upstream", async () => {
+    for (const [index, bytes] of [Buffer.alloc(0), payload, Buffer.alloc(1024 * 1024 + 37, 0xa5)].entries()) {
+      const before = await vaultState(token);
+      const id = await reserve(item.id, index === 1 ? String(bytes.length) : bytes.length, {
+        adminRequest: index === 2, lastKnownRevisionDate: "2000-01-01T00:00:00.000Z",
+      });
+      assert.equal((await vaultState(token)).revision, before.revision, "Reservation must not advance account revision");
+      const pending = await metadata(item.id, id);
+      assert.equal(pending.size, String(bytes.length));
+      await download(pending.url, bytes, 404);
+      await delay(5);
+      await upload(item.id, id, bytes);
+      const saved = await metadata(item.id, id);
+      assert(saved.key === owner.registration.key && saved.fileName === owner.registration.key,
+        "V2 multipart key and filename must not replace reserved encrypted metadata");
+      assert.equal(saved.size, String(bytes.length));
+      await download(saved.url, bytes);
+      const after = await vaultState(token);
+      assert(after.revision > before.revision, "Successful upload must advance account revision");
+      assert.equal(after.ciphers.find(candidate => candidate.id === item.id).revisionDate, item.revisionDate,
+        "Attachment writes must preserve cipher revision");
+    }
+  });
+
+  await t.test("all four deletion aliases return the updated cipher and remove metadata and stored bytes", async () => {
+    for (const action of deletionAliases) {
+      const saved = await attached(item.id);
+      const before = await vaultState(token);
+      await delay(5);
+      const response = await request(`${base(item.id)}/${saved.id}${action.suffix}`, { method: action.method, token });
+      assert.equal(response.status, 200);
+      assert.equal(response.data.cipher.id, item.id);
+      assert(!(response.data.cipher.attachments ?? []).some(candidate => candidate.id === saved.id));
+      assert.equal(response.data.cipher.revisionDate, item.revisionDate);
+      assert((await vaultState(token)).revision > before.revision);
+      assert.equal((await request(`${base(item.id)}/${saved.id}`, { token })).status, 400);
+      await download(saved.url, payload, 404);
+    }
+  });
+
+  await t.test("legacy upload aliases and share replacement preserve encrypted metadata with a fresh replacement ID", async () => {
+    for (const suffix of ["", "-admin"]) {
+      const before = ok(await request(`/api/ciphers/${item.id}`, { token }), "legacy upload baseline");
+      const oldIds = new Set((before.attachments ?? []).map(candidate => candidate.id));
+      const response = await request(`${base(item.id)}${suffix}`, {
+        method: "POST", token, multipart: attachmentForm(payload, owner.registration.key, owner.registration.key),
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.data.id, item.id);
+      assert.equal(response.data.revisionDate, item.revisionDate);
+      const saved = response.data.attachments.find(candidate => !oldIds.has(candidate.id));
+      assert(saved, "Legacy upload must add a distinct attachment ID");
+      assert(saved.key === owner.registration.key && saved.fileName === owner.registration.key);
+      await download(saved.url, payload);
+      const existingIds = new Set(response.data.attachments.map(candidate => candidate.id));
+      const shared = ok(await request(`${base(item.id)}/${saved.id}/share`, {
+        method: "POST", token,
+        multipart: attachmentForm(Buffer.from([0, 255, 42]), other.registration.key, other.registration.key),
+      }), "share attachment replacement");
+      const replacement = shared.attachments.find(candidate => !existingIds.has(candidate.id));
+      assert(replacement && replacement.id !== saved.id, "Share must replace the attachment with a fresh ID");
+      assert(replacement.key === other.registration.key && replacement.fileName === other.registration.key);
+      await download(replacement.url, Buffer.from([0, 255, 42]));
+      await download(saved.url, payload, 404);
+    }
+  });
+
+  await t.test("all attachment APIs enforce authentication, owner isolation, and cipher-to-attachment binding", async () => {
+    const saved = await attached(item.id);
+    const before = await vaultState(token);
+    const otherBefore = await vaultState(otherToken);
+    const operations = [
+      { path: `${base(item.id)}/v2`, method: "POST", body: { key: owner.registration.key, fileName: owner.registration.key, fileSize: 3 } },
+      { path: `${base(item.id)}/${saved.id}`, method: "GET" },
+      { path: `${base(item.id)}/${saved.id}`, method: "POST", file: true },
+      { path: base(item.id), method: "POST", file: true },
+      { path: `${base(item.id)}-admin`, method: "POST", file: true },
+      { path: `${base(item.id)}/${saved.id}/share`, method: "POST", file: true },
+      ...deletionAliases.map(action => ({ path: `${base(item.id)}/${saved.id}${action.suffix}`, method: action.method })),
+    ];
+    for (const operation of operations) {
+      for (const bearer of [undefined, otherToken]) {
+        const response = await request(operation.path, {
+          method: operation.method, token: bearer, body: operation.body,
+          multipart: operation.file ? attachmentForm(payload, owner.registration.key, owner.registration.key) : undefined,
+        });
+        denied(response, "attachment authorization", bearer ? [400] : [401, 403]);
+      }
+    }
+    for (const method of ["GET", "POST", "DELETE"]) {
+      assert.equal((await request(`${base(second.id)}/${saved.id}`, {
+        method, token, multipart: method === "POST" ? attachmentForm(payload, "ignored") : undefined,
+      })).status, 400, "An attachment ID must not be usable with another owned cipher");
+    }
+    const capability = new URL(saved.url);
+    const missing = new URL(capability); missing.search = "";
+    await download(missing, payload, 422);
+    const forged = new URL(capability); forged.searchParams.set("token", "forged-download-token");
+    await download(forged, payload, 404);
+    const wrongPath = new URL(capability); wrongPath.pathname = `/attachments/${second.id}/${saved.id}`;
+    await download(wrongPath, payload, 404);
+    await download(capability, payload); // A valid capability intentionally needs no bearer.
+    unchanged(await vaultState(token), before, "Rejected attachment operations must preserve owner data and revision");
+    unchanged(await vaultState(otherToken), otherBefore, "Attachment operations must preserve foreign data and revision");
+  });
+
+  await t.test("inclusive one-MiB size leeway adjusts metadata and an out-of-range overwrite deletes its slot and blob", async () => {
+    const mib = 1024 * 1024;
+    for (const [declared, bytes] of [[mib + 3, Buffer.alloc(3)], ["3", Buffer.alloc(mib + 3)]]) {
+      const id = await reserve(item.id, declared);
+      await upload(item.id, id, bytes);
+      const saved = await metadata(item.id, id);
+      assert.equal(saved.size, String(bytes.length));
+      await download(saved.url, bytes);
+    }
+    const saved = await attached(item.id, Buffer.alloc(3));
+    const revision = (await vaultState(token)).revision;
+    assert.equal((await request(`${base(item.id)}/${saved.id}`, {
+      method: "POST", token, multipart: attachmentForm(Buffer.alloc(mib + 4), "ignored"),
+    })).status, 400);
+    assert.equal((await request(`${base(item.id)}/${saved.id}`, { token })).status, 400);
+    await download(saved.url, payload, 404);
+    assert.equal((await vaultState(token)).revision, revision, "Size-mismatch cleanup must not advance account revision");
+    const limit = await reserve(item.id, 525 * mib);
+    ok(await request(`${base(item.id)}/${limit}`, { method: "DELETE", token }), "delete maximum-size pending slot");
+  });
+
+  await t.test("malformed reservations and incomplete legacy multipart requests are rejected", async () => {
+    const before = await vaultState(token);
+    for (const body of [
+      {}, { key: owner.registration.key, fileName: owner.registration.key },
+      ...[-1, "-1", 525 * 1024 * 1024 + 1, "not-a-number", 1.5, true].map(fileSize => ({ key: owner.registration.key, fileName: owner.registration.key, fileSize })),
+    ]) {
+      denied(await request(`${base(item.id)}/v2`, { method: "POST", token, body }), "invalid attachment reservation", [400, 422]);
+    }
+    for (const multipart of [attachmentForm(payload, owner.registration.key), attachmentForm(undefined, undefined, owner.registration.key)]) {
+      denied(await request(base(item.id), { method: "POST", token, multipart }), "incomplete legacy upload", [400, 422]);
+    }
+    unchanged(await vaultState(token), before, "Malformed attachment requests must preserve stored data and revision");
+  });
+
+  await t.test("ordinary cipher attachments2 updates metadata, ignores missing IDs, and cannot modify foreign attachments", async () => {
+    const saved = await attached(item.id);
+    const foreignAttachment = await attachedForForeign();
+    async function edit(attachments2) {
+      const current = ok(await request(`/api/ciphers/${item.id}`, { token }), "attachment rotation cipher");
+      return ok(await request(`/api/ciphers/${item.id}`, {
+        method: "PUT", token,
+        body: { ...current, encryptedFor: ownerId, attachments2, lastKnownRevisionDate: current.revisionDate },
+      }), "attachment metadata rotation");
+    }
+    async function attachedForForeign() {
+      const response = ok(await request(`${base(foreign.id)}/v2`, {
+        method: "POST", token: otherToken,
+        body: { key: other.registration.key, fileName: other.registration.key, fileSize: 0 },
+      }), "foreign attachment slot");
+      return response.attachmentId;
+    }
+    const changed = { key: other.registration.key, fileName: other.registration.keys.encryptedPrivateKey };
+    await edit({ [saved.id]: changed });
+    const rotated = await metadata(item.id, saved.id);
+    assert(rotated.key === changed.key && rotated.fileName === changed.fileName, "Attachment key and name metadata must update exactly");
+    await download(rotated.url, payload);
+    await edit({ [randomUUID()]: changed });
+    const foreignBefore = await vaultState(otherToken);
+    await edit({ [foreignAttachment]: changed });
+    unchanged(await vaultState(otherToken), foreignBefore, "An attachments2 map must not update a foreign cipher's metadata");
+  });
+
+  await t.test("trash/restore keeps attachment data and single/bulk permanent cipher deletion removes every attachment", async () => {
+    for (const bulk of [false, true]) {
+      const doomed = await lifecycleFixture(owner);
+      const saved = [await attached(doomed.id), await attached(doomed.id, Buffer.from([42]))];
+      ok(await request(`/api/ciphers/${doomed.id}/delete`, { method: "PUT", token }), "trash attached cipher");
+      await download(saved[0].url, payload);
+      ok(await request(`/api/ciphers/${doomed.id}/restore`, { method: "PUT", token }), "restore attached cipher");
+      assert.equal(ok(await request(`/api/ciphers/${doomed.id}`, { token }), "restored attachment metadata").attachments.length, 2);
+      ok(await request(bulk ? "/api/ciphers" : `/api/ciphers/${doomed.id}`, {
+        method: "DELETE", token, body: bulk ? { ids: [doomed.id] } : undefined,
+      }), "permanently delete attached cipher");
+      for (const attachment of saved) await download(attachment.url, payload, 404);
+    }
   });
 });

@@ -39,8 +39,8 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 43 routed patterns, 26 with typed requests, 31 with reusable core service behavior; each carries its narrower limits |
-| Runtime CLI comparison | Official CLI `2026.10.0`: 90 commands pass against the adapter and official Vaultwarden `1.37.4`, including personal JSON/CSV import, archive/unarchive, and API-key login with password unlock and rotation. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 54 routed patterns, 30 with typed requests, 42 with reusable core service behavior; each carries its narrower limits |
+| Runtime CLI comparison | Official CLI `2026.10.0`: all 118 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
 unimplemented status or a partial local coverage record. Query/rank/configuration
@@ -48,10 +48,15 @@ variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
 
-Fifteen local patterns have some typed response representation, including the
-explicit `ApiKeyResponse`. Bulk cipher lists use the generic `ListResponse`
+Seventeen local patterns have some typed response representation, including the
+explicit API-key and attachment responses. Bulk cipher lists use the generic `ListResponse`
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
+
+The ledger records positive or restart HTTP evidence for 43 patterns, negative
+HTTP evidence for 44, and CLI command associations for 30. These are distinct
+coverage dimensions; no route has a captured CLI request trace or a verified
+full-parity status.
 
 The client catalog is an overapproximation of shipped code, not a proof that all
 those operations are reachable from CLI commands. Its 34 open obligations retain
@@ -146,8 +151,8 @@ The bundled SDK's independent API-key login implementation is not proof of that
 CLI call path. All 90 real CLI commands pass against both servers; the 24-command
 extension checks locked API login, password unlock, fresh-cache decryption,
 rotation, and old-secret rejection. All 14 portable API-key HTTP tests pass
-against the release binary with its default rate-limit policy. The local suite
-passes 52 HTTP tests, 45 core unit tests, 17 Rust host tests, and a compile-fail
+against the release binary with its default rate-limit policy. That chunk passed
+52 HTTP tests, 45 core unit tests, 17 Rust host tests, and a compile-fail
 secret-serialization doctest. Key state and API bearers also survive two graceful
 restarts. These runtime results do not supply an exhaustive comparison catalog
 or captured CLI request trace.
@@ -156,6 +161,71 @@ Organization credentials, passwordless/KeyConnector accounts, OTP delivery and
 consumption in the host, login rate controls, device policies, and exhaustive
 authentication errors remain further work. All full-parity flags and formal
 comparison/trace receipt requirements remain unchanged.
+
+The attachment inventory contains eleven pinned Vaultwarden patterns: ten
+authenticated API routes and one capability-based file route. The personal
+attachment chunk accounts for each pattern explicitly:
+
+| Method and route | Contract |
+| --- | --- |
+| `POST /api/ciphers/<cid>/attachment/v2` | Reserve metadata; return upload type 0, attachment ID, upload URL, and `cipherResponse` or `cipherMiniResponse` |
+| `POST /api/ciphers/<cid>/attachment/<aid>` | Multipart `data` upload into the existing reservation; empty 200; explicit Rocket rank 1 |
+| `GET /api/ciphers/<cid>/attachment/<aid>` | Read-authorized metadata and download URL |
+| `POST /api/ciphers/<cid>/attachment`, `POST /api/ciphers/<cid>/attachment-admin` | Legacy multipart filename/key/data upload; cipher response |
+| `POST /api/ciphers/<cid>/attachment/<aid>/share` | Legacy replacement with a fresh ID; cipher response |
+| `DELETE /api/ciphers/<cid>/attachment/<aid>`, `DELETE /api/ciphers/<cid>/attachment/<aid>/admin` | Write-authorized deletion; `{cipher: ...}` |
+| `POST /api/ciphers/<cid>/attachment/<aid>/delete`, `POST /api/ciphers/<cid>/attachment/<aid>/delete-admin` | Same deletion contract |
+| `GET /attachments/<cid>/<file_id>?token=...` | Capability-authorized encrypted bytes, without a session bearer |
+
+The [required download query guard](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/web.rs#L231-L240)
+returns 422 when `token` is absent. A supplied invalid capability, mismatched ID
+binding, or missing file returns 404.
+
+The [pinned handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L1127-L1496)
+require read access for metadata and write access for mutation; admin-named
+aliases grant no bypass. Reservation ignores the client's extra
+`lastKnownRevisionDate`. It leaves revisions unchanged; upload and deletion
+advance account revision without changing cipher revision. A measured size
+within the inclusive declared-size range of plus or minus one MiB is accepted;
+a mismatch discards the reservation and stored bytes. The adapter's atomic BLOB
+persistence and replacement are stronger than upstream's separate filesystem
+writes and delete-before-replacement flow. This guarantee covers metadata,
+BLOBs, and revisions; a later response/capability generation error can leave a
+committed mutation, matching the upstream response construction boundary. Ordinary
+[`attachments2` updates](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L516-L538)
+change only associated key/filename metadata, skipping missing IDs and stopping
+at a foreign attachment; their iteration order is unspecified.
+
+The [upstream file capability](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth.rs#L425-L447)
+has a 60-second lifetime and a
+[30-second JWT validation leeway](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth.rs#L130-L139).
+The host instead
+uses an opaque capability digest with strict expiry. Its 16-MiB encoded-request
+limit is separate from the 525-MiB declared-size validation and upstream's
+525,000,000-byte multipart file limit: upstream uses
+[`525.megabytes()`](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/main.rs#L575-L578),
+whose [unit is decimal MB](https://docs.rs/ubyte/0.10.4/ubyte/struct.ByteUnit.html#method.megabytes).
+
+Actual [CLI create](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/vault/create.command.ts#L142-L194)
+and [delete attachment commands](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/vault/delete.command.ts#L86-L120)
+call the shared cipher service; `pm-28192-cipher-attachment-ops-to-sdk` selects
+TypeScript or SDK metadata operations. Both use direct multipart upload for
+upload type 0. [CLI get](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/commands/get.command.ts#L395-L425)
+performs the authenticated metadata request, downloads the returned URL, and
+delegates decryption to SDK attachment cryptography. Its 404 fallback to a cached URL does
+not implement a missing server endpoint. The shared client also constructs
+admin metadata, upload-renewal, and emergency-access attachment requests absent
+from this pinned Vaultwarden inventory; those calls remain explicit gaps rather
+than evidence that eleven implemented patterns close the family. The portable
+attachment HTTP group passes all nine tests against the release binary and
+covers all eleven patterns. All 118 real CLI commands pass against both servers, and the final nine local
+HTTP guard checks pass against the rebuilt adapter. The
+allocation-free core passes 56 unit tests, its secret-serialization doctest, and
+the Rust 1.85 and allocator-free RISC-V checks. All 22 Rust host tests pass with
+the Rust 1.89 host check. Local attachment state and bytes survive two graceful
+restarts. Organization permissions, quotas, object
+storage, notifications, and exhaustive failure behavior remain further work;
+all full-parity flags and formal comparison/trace requirements remain unchanged.
 
 ## Reproduce and maintain the inventory
 

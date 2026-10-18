@@ -83,19 +83,29 @@ async function stopServer(record, strict = true) {
   }
 }
 
-async function request(path, { method = "GET", token, body, form, expectedStatus } = {}) {
+async function request(path, { method = "GET", token, body, form, multipart, binary = false, expectedStatus } = {}) {
   const headers = {};
   if (token) headers.authorization = `Bearer ${token}`;
   if (body !== undefined) headers["content-type"] = "application/json";
   if (form) headers["content-type"] = "application/x-www-form-urlencoded";
-  const response = await fetch(`${server}${path}`, {
+  const target = new URL(path, `${server}/`);
+  assert.equal(target.origin, new URL(server).origin, "Durability fixtures only fetch their own server");
+  const response = await fetch(target, {
     method, headers, signal: AbortSignal.timeout(15_000),
-    body: form ? new URLSearchParams(form) : body !== undefined ? JSON.stringify(body) : undefined,
+    body: form ? new URLSearchParams(form) : multipart ?? (body !== undefined ? JSON.stringify(body) : undefined),
   });
+  // Signed query values are capabilities and must never enter failure messages.
+  if (expectedStatus !== undefined) assert.equal(response.status, expectedStatus, `${method} ${target.pathname}: unexpected HTTP status`);
+  else assert(response.ok, `${method} ${target.pathname}: HTTP ${response.status}`);
+  if (binary) return Buffer.from(await response.arrayBuffer());
   const text = await response.text();
-  if (expectedStatus !== undefined) assert.equal(response.status, expectedStatus, `${method} ${path}: unexpected HTTP status`);
-  else assert(response.ok, `${method} ${path}: HTTP ${response.status}`);
   return text ? JSON.parse(text) : null;
+}
+
+function stableCipher(item) {
+  return Array.isArray(item.attachments)
+    ? { ...item, attachments: item.attachments.map(({ url, ...metadata }) => metadata) }
+    : item;
 }
 
 function apiGrantForm(clientId, clientSecret) {
@@ -185,6 +195,24 @@ try {
     method: "POST", form: apiGrantForm(clientId, apiKey.apiKey),
   });
   assert.equal(Object.hasOwn(apiSession, "refresh_token"), false);
+  const attachmentBytes = randomBytes(257 * 1024 + 13);
+  async function attach(cipherId) {
+    const reserved = await request(`/api/ciphers/${cipherId}/attachment/v2`, {
+      method: "POST", token,
+      body: { key: account.key, fileName: account.keys.encryptedPrivateKey, fileSize: attachmentBytes.length },
+    });
+    const multipart = new FormData();
+    multipart.append("data", new Blob([attachmentBytes]), "ignored-v2-name");
+    await request(`/api/ciphers/${cipherId}/attachment/${reserved.attachmentId}`, { method: "POST", token, multipart });
+    return request(`/api/ciphers/${cipherId}/attachment/${reserved.attachmentId}`, { token });
+  }
+  const attachmentCipher = await createBulk();
+  const attachment = await attach(attachmentCipher.id);
+  assert((await request(attachment.url, { binary: true })).equals(attachmentBytes), "Attachment bytes must match before restart");
+  const doomedCipher = await createBulk();
+  const doomedAttachment = await attach(doomedCipher.id);
+  await request(`/api/ciphers/${doomedCipher.id}`, { method: "DELETE", token });
+  await request(doomedAttachment.url, { binary: true, expectedStatus: 404 });
   const before = await request("/api/sync", { token });
   const revision = await request("/api/accounts/revision-date", { token });
   assert.equal(before.profile.name, account.name);
@@ -205,18 +233,29 @@ try {
   assert.deepEqual(after.profile, before.profile);
   assert.deepEqual(after.userDecryption, before.userDecryption);
   assert.deepEqual(after.folders, before.folders);
-  const sortedCiphers = values => [...values].sort((a, b) => a.id.localeCompare(b.id));
-  assert.deepEqual(sortedCiphers(after.ciphers), sortedCiphers(before.ciphers));
+  const sortedCiphers = values => values.map(stableCipher).sort((a, b) => a.id.localeCompare(b.id));
+  assert(JSON.stringify(sortedCiphers(after.ciphers)) === JSON.stringify(sortedCiphers(before.ciphers)),
+    "All stored cipher and attachment metadata must survive restart; signed URLs may change");
+  const restartedAttachment = await request(`/api/ciphers/${attachmentCipher.id}/attachment/${attachment.id}`, { token });
+  const { url: oldUrl, ...oldMetadata } = attachment;
+  const { url: freshUrl, ...freshMetadata } = restartedAttachment;
+  assert(JSON.stringify(oldMetadata) === JSON.stringify(freshMetadata), "All encrypted attachment metadata must survive restart");
+  assert((await request(oldUrl, { binary: true })).equals(attachmentBytes), "An unexpired original download capability must survive restart");
+  assert((await request(freshUrl, { binary: true })).equals(attachmentBytes), "Attachment bytes must survive restart");
+  await request(doomedAttachment.url, { binary: true, expectedStatus: 404 });
   const persistedKey = await request("/api/accounts/api-key", { method: "POST", token, body: proof });
   assert(persistedKey.apiKey === apiKey.apiKey, "The personal API key must survive restart");
   const apiAfterRestart = await request("/api/sync", { token: apiSession.access_token });
   assert.equal(apiAfterRestart.profile.id, before.profile.id, "The original API bearer must survive restart");
-  assert.deepEqual(sortedCiphers(apiAfterRestart.ciphers), sortedCiphers(before.ciphers));
-  assert.deepEqual(await request(`/api/ciphers/${active.id}`, { token }), active);
-  assert.deepEqual(await request(`/api/ciphers/${trashed.id}`, { token }), trashed);
+  assert(JSON.stringify(sortedCiphers(apiAfterRestart.ciphers)) === JSON.stringify(sortedCiphers(before.ciphers)),
+    "Persisted API access must retrieve the same stored cipher and attachment metadata");
+  for (const item of [active, trashed, ...imported]) {
+    const actual = await request(`/api/ciphers/${item.id}`, { token });
+    assert(JSON.stringify(stableCipher(actual)) === JSON.stringify(stableCipher(item)),
+      "Existing active, trashed, and imported cipher data must survive restart");
+  }
   assert.deepEqual(await request(`/api/folders/${folder.id}`, { token }), folder);
   assert.deepEqual(await request(`/api/folders/${importedFolder.id}`, { token }), importedFolder);
-  for (const item of imported) assert.deepEqual(await request(`/api/ciphers/${item.id}`, { token }), item);
   assert.equal(await request("/api/accounts/revision-date", { token }), revision);
   assert.equal(after.profile.privateKey, account.keys.encryptedPrivateKey);
   assert.equal(after.profile.accountKeys.publicKeyEncryptionKeyPair.publicKey, account.keys.publicKey);
@@ -236,6 +275,8 @@ try {
   await request("/identity/connect/token", {
     method: "POST", form: apiGrantForm(clientId, apiKey.apiKey), expectedStatus: 400,
   });
+  await request(`/api/ciphers/${attachmentCipher.id}/attachment/${attachment.id}`, { method: "DELETE", token });
+  await request(freshUrl, { binary: true, expectedStatus: 404 });
   const clearedRevision = await request("/api/accounts/revision-date", { token });
   await stopServer(child);
   child = await startServer(port);
@@ -243,6 +284,9 @@ try {
   assert.equal(cleared.archivedDate ?? null, null, "Removing an archive annotation must survive a second restart");
   assert.equal(cleared.revisionDate, bulkArchived.revisionDate);
   assert.equal(await request("/api/accounts/revision-date", { token }), clearedRevision);
+  await request(`/api/ciphers/${attachmentCipher.id}/attachment/${attachment.id}`, { token, expectedStatus: 400 });
+  await request(freshUrl, { binary: true, expectedStatus: 404 });
+  await request(doomedAttachment.url, { binary: true, expectedStatus: 404 });
   const persistedRotation = await request("/api/accounts/api-key", { method: "POST", token, body: proof });
   assert(persistedRotation.apiKey === rotatedKey.apiKey, "The rotated API key must survive a second restart");
   await request("/identity/connect/token", {
@@ -257,7 +301,7 @@ try {
   assert.equal((await request("/api/sync", { token: apiSession.access_token })).profile.id, ownerId,
     "Previously issued API access must survive rotation and both restarts");
   await stopServer(child);
-  console.log("PASS: graceful restarts preserve SQLite vault data, archive annotations, personal API keys and rotation, password/API access sessions, and refresh authority.");
+  console.log("PASS: graceful restarts preserve vault data, encrypted attachment metadata and bytes, scoped download capabilities, deletion cleanup, API keys and rotation, and authentication sessions.");
 } finally {
   await Promise.allSettled([...children].map(record => stopServer(record, false)));
   rmSync(directory, { recursive: true, force: true });

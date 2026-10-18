@@ -15,7 +15,7 @@ restore and permanent deletion. A per-run trusted loopback TLS proxy meets the
 current CLI's HTTPS requirement without changing the client or disabling
 certificate validation.
 
-The expanded suite passes 90 CLI commands against both servers. It imports
+The prior 90-command baseline passes against both servers. It imports
 Bitwarden JSON containing login, secure-note, card, and identity items (types
 1–4), and Bitwarden CSV containing login and secure-note items (types 1–2).
 It verifies decrypted imported fields and folder assignments after sync and a
@@ -27,6 +27,9 @@ checks that the vault is locked, unlocks with the master password, and decrypts
 vault data. The flow repeats with a fresh client cache and a rotated key; the
 old secret is rejected. API login output alone does not establish vault unlock.
 Real-client blob, SSH-key, and other import variants still need their own fixtures.
+
+The attachment extension expands the suite to 118 CLI commands, all passing
+against the standalone host and official Vaultwarden 1.37.4.
 
 | API surface | Standalone behavior | Verification |
 | --- | --- | --- |
@@ -40,6 +43,10 @@ Real-client blob, SSH-key, and other import variants still need their own fixtur
 | Profile, revision date, sync | Personal account and opaque encrypted vault | CLI and HTTP |
 | Folder CRUD | Encrypted names, owner isolation, clear references on deletion | CLI, HTTP, storage tests |
 | Cipher CRUD | Opaque ciphertext and unknown JSON fields | CLI, HTTP, storage tests |
+| Personal v2 attachment reservation and multipart upload | Opaque encrypted metadata and bytes; declared/measured size checks | Core, real CLI on both servers, matching HTTP |
+| Legacy attachment upload, replacement, and delete aliases | Same personal write checks; fresh replacement IDs; transactional cleanup | Core, local/upstream HTTP and restart checks |
+| Attachment metadata and scoped file download | Personal read checks, authoritative metadata, bearerless short-lived capability | Real CLI on both servers and matching local/upstream HTTP |
+| Cipher `attachments2` updates | Associated encrypted filename/key updates preserve stored bytes | Core and local/upstream HTTP |
 | `POST /api/ciphers/import` | Personal encrypted batch import, folder-index mapping, fresh item IDs, owned-folder reuse | Real CLI JSON/CSV, HTTP, storage rollback tests |
 | Trash, restore, permanent-delete aliases | Owner-checked lifecycle | CLI and HTTP |
 | Bulk trash, restore, and permanent deletion, including admin-named aliases | Deduplicated IDs, personal ownership checks, atomic batch persistence | Core, HTTP comparison with upstream, storage rollback and restart tests |
@@ -55,10 +62,11 @@ Real-client blob, SSH-key, and other import variants still need their own fixtur
 | Provider conflict errors | `Storage::map_error` can preserve an HTTP 409 conflict | Core provider tests |
 
 The allocation-free core's models include login, secure note, card, identity,
-and SSH-key items, plus optional opaque blob data. Its 45 unit tests cover the
+and SSH-key items, plus optional opaque blob data. Its 56 unit tests cover the
 typed fields, bounded collections and import decoding, validation, ownership,
 lifecycle rules, folder mapping, the atomic import and bulk provider contracts,
-and API-key proof selection and authorization. A compile-fail doctest verifies
+API-key proof selection and authorization, and attachment lifecycle and provider
+rules. A compile-fail doctest verifies
 that `Secret` cannot be serialized through the general Serde interface.
 Real-client import evidence covers the types listed above; broader operations
 for those types and blob encryption need their own client fixtures. Keeping
@@ -71,14 +79,55 @@ desktop and mobile are not covered by the CLI result. Full organization,
 attachment, Send, notification and account-management compatibility remains on
 the [roadmap](../ROADMAP.md).
 
-The expanded HTTP regression suite passes all 52 tests against the rebuilt
-standalone server, with 17 Rust host tests covering storage and transport rules.
+The expanded local HTTP regression suite has passed all 61 tests. After the
+missing-download-token status correction, the final nine focused attachment
+checks also pass against the rebuilt adapter.
+All 22 Rust host tests pass and cover storage and transport rules.
 These establish wire preservation and authorization for the new shapes,
 aliases, and personal imports independently of the CLI evidence.
 They do not prove that a real client can decrypt a blob or use stored passkey
 credentials.
 User-key-ID migration is a one-time identifier backfill, not a key-rotation
 implementation.
+
+The attachment chunk follows the pinned
+[v2 and legacy handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L1127-L1496).
+Reservation accepts `key`, `fileName`, numeric or decimal-string `fileSize`, and
+optional `adminRequest`. It returns upload type 0 and a cipher response under
+`cipherResponse` or `cipherMiniResponse`. Direct upload is an authenticated
+multipart request with a `data` file part; the metadata reservation supplies its
+filename and key. Legacy upload instead requires those in the multipart request.
+Delete aliases return `{cipher: ...}`. Admin-named aliases do not bypass access
+checks. Missing, mismatched, and inaccessible API records produce 400 in the
+pinned helpers. The
+[required download token query](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/web.rs#L231-L240)
+produces 422 when absent, before the upstream handler runs; an invalid supplied
+capability or missing file produces 404.
+
+Reservation leaves revisions unchanged. Upload and deletion advance the account
+revision while preserving the cipher revision. Actual encrypted size within
+one MiB of the declared size is accepted and recorded; an out-of-range upload
+deletes its reservation and bytes. The local BLOB transaction and atomic legacy
+replacement are stronger than upstream's separate metadata/filesystem writes
+and delete-before-replacement sequence. This atomicity covers stored metadata,
+bytes, and revision changes; response/capability generation can still fail after
+commit, returning an error with the mutation retained. `attachments2` changes only the key and
+filename of matching attachments; missing entries are skipped and a foreign
+entry stops iteration. Attachment ciphertext validation and decryption remain
+client responsibilities.
+
+The [upstream download model](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/attachment.rs#L57-L76)
+returns encrypted `fileName`, `key`, decimal-string `size`, `sizeName`, and a URL.
+The local URL is a 60-second capability scoped to both IDs; its strict expiry
+differs from upstream's JWT decoder's 30-second leeway. The local 16-MiB request
+cap is below upstream's 525,000,000-byte multipart file limit and the core's
+550,502,400-byte declared-size ceiling. See [architecture](architecture.md) for
+these distinct transport and provider limits. The same nine portable attachment
+HTTP tests pass against Vaultwarden 1.37.4 and cover all eleven route patterns.
+All 118 real CLI commands pass against both servers.
+Attachment state, encrypted bytes, and cleanup survive two graceful restarts.
+Organization access, quotas, remote object storage,
+emergency access, and notification transports remain outside this personal proof.
 
 The personal API-key chunk follows the pinned
 [key-management handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1476-L1501).

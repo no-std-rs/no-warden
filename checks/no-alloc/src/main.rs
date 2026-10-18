@@ -9,7 +9,8 @@ use no_warden::{
     route::{Method, classify},
     service::ImportData,
     wire::{
-        ApiKeyResponse, CipherIdsRequest, CipherRequest, ClientCredentialsRequest, ImportRequest,
+        ApiKeyResponse, AttachmentRequest, AttachmentResponse, AttachmentUploadResponse,
+        CipherIdsRequest, CipherRequest, ClientCredentialsRequest, ImportRequest,
         PasswordOrOtpRequest, PreloginRequest, PreloginResponse,
     },
 };
@@ -76,6 +77,36 @@ pub extern "C" fn _start() -> ! {
         &mut encoded,
     ));
     black_box(encoded);
+    // This decoder lacks deserialize_any for the numeric-or-string size union.
+    // Hosts can construct the borrowed request; encoding and core rules remain no_alloc.
+    let attachment = AttachmentRequest {
+        key: "opaque-wrapped-key",
+        file_name: "opaque-filename",
+        file_size: 17,
+        admin_request: None,
+    };
+    let mut attachment_output = [0u8; 1024];
+    let _ = black_box(serde_json_core::to_slice(
+        &attachment,
+        &mut attachment_output,
+    ));
+    let response = AttachmentResponse {
+        id: "attachment",
+        url: Secret::new("scoped-download-url"),
+        file_name: "opaque-filename",
+        size: "17",
+        size_name: "17 B",
+        key: Some("opaque-wrapped-key"),
+    };
+    let _ = black_box(serde_json_core::to_slice(&response, &mut attachment_output));
+    let upload = AttachmentUploadResponse::direct(
+        "attachment",
+        Secret::new("relative-upload-url"),
+        0_u8,
+        false,
+    );
+    let _ = black_box(serde_json_core::to_slice(&upload, &mut attachment_output));
+    black_box(attachment_output);
     loop {
         core::hint::spin_loop();
     }

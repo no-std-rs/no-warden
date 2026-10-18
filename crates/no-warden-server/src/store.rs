@@ -17,6 +17,9 @@ use serde_json::{Value, json};
 pub struct Store {
     pub db: Connection,
     pub pending: Value,
+    pub download_base: String,
+    pub(crate) pending_attachment_data: Vec<u8>,
+    pub(crate) attachment_metadata_cache: Option<crate::attachments::Record>,
     owner: String,
     key_id: Option<String>,
     api_key_secret: Option<String>,
@@ -154,6 +157,9 @@ impl Store {
             CREATE INDEX IF NOT EXISTS items_owner ON items(owner,kind);
             CREATE TABLE IF NOT EXISTS cipher_archives(cipher_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE, owner TEXT NOT NULL REFERENCES accounts(id), archived_at TEXT, PRIMARY KEY(cipher_id,owner));
             CREATE TABLE IF NOT EXISTS api_keys(owner TEXT PRIMARY KEY REFERENCES accounts(id), secret TEXT NOT NULL, verifier TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS attachments(id TEXT PRIMARY KEY, cipher_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE, file_name TEXT NOT NULL, key TEXT, size INTEGER NOT NULL CHECK(size>=0), data BLOB);
+            CREATE INDEX IF NOT EXISTS attachments_cipher ON attachments(cipher_id);
+            CREATE TABLE IF NOT EXISTS attachment_downloads(token TEXT PRIMARY KEY, attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE, expires INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS sessions(access TEXT PRIMARY KEY, refresh TEXT UNIQUE NOT NULL, owner TEXT NOT NULL REFERENCES accounts(id), access_expires INTEGER NOT NULL, refresh_expires INTEGER NOT NULL);")?;
         // SQLite inherits the private database mode for new sidecars. Also
         // narrow sidecars left behind by an earlier permissive installation.
@@ -162,6 +168,9 @@ impl Store {
         Ok(Self {
             db,
             pending: Value::Null,
+            download_base: String::new(),
+            pending_attachment_data: Vec::new(),
+            attachment_metadata_cache: None,
             owner: String::new(),
             key_id: None,
             api_key_secret: None,
@@ -239,7 +248,13 @@ impl Store {
     }
 
     pub fn item(&self, owner: &str, id: &str, kind: &str) -> rusqlite::Result<Option<Value>> {
-        item(&self.db, owner, id, kind)
+        let mut document = item(&self.db, owner, id, kind)?;
+        if kind == "cipher"
+            && let Some(document) = &mut document
+        {
+            crate::attachments::enrich_cipher(&self.db, &self.download_base, document)?;
+        }
+        Ok(document)
     }
 
     pub fn items(&self, owner: &str, kind: &str) -> rusqlite::Result<Vec<Value>> {
@@ -248,9 +263,15 @@ impl Store {
              LEFT JOIN cipher_archives a ON a.cipher_id=i.id AND a.owner=i.owner
              WHERE i.owner=?1 AND i.kind=?2 ORDER BY i.rowid",
         )?;
-        statement
+        let mut documents = statement
             .query_map(params![owner, kind], stored_document)?
-            .collect()
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if kind == "cipher" {
+            for document in &mut documents {
+                crate::attachments::enrich_cipher(&self.db, &self.download_base, document)?;
+            }
+        }
+        Ok(documents)
     }
 
     fn metadata(&mut self, id: &str, kind: &str) -> rusqlite::Result<Option<ItemMetadata<'_>>> {
@@ -305,6 +326,10 @@ fn save_document(
     });
     doc["revisionDate"] = json!(revision);
     if kind == "cipher" {
+        crate::attachments::rewrap(db, id, &doc)?;
+        doc.as_object_mut()
+            .expect("validated object")
+            .remove("attachments2");
         doc["creationDate"] = existing
             .as_ref()
             .map(|v| v["creationDate"].clone())

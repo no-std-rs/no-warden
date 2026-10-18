@@ -5,7 +5,8 @@ allocation-free API and business-logic core and a standalone local-storage serve
 
 Full Bitwarden/Vaultwarden API parity is the delivery goal. The current verified
 slice covers real Bitwarden CLI personal-vault lifecycles, JSON/CSV imports,
-archive actions, and API-key login followed by password unlock. The remaining surface
+archive actions, API-key login followed by password unlock, and encrypted
+attachment round trips. The remaining surface
 is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden
 replacement. Client-side vault encryption stays with the client.
@@ -49,8 +50,9 @@ cargo build --manifest-path checks/no-alloc/Cargo.toml \
 The library lives in [`crates/no-warden`](crates/no-warden). Its `VaultService`
 accepts a caller-provided `Storage` implementation; borrowed request models and
 bounded collections require no allocator. Opt-in `ImportStorage`,
-`CipherBulkStorage`, and `IdentityStorage` providers add atomic batch operations
-and credential services without adding an allocator. See [architecture](docs/architecture.md)
+`CipherBulkStorage`, `IdentityStorage`, and `AttachmentStorage` providers add
+batch operations, credential services, and attachment authorization/transitions
+without adding an allocator. See [architecture](docs/architecture.md)
 and [CI and review](docs/ci.md).
 
 Use the core from another application:
@@ -63,8 +65,10 @@ no-warden = { git = "https://github.com/no-std-rs/no-warden" }
 Supported personal-vault operations include registration, PBKDF2/Argon2 KDF
 discovery, password and API-key authentication, key retrieval/rotation, password
 refresh rotation, profile and sync, folders, encrypted ciphers, JSON/CSV import,
-bulk trash/restore/deletion, and archive/unarchive. Organizations, sharing, attachments,
-Sends, notifications and the remaining account APIs are tracked in the roadmap.
+bulk trash/restore/deletion, archive/unarchive, and personal attachments with
+legacy/v2 uploads, scoped downloads, metadata updates and deletion cleanup.
+Organizations, sharing, remaining attachment variants, Sends, notifications and
+the remaining account APIs are tracked in the roadmap.
 The local conformance adapter needs further hardening before production use.
 See the [verified compatibility matrix](docs/compatibility.md) for exact scope.
 

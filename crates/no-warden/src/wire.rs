@@ -11,6 +11,158 @@ pub const MAX_PASSWORD_HISTORY: usize = 32;
 pub const MAX_FIDO2_CREDENTIALS: usize = 16;
 pub const MAX_COLLECTION_IDS: usize = 64;
 
+/// V2 reservation metadata. Encrypted filename/key strings are kept opaque.
+///
+/// `fileSize` accepts a signed JSON integer or an integer string without allocation.
+/// Deserializing that union requires a decoder with `deserialize_any` support;
+/// `serde-json-core` 0.6 consumers can construct this request after typed decoding.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentRequest<'a> {
+    pub key: &'a str,
+    pub file_name: &'a str,
+    #[serde(deserialize_with = "attachment_size")]
+    pub file_size: i64,
+    pub admin_request: Option<bool>,
+}
+
+impl core::fmt::Debug for AttachmentRequest<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("AttachmentRequest")
+            .field("file_size", &self.file_size)
+            .field("admin_request", &self.admin_request)
+            .finish_non_exhaustive()
+    }
+}
+
+fn attachment_size<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+    struct Size;
+    impl serde::de::Visitor<'_> for Size {
+        type Value = i64;
+        fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            formatter.write_str("a signed integer or an integer string")
+        }
+        fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<i64, E> {
+            Ok(value)
+        }
+        fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<i64, E> {
+            i64::try_from(value).map_err(E::custom)
+        }
+        fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<i64, E> {
+            value.parse::<i64>().map_err(E::custom)
+        }
+    }
+    deserializer.deserialize_any(Size)
+}
+
+/// Metadata extracted by a host multipart decoder. `file_size` is measured from the
+/// actual encrypted bytes, not copied from an untrusted multipart declaration.
+#[derive(Clone, Copy)]
+pub struct LegacyAttachmentRequest<'a> {
+    pub file_name: Option<&'a str>,
+    pub key: Option<&'a str>,
+    pub file_size: u64,
+}
+
+impl core::fmt::Debug for LegacyAttachmentRequest<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("LegacyAttachmentRequest")
+            .field("file_size", &self.file_size)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Explicit response boundary for a scoped download URL and encrypted metadata.
+pub struct AttachmentResponse<'a> {
+    pub id: &'a str,
+    pub url: Secret<'a>,
+    pub file_name: &'a str,
+    pub size: &'a str,
+    pub size_name: &'a str,
+    pub key: Option<&'a str>,
+}
+
+impl core::fmt::Debug for AttachmentResponse<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("AttachmentResponse")
+            .field("id", &self.id)
+            .field("size", &self.size)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Serialize for AttachmentResponse<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut response = serializer.serialize_struct("AttachmentResponse", 7)?;
+        response.serialize_field("id", self.id)?;
+        response.serialize_field("url", self.url.expose_secret())?;
+        response.serialize_field("fileName", self.file_name)?;
+        response.serialize_field("size", self.size)?;
+        response.serialize_field("sizeName", self.size_name)?;
+        response.serialize_field("key", &self.key)?;
+        response.serialize_field("object", "attachment")?;
+        response.end()
+    }
+}
+
+/// V2 direct-upload response with the correct regular/admin cipher response key.
+pub struct AttachmentUploadResponse<'a, C: Serialize> {
+    attachment_id: &'a str,
+    url: Secret<'a>,
+    cipher: C,
+    admin_request: bool,
+}
+
+impl<'a, C: Serialize> AttachmentUploadResponse<'a, C> {
+    pub const fn direct(
+        attachment_id: &'a str,
+        url: Secret<'a>,
+        cipher: C,
+        admin_request: bool,
+    ) -> Self {
+        Self {
+            attachment_id,
+            url,
+            cipher,
+            admin_request,
+        }
+    }
+}
+
+impl<C: Serialize> core::fmt::Debug for AttachmentUploadResponse<'_, C> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("AttachmentUploadResponse")
+            .field("attachment_id", &self.attachment_id)
+            .field("admin_request", &self.admin_request)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<C: Serialize> Serialize for AttachmentUploadResponse<'_, C> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut response = serializer.serialize_struct("AttachmentUploadResponse", 5)?;
+        response.serialize_field("object", "attachment-fileUpload")?;
+        response.serialize_field("attachmentId", self.attachment_id)?;
+        response.serialize_field("url", self.url.expose_secret())?;
+        response.serialize_field("fileUploadType", &0_u8)?;
+        response.serialize_field(
+            if self.admin_request {
+                "cipherMiniResponse"
+            } else {
+                "cipherResponse"
+            },
+            &self.cipher,
+        )?;
+        response.end()
+    }
+}
+
 /// Exactly one proof must be supplied. The password field is the client's server-
 /// authorization hash; `otp` is a protected-action proof, not an account TOTP code.
 #[derive(Debug, Deserialize)]
@@ -365,6 +517,97 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
 mod tests {
     use super::*;
     use std::string::ToString;
+    #[test]
+    fn attachment_wire_sizes_accept_integers_and_integer_strings_without_losing_opaque_metadata() {
+        for value in [
+            serde_json::json!(17),
+            serde_json::json!("17"),
+            serde_json::json!("+17"),
+        ] {
+            let document = serde_json::json!({"key":"opaque wrapped key","fileName":"opaque encrypted filename","fileSize":value,"adminRequest":true,"lastKnownRevisionDate":"ignored source revision"});
+            let request = AttachmentRequest::deserialize(&document).unwrap();
+            assert_eq!(request.file_size, 17);
+            assert_eq!(request.key, "opaque wrapped key");
+            assert_eq!(request.file_name, "opaque encrypted filename");
+            assert_eq!(request.admin_request, Some(true));
+            assert!(!std::format!("{request:?}").contains("opaque"));
+        }
+        for value in [
+            serde_json::json!(1.0),
+            serde_json::json!(true),
+            serde_json::json!(null),
+            serde_json::json!("1.0"),
+            serde_json::json!(" 17"),
+            serde_json::json!(u64::MAX),
+        ] {
+            let document = serde_json::json!({"key":"key","fileName":"name","fileSize":value});
+            assert!(AttachmentRequest::deserialize(&document).is_err());
+        }
+        let document = serde_json::json!({"key":"","fileName":"","fileSize":"-1"});
+        assert_eq!(
+            AttachmentRequest::deserialize(&document).unwrap().file_size,
+            -1
+        );
+    }
+
+    #[test]
+    fn attachment_response_serialization_is_explicit_and_debug_redacts_urls_and_keys() {
+        let response = AttachmentResponse {
+            id: "attachment",
+            url: Secret::new(
+                "https://host/attachments/cipher/attachment?token=download-capability",
+            ),
+            file_name: "encrypted-name",
+            size: "17",
+            size_name: "17 B",
+            key: Some("wrapped-key"),
+        };
+        let debug = std::format!("{response:?}");
+        assert!(!debug.contains("download-capability"));
+        assert!(!debug.contains("wrapped-key"));
+        let output = serde_json::to_value(response).unwrap();
+        assert_eq!(output["object"], "attachment");
+        assert_eq!(output["size"], "17");
+        assert_eq!(output["fileName"], "encrypted-name");
+        assert_eq!(output["key"], "wrapped-key");
+        assert!(
+            output["url"]
+                .as_str()
+                .unwrap()
+                .ends_with("token=download-capability")
+        );
+        for admin in [false, true] {
+            let response = AttachmentUploadResponse::direct(
+                "attachment",
+                Secret::new("presigned-upload-capability"),
+                serde_json::json!({"id":"cipher"}),
+                admin,
+            );
+            assert!(!std::format!("{response:?}").contains("presigned-upload-capability"));
+            let output = serde_json::to_value(response).unwrap();
+            assert_eq!(output["fileUploadType"], 0);
+            assert_eq!(output["object"], "attachment-fileUpload");
+            assert_eq!(output["attachmentId"], "attachment");
+            assert!(
+                output
+                    .get(if admin {
+                        "cipherMiniResponse"
+                    } else {
+                        "cipherResponse"
+                    })
+                    .is_some()
+            );
+            assert!(
+                output
+                    .get(if admin {
+                        "cipherResponse"
+                    } else {
+                        "cipherMiniResponse"
+                    })
+                    .is_none()
+            );
+        }
+    }
     #[test]
     fn identity_requests_borrow_raw_secrets_and_explicit_responses_reveal_only_their_contract() {
         let proof: PasswordOrOtpRequest<'_> =

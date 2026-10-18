@@ -1,6 +1,7 @@
 //! Local conformance host. Production deployment requires the work in ROADMAP.md.
 #![forbid(unsafe_code)]
 
+mod attachments;
 mod protocol;
 mod store;
 
@@ -107,8 +108,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let base = std::env::var("NO_WARDEN_URL").unwrap_or_else(|_| format!("http://{bind}"));
     let mut signing_key = [0u8; 32];
     OsRng.fill_bytes(&mut signing_key);
+    let mut store = Store::open(&database)?;
+    store.download_base = base.clone();
     let app = App {
-        store: Arc::new(Mutex::new(Store::open(&database)?)),
+        store: Arc::new(Mutex::new(store)),
         base,
         signing_key,
     };
@@ -144,10 +147,23 @@ async fn dispatch(
     if route == Route::Config {
         return Ok(json_response(protocol::config(&app.base)));
     }
+    let upload = if matches!(
+        route,
+        Route::AttachmentUpload(..)
+            | Route::AttachmentLegacy(_)
+            | Route::AttachmentLegacyReplace(..)
+    ) {
+        Some(attachments::parse_upload(&headers, body.clone()).await?)
+    } else {
+        None
+    };
     let mut store = app
         .store
         .lock()
         .map_err(|_| Failure(StatusCode::INTERNAL_SERVER_ERROR, "Storage unavailable"))?;
+    if let Route::AttachmentDownload(cipher_id, attachment_id) = route {
+        return attachments::download(&mut store, cipher_id, attachment_id, uri.query());
+    }
     if route == Route::Prelogin {
         let input: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
         let email = input["email"]
@@ -275,6 +291,74 @@ async fn dispatch(
     let owner = owner.ok_or_else(unauthorized)?;
     let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
     match route {
+        Route::AttachmentReserve(cipher_id) => {
+            let document: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
+            let request = no_warden::wire::AttachmentRequest::deserialize(&document)
+                .map_err(|_| invalid())?;
+            let id = attachments::new_id();
+            VaultService::new(&mut *store).reserve_attachment(&owner, cipher_id, &id, &request)?;
+            let cipher = store
+                .item(&owner, cipher_id, "cipher")?
+                .ok_or_else(missing)?;
+            let url = format!("/ciphers/{cipher_id}/attachment/{id}");
+            let response = no_warden::wire::AttachmentUploadResponse::direct(
+                &id,
+                Secret::new(&url),
+                cipher,
+                request.admin_request.unwrap_or(false),
+            );
+            Ok(Json(response).into_response())
+        }
+        Route::AttachmentGet(cipher_id, attachment_id) => {
+            VaultService::new(&mut *store).authorize_attachment_read(
+                &owner,
+                cipher_id,
+                attachment_id,
+            )?;
+            let record = attachments::load(&store.db, attachment_id)?.ok_or_else(missing)?;
+            Ok(json_response(attachments::wire(
+                &store.db, &app.base, &record,
+            )?))
+        }
+        Route::AttachmentUpload(cipher_id, attachment_id) => {
+            let upload = upload.ok_or_else(invalid)?;
+            let size = upload.data.len() as u64;
+            store.pending_attachment_data = upload.data;
+            VaultService::new(&mut *store).upload_attachment(
+                &owner,
+                cipher_id,
+                attachment_id,
+                size,
+            )?;
+            Ok(StatusCode::OK.into_response())
+        }
+        Route::AttachmentLegacy(cipher_id) | Route::AttachmentLegacyReplace(cipher_id, _) => {
+            let upload = upload.ok_or_else(invalid)?;
+            let request = no_warden::wire::LegacyAttachmentRequest {
+                file_name: upload.file_name.as_deref(),
+                key: upload.key.as_deref(),
+                file_size: upload.data.len() as u64,
+            };
+            let id = attachments::new_id();
+            store.pending_attachment_data = upload.data;
+            let mut service = VaultService::new(&mut *store);
+            if let Route::AttachmentLegacyReplace(_, old_id) = route {
+                service.replace_legacy_attachment(&owner, cipher_id, old_id, &id, &request)?;
+            } else {
+                service.create_legacy_attachment(&owner, cipher_id, &id, &request)?;
+            }
+            Ok(json_response(
+                store
+                    .item(&owner, cipher_id, "cipher")?
+                    .ok_or_else(missing)?,
+            ))
+        }
+        Route::AttachmentDelete(cipher_id, attachment_id) => {
+            VaultService::new(&mut *store).delete_attachment(&owner, cipher_id, attachment_id)?;
+            Ok(json_response(
+                json!({"cipher":store.item(&owner, cipher_id, "cipher")?.ok_or_else(missing)?}),
+            ))
+        }
         Route::AccountApiKey => {
             let document: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
             let request = PasswordOrOtpRequest::deserialize(&document).map_err(|_| invalid())?;
@@ -430,6 +514,7 @@ async fn dispatch(
                 &document
             };
             let request = CipherRequest::deserialize(payload).map_err(|_| invalid())?;
+            attachments::validate_rewrap(payload)?;
             let id = match route {
                 Route::CipherUpdate(id) => id.to_owned(),
                 _ => uuid::Uuid::new_v4().to_string(),
@@ -796,7 +881,8 @@ mod tests {
             let path = record["path"]
                 .as_str()
                 .unwrap()
-                .replace("{id}", "inventory-id");
+                .replace("{id}", "inventory-id")
+                .replace("{attachment_id}", "inventory-attachment");
             let actual = route::classify(method, &path);
             assert_eq!(
                 actual.is_some(),
