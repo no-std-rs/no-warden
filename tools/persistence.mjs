@@ -83,7 +83,7 @@ async function stopServer(record, strict = true) {
   }
 }
 
-async function request(path, { method = "GET", token, body, form } = {}) {
+async function request(path, { method = "GET", token, body, form, expectedStatus } = {}) {
   const headers = {};
   if (token) headers.authorization = `Bearer ${token}`;
   if (body !== undefined) headers["content-type"] = "application/json";
@@ -93,8 +93,16 @@ async function request(path, { method = "GET", token, body, form } = {}) {
     body: form ? new URLSearchParams(form) : body !== undefined ? JSON.stringify(body) : undefined,
   });
   const text = await response.text();
-  assert(response.ok, `${method} ${path}: HTTP ${response.status}`);
+  if (expectedStatus !== undefined) assert.equal(response.status, expectedStatus, `${method} ${path}: unexpected HTTP status`);
+  else assert(response.ok, `${method} ${path}: HTTP ${response.status}`);
   return text ? JSON.parse(text) : null;
+}
+
+function apiGrantForm(clientId, clientSecret) {
+  return {
+    grant_type: "client_credentials", scope: "api", client_id: clientId, client_secret: clientSecret,
+    deviceIdentifier: randomUUID(), deviceName: "API-key restart fixture", deviceType: "8",
+  };
 }
 
 try {
@@ -168,6 +176,15 @@ try {
   await request("/api/ciphers/unarchive", { method: "PUT", token, body: { ids: [bulkUnarchived.id] } });
   const userKeyId = randomBytes(32).toString("base64");
   await request("/api/accounts/key-management/user-key-id", { method: "POST", token, body: { userKeyId } });
+  const proof = { masterPasswordHash: account.masterPasswordHash };
+  const apiKey = await request("/api/accounts/api-key", { method: "POST", token, body: proof });
+  assert(typeof apiKey.apiKey === "string" && apiKey.apiKey.length === 30, "Restart fixture must create an API key");
+  const ownerId = (await request("/api/accounts/profile", { token })).id;
+  const clientId = `user.${ownerId}`;
+  const apiSession = await request("/identity/connect/token", {
+    method: "POST", form: apiGrantForm(clientId, apiKey.apiKey),
+  });
+  assert.equal(Object.hasOwn(apiSession, "refresh_token"), false);
   const before = await request("/api/sync", { token });
   const revision = await request("/api/accounts/revision-date", { token });
   assert.equal(before.profile.name, account.name);
@@ -190,6 +207,11 @@ try {
   assert.deepEqual(after.folders, before.folders);
   const sortedCiphers = values => [...values].sort((a, b) => a.id.localeCompare(b.id));
   assert.deepEqual(sortedCiphers(after.ciphers), sortedCiphers(before.ciphers));
+  const persistedKey = await request("/api/accounts/api-key", { method: "POST", token, body: proof });
+  assert(persistedKey.apiKey === apiKey.apiKey, "The personal API key must survive restart");
+  const apiAfterRestart = await request("/api/sync", { token: apiSession.access_token });
+  assert.equal(apiAfterRestart.profile.id, before.profile.id, "The original API bearer must survive restart");
+  assert.deepEqual(sortedCiphers(apiAfterRestart.ciphers), sortedCiphers(before.ciphers));
   assert.deepEqual(await request(`/api/ciphers/${active.id}`, { token }), active);
   assert.deepEqual(await request(`/api/ciphers/${trashed.id}`, { token }), trashed);
   assert.deepEqual(await request(`/api/folders/${folder.id}`, { token }), folder);
@@ -209,6 +231,11 @@ try {
   const unarchived = await request(`/api/ciphers/${bulkArchived.id}/unarchive`, { method: "PUT", token });
   assert.equal(unarchived.archivedDate ?? null, null);
   assert.equal(unarchived.revisionDate, bulkArchived.revisionDate);
+  const rotatedKey = await request("/api/accounts/rotate-api-key", { method: "POST", token, body: proof });
+  assert(rotatedKey.apiKey !== apiKey.apiKey, "Restart fixture must rotate the personal API key");
+  await request("/identity/connect/token", {
+    method: "POST", form: apiGrantForm(clientId, apiKey.apiKey), expectedStatus: 400,
+  });
   const clearedRevision = await request("/api/accounts/revision-date", { token });
   await stopServer(child);
   child = await startServer(port);
@@ -216,8 +243,21 @@ try {
   assert.equal(cleared.archivedDate ?? null, null, "Removing an archive annotation must survive a second restart");
   assert.equal(cleared.revisionDate, bulkArchived.revisionDate);
   assert.equal(await request("/api/accounts/revision-date", { token }), clearedRevision);
+  const persistedRotation = await request("/api/accounts/api-key", { method: "POST", token, body: proof });
+  assert(persistedRotation.apiKey === rotatedKey.apiKey, "The rotated API key must survive a second restart");
+  await request("/identity/connect/token", {
+    method: "POST", form: apiGrantForm(clientId, apiKey.apiKey), expectedStatus: 400,
+  });
+  const newApiSession = await request("/identity/connect/token", {
+    method: "POST", form: apiGrantForm(clientId, rotatedKey.apiKey),
+  });
+  assert.equal(Object.hasOwn(newApiSession, "refresh_token"), false);
+  assert(newApiSession.Key === account.key, "The rotated API key must retain password-unlock metadata after restart");
+  assert.equal((await request("/api/sync", { token: newApiSession.access_token })).profile.id, ownerId);
+  assert.equal((await request("/api/sync", { token: apiSession.access_token })).profile.id, ownerId,
+    "Previously issued API access must survive rotation and both restarts");
   await stopServer(child);
-  console.log("PASS: graceful restarts preserve SQLite keys, owner data, imported folder links, bulk trash/restore/deletion, archive annotations and their removal, revisions, and authentication sessions.");
+  console.log("PASS: graceful restarts preserve SQLite vault data, archive annotations, personal API keys and rotation, password/API access sessions, and refresh authority.");
 } finally {
   await Promise.allSettled([...children].map(record => stopServer(record, false)));
   rmSync(directory, { recursive: true, force: true });

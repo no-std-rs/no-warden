@@ -131,6 +131,43 @@ SHA-256 digests and checks expiry; refresh tokens rotate atomically. The
 server stores an Argon2 verifier of the client-derived authentication hash,
 and never receives the master password or decrypted vault contents.
 
+Personal API-key management has an opt-in `IdentityStorage` provider contract.
+`PasswordOrOtpRequest` borrows a master-password authentication hash or a
+protected-action OTP; exactly one proof is required. `VaultService::get_api_key`
+and `rotate_api_key` select a typed `ReauthenticationProof` and ask the provider
+to verify it before retrieving, creating, or rotating a key. The hash is the same
+client-derived server authorization value used by password login. The OTP branch
+delegates protected-action verification and consumption to the provider; it does
+not interpret the value as a two-factor TOTP. The standalone host supports the
+password proof and rejects the unsupported OTP branch.
+
+The key provider supplies secure randomness, confidential recoverable storage,
+and account revisions. Repeated retrieval must return the existing secret and
+revision; first creation and rotation commit a new key and revision together.
+The borrowed `Secret` wrapper has redacted `Debug` output and no `Display`,
+`Serialize`, `Clone`, or `Copy` implementation. `ApiKeyResponse` serializes the
+key explicitly as the intentional disclosure boundary. The embedding application
+owns and clears input buffers; the borrowed wrapper cannot erase them. The host
+keeps the recoverable key in its private SQLite database and an Argon2 verifier
+for credential checks. It excludes that secret from profile and sync data.
+The core performs no RNG, hashing, database access, or token signing.
+
+The borrowed `ClientCredentialsRequest` models the personal `user.<account-id>`
+identity, secret, exact `api` scope, and required device fields. The provider
+authenticates the secret before `VaultService::authenticate_api_key` returns an
+`AuthorizedApiKeyGrant`. A transport then issues its two-hour access token. This
+grant has no refresh token or offline-access scope: renewal repeats
+`client_credentials`.
+Rotating an API key changes future credential checks while existing access
+tokens and password-grant refresh tokens retain their original authority.
+
+API-key authentication does not decrypt the vault. The shipped CLI uses its
+TypeScript API-key login strategy and then, for password accounts, a separate
+unlock command that initializes SDK cryptography with the account's encrypted
+keys and KDF metadata. Organization credentials, passwordless/KeyConnector
+accounts, login rate controls, and device notification policies require further
+provider and transport work.
+
 An embedded consumer can provide fixed-capacity storage and serialize responses
 into a caller-owned buffer. Feature unification in an embedding application must
 not accidentally enable `serde`'s `std` or `alloc` features for the core target.

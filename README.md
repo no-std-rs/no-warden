@@ -4,7 +4,8 @@ A reusable Rust foundation for Bitwarden-compatible services, with a `no_std`,
 allocation-free API and business-logic core and a standalone local-storage server.
 
 Full Bitwarden/Vaultwarden API parity is the delivery goal. The current verified
-slice is a real Bitwarden CLI personal-vault round trip; the remaining surface
+slice covers real Bitwarden CLI personal-vault lifecycles, JSON/CSV imports,
+archive actions, and API-key login followed by password unlock. The remaining surface
 is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden
 replacement. Client-side vault encryption stays with the client.
@@ -47,7 +48,9 @@ cargo build --manifest-path checks/no-alloc/Cargo.toml \
 
 The library lives in [`crates/no-warden`](crates/no-warden). Its `VaultService`
 accepts a caller-provided `Storage` implementation; borrowed request models and
-bounded collections require no allocator. See [architecture](docs/architecture.md)
+bounded collections require no allocator. Opt-in `ImportStorage`,
+`CipherBulkStorage`, and `IdentityStorage` providers add atomic batch operations
+and credential services without adding an allocator. See [architecture](docs/architecture.md)
 and [CI and review](docs/ci.md).
 
 Use the core from another application:
@@ -58,8 +61,9 @@ no-warden = { git = "https://github.com/no-std-rs/no-warden" }
 ```
 
 Supported personal-vault operations include registration, PBKDF2/Argon2 KDF
-discovery, password authentication, refresh rotation, profile and sync, folders,
-encrypted ciphers, trash and restore. Organizations, sharing, attachments,
+discovery, password and API-key authentication, key retrieval/rotation, password
+refresh rotation, profile and sync, folders, encrypted ciphers, JSON/CSV import,
+bulk trash/restore/deletion, and archive/unarchive. Organizations, sharing, attachments,
 Sends, notifications and the remaining account APIs are tracked in the roadmap.
 The local conformance adapter needs further hardening before production use.
 See the [verified compatibility matrix](docs/compatibility.md) for exact scope.

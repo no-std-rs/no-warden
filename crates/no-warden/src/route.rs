@@ -27,6 +27,8 @@ pub enum Route<'a> {
     Config,
     Prelogin,
     Register,
+    AccountApiKey,
+    AccountRotateApiKey,
     Profile,
     UserKeyId,
     RevisionDate,
@@ -80,6 +82,8 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
             | "/identity/accounts/prelogin/password",
         ) => Some(Prelogin),
         (Post, "/api/accounts/register") => Some(Register),
+        (Post, "/api/accounts/api-key") => Some(AccountApiKey),
+        (Post, "/api/accounts/rotate-api-key") => Some(AccountRotateApiKey),
         (Get, "/api/accounts/profile") => Some(Profile),
         (Post, "/api/accounts/key-management/user-key-id") => Some(UserKeyId),
         (Get, "/api/accounts/revision-date") => Some(RevisionDate),
@@ -166,6 +170,19 @@ fn valid_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn api_key_management_is_authenticated_and_post_only() {
+        for (path, expected) in [
+            ("/api/accounts/api-key", Route::AccountApiKey),
+            ("/api/accounts/rotate-api-key", Route::AccountRotateApiKey),
+        ] {
+            assert_eq!(classify(Method::Post, path), Some(expected));
+            assert!(expected.requires_authentication());
+            for method in [Method::Get, Method::Put, Method::Delete, Method::Options] {
+                assert_eq!(classify(method, path), None);
+            }
+        }
+    }
     #[test]
     fn selected_lifecycle_and_archive_routes_require_authentication_without_admin_bypass() {
         use Method::*;

@@ -75,8 +75,18 @@ client's backslash normalization and automatic ancestor-folder creation.
 All 51 lifecycle and import commands remain intact. Another 15 commands archive
 an imported login, verify its absence from the active vault, discard the client
 cache, decrypt its archived password and notes after login, and restore it from
-the archive. The complete suite now executes 66 official CLI commands. The CLI
+the archive. This baseline executes 66 official CLI commands. The CLI
 uses bulk archive and unarchive API requests even for this single-item workflow.
+
+The API-key extension preserves those 66 commands and adds 24 more. It obtains a
+personal API key through an ordinary password bearer and master-password-hash
+reauthentication, then supplies the client ID and secret only through the CLI
+subprocess environment. It checks wrong-secret rejection, API login's locked
+state, explicit password unlock, sync and decryption, and repeats the workflow
+after discarding the client cache. Finally it rotates the key over HTTP, checks
+that the CLI rejects the old secret, and unlocks and decrypts with the new key.
+The complete suite executes 90 real CLI commands. API login output alone is
+never treated as proof that the vault unlocked.
 
 The personal-import HTTP checks follow the pinned relationship semantics:
 existing owned folder IDs are reused, foreign or unknown IDs create fresh owned
@@ -102,13 +112,26 @@ This is a local guarantee: upstream iterates a deduplicated, unordered set and
 can retain earlier writes when a later selection fails. These tests do not
 assert upstream rollback or which selected item would be processed first.
 
+Personal API-key HTTP checks cover lazy key creation, stable retrieval, key
+rotation, password reauthentication and its PascalCase alias, exact `api` scope,
+credential ownership, required device fields, and source-supported form aliases.
+Present blank device values and nonnumeric device types follow upstream's
+permissive parsing. API tokens advertise two-hour access and omit refresh tokens;
+clients authenticate again with the API key when needed. Rotation must preserve
+already issued API/password access and password refresh authority while blocking
+new logins with the replaced secret. Profile and sync must never expose that
+secret. Valid protected-email OTP and disabled-account administration are not
+exercised by these password-account fixtures.
+
 The persistence test starts its own standalone server three times on a free loopback
 port, using one temporary SQLite database. It verifies graceful shutdown,
 encrypted account and owner data, folders, active and trashed ciphers, revisions,
 and authentication sessions across restart. It also imports encrypted login and
 secure-note fixtures and verifies their exact stored content and folder links
 after restart. Bulk trash, restore, permanent deletion, archive annotations, and
-removal of those annotations must survive restarts too. Build `no-warden-server` first, or
+removal of those annotations must survive restarts too. The personal API key,
+its replacement after rotation, and previously issued API bearer sessions must
+survive both restarts; the replaced key must remain rejected. Build `no-warden-server` first, or
 set `NO_WARDEN_BIN` to its binary path. The test stops its child processes and
 removes the temporary database on success or failure.
 
@@ -143,6 +166,14 @@ remain outside this test fixture. Run the comparisons in separate disposable
 server processes: their test logins share the loopback IP's upstream login-rate
 limit. No harness command retries authentication.
 
+The four portable API-key groups can be selected individually using these test
+name prefixes: `personal API-key management`, `personal API-key credentials`,
+`personal API-key device`, and `personal API-key rotation`. Each group performs
+fewer than ten identity requests, including fixture password logins. Start a
+fresh disposable reference process for each group, preserving the database if
+desired, and another fresh process before the complete CLI comparison. This
+keeps upstream's default login rate-limit policy intact.
+
 The initial compatibility baseline passed on 2026-10-18: the same 37 official
 CLI `2026.10.0` commands passed against both no-warden and upstream Vaultwarden
 `1.37.4`. The upstream binary came from the official
@@ -165,6 +196,14 @@ The identical portable HTTP groups passed all 10 tests against upstream, coverin
 the 12 lifecycle route patterns. The complete standalone HTTP suite passed all
 38 tests, and its bulk changes and archive annotation removal survived two
 graceful restarts.
+
+The personal API-key follow-up passed on 2026-10-18: all 90 official CLI commands
+passed against both no-warden and that actual Vaultwarden `1.37.4` binary,
+including password unlock, fresh-cache decryption, and rotation. The four
+portable API-key HTTP groups passed all 14 tests upstream in isolated processes
+with unchanged rate-limit settings. The full standalone HTTP suite passed all
+52 tests, and keys, rotation, and API bearer sessions survived both graceful
+restarts.
 
 `seed-account.mjs` can also register a single explicit test account. Supply
 `BW_E2E_EMAIL`, `BW_E2E_PASSWORD`, and optionally `BW_E2E_SERVER` in the environment.
