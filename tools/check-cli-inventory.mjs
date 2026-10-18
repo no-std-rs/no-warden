@@ -116,6 +116,8 @@ export function validateCliInventory(inventory, evidence) {
   for (const row of inventory.cliLocalServeRoutes) {
     assert.equal(row.trafficRole, "cli_local_server");
     sourceExists(row.source);
+    assert.equal(row.template, row.construction?.template, "Local serve template must match discovered syntax");
+    assert.equal(row.path, row.construction?.template.split("?")[0], "Local serve path must match discovered syntax");
   }
   const commands = inventory.commands.map(command => {
     sourceExists(command.source);

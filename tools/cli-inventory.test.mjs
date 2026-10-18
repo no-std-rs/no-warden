@@ -39,6 +39,14 @@ test("rejects an invented command at an existing source location", () => {
   assert.throws(() => validateCliInventory(data, evidence), /Command declaration differs/);
 });
 
+for (const field of ["path", "template"]) {
+  test(`rejects an invented local serve ${field} with an unchanged construction`, () => {
+    const data = structuredClone(inventory);
+    data.cliLocalServeRoutes[0][field] = "/invented";
+    assert.throws(() => validateCliInventory(data, evidence), /Local serve/);
+  });
+}
+
 for (const [field, value] of [["method", "DELETE"], ["path", "/api/invented"], ["trafficRole", "third_party_service"]]) {
   test(`rejects a changed ${field} with refreshed counts but an unchanged source receipt`, () => {
     const data = structuredClone(inventory);
