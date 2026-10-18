@@ -6,7 +6,7 @@ consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
 The core has 18 unit tests and the SQLite host has seven storage tests on Unix. The
-expanded HTTP suite passes 19 tests against the rebuilt host, and restart
+expanded HTTP suite passes 20 tests against the rebuilt host, and restart
 persistence checks pass. The core's minimum Rust version is 1.85; the standalone
 server is also checked with its minimum version, 1.89. Bare-metal compilation
 and the allocator-free consumer link pass independently of the host suites.

@@ -75,7 +75,7 @@ CLI `2026.10.0` commands passed against both no-warden and upstream Vaultwarden
 `ghcr.io/dani-garcia/vaultwarden` image, pinned by digest
 `sha256:efb3cde962015fcc036b2ea625242248611943b27212ebf4392841fb30fad055`
 (source revision `7c188967e7a467b19b2757bc3326f9cf3ccae327`). The standalone
-HTTP suite also passed all 19 tests, and the standalone restart durability check
+HTTP suite also passed all 20 tests, and the standalone restart durability check
 passed. These checks establish the tested personal
 vault lifecycle; they do not establish compatibility with every Bitwarden API.
 

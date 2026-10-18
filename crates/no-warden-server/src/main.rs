@@ -30,6 +30,10 @@ use std::{
 };
 use store::Store;
 
+// Core field limits apply to decoded bytes. JSON can expand one byte to six
+// bytes, and a request can contain several encrypted fields and metadata.
+const MAX_REQUEST_BYTES: usize = 16 * no_warden::validation::MAX_ENCRYPTED_FIELD_BYTES;
+
 #[derive(Clone)]
 struct App {
     store: Arc<Mutex<Store>>,
@@ -104,7 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let router = Router::new()
         .fallback(dispatch)
-        .layer(DefaultBodyLimit::max(1024 * 1024))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .with_state(app);
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     eprintln!("no-warden conformance server listening on {bind}; database {database}");

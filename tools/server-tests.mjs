@@ -203,6 +203,30 @@ await test("standalone adapter enforces authentication, isolation, and JSON pres
     assert.equal(sync.ciphers.find(candidate => candidate.id === item.id).data, changedBlob);
   });
 
+  await t.test("decoded field boundaries allow JSON overhead and retain request limits", async () => {
+    const fieldLimit = 1024 * 1024;
+    for (const data of ["x".repeat(fieldLimit), "\u0001".repeat(fieldLimit)]) {
+      const body = { type: 1, data, name: null };
+      assert(Buffer.byteLength(JSON.stringify(body)) > fieldLimit);
+      const item = ok(await request("/api/ciphers", { method: "POST", token: aliceToken, body }), "maximum decoded blob");
+      assert.equal(item.data, data);
+      assert.equal(ok(await request(`/api/ciphers/${item.id}`, { token: aliceToken }), "maximum blob get").data, data);
+      ok(await request(`/api/ciphers/${item.id}`, { method: "DELETE", token: aliceToken }), "maximum blob cleanup");
+    }
+    const before = ok(await request("/api/sync", { token: aliceToken }), "size limit baseline");
+    const beforeRevision = ok(await request("/api/accounts/revision-date", { token: aliceToken }), "size limit baseline revision");
+    denied(await request("/api/ciphers", {
+      method: "POST", token: aliceToken, body: { type: 1, data: "x".repeat(fieldLimit + 1) },
+    }), "oversized decoded field", [400]);
+    denied(await request("/api/ciphers", {
+      method: "POST", token: aliceToken, body: { type: 1, data: "x", extension: "x".repeat(16 * fieldLimit) },
+    }), "oversized encoded request", [413]);
+    const after = ok(await request("/api/sync", { token: aliceToken }), "size limit rejection state");
+    assert.equal(after.ciphers.length, before.ciphers.length);
+    assert.equal(after.profile.id, before.profile.id);
+    assert.equal(ok(await request("/api/accounts/revision-date", { token: aliceToken }), "size limit revision"), beforeRevision);
+  });
+
   await t.test("encrypted FIDO2 records preserve every stored field through create, update, and sync", async () => {
     const credential = {
       credentialId: alice.registration.key,

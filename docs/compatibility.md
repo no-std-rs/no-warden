@@ -50,7 +50,7 @@ desktop and mobile are not covered by the CLI result. Full organization,
 attachment, Send, notification and account-management compatibility remains on
 the [roadmap](../ROADMAP.md).
 
-The expanded HTTP regression suite passes all 19 tests against the rebuilt
+The expanded HTTP regression suite passes all 20 tests against the rebuilt
 standalone server. These establish wire preservation and authorization for the
 new shapes and aliases independently of the CLI evidence. They do not prove
 that a real client can decrypt a blob or use stored passkey credentials.

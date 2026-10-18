@@ -395,7 +395,7 @@ Sources: [Vaultwarden cipher routes](https://github.com/dani-garcia/vaultwarden/
 ## Compatibility evidence still needed
 
 The baseline personal-vault CLI result and its scope are recorded in
-[verified compatibility](compatibility.md). The expanded HTTP suite passes 19
+[verified compatibility](compatibility.md). The expanded HTTP suite passes 20
 tests covering the new shapes, route aliases, ownership checks, and escaped
 blob preservation. Further real-client evidence is needed for blob encryption,
 Argon2 account fixtures, additional cipher types, and stored passkey use.

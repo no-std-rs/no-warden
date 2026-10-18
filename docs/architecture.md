@@ -5,6 +5,11 @@ permissions before opening it. Startup also restricts existing database, WAL,
 shared-memory, and rollback-journal files. Filesystem providers remain outside
 the allocation-free core.
 
+The standalone host caps encoded HTTP bodies at 16 MiB. The core caps each
+decoded encrypted field at 1 MiB; the larger transport budget accommodates JSON
+escaping and request metadata. Oversized fields still fail core validation,
+and oversized requests fail before dispatch.
+
 `no-warden` is the reusable protocol and business-rules crate. It borrows input
 strings, models wire data without an allocator, classifies routes, validates
 supported payloads, and applies ownership and lifecycle rules through storage
