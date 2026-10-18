@@ -5,6 +5,130 @@
 use crate::{bounded::BoundedList, identity::Secret};
 use serde::{Deserialize, Serialize};
 
+/// Public known-device input after adapter base64url/UTF-8 header decoding.
+/// There is no JSON body and this type deliberately does not serialize account metadata.
+#[derive(Clone, Copy)]
+pub struct KnownDeviceRequest<'a> {
+    pub email: &'a str,
+    pub identifier: &'a str,
+}
+impl core::fmt::Debug for KnownDeviceRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("KnownDeviceRequest").finish_non_exhaustive()
+    }
+}
+
+/// The known-device endpoint returns a bare JSON boolean.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct KnownDeviceResponse(pub bool);
+
+/// Explicit seven-field projection, omitting internal ownership and pending-auth state.
+pub struct DeviceResponse<'a> {
+    record: crate::devices::DeviceRecord<'a>,
+}
+impl<'a> DeviceResponse<'a> {
+    /// Direct serializers must supply an already-authorized record; VaultService checks it.
+    pub const fn new(record: crate::devices::DeviceRecord<'a>) -> Self {
+        Self { record }
+    }
+}
+impl core::fmt::Debug for DeviceResponse<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DeviceResponse").finish_non_exhaustive()
+    }
+}
+impl Serialize for DeviceResponse<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serialize_device(self.record, serializer, false)
+    }
+}
+
+fn serialize_device<S: serde::Serializer>(
+    record: crate::devices::DeviceRecord<'_>,
+    serializer: S,
+    list_entry: bool,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeStruct;
+    // The local projection borrows metadata without serializing the provider record.
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PendingResponse<'a> {
+        id: &'a str,
+        creation_date: &'a str,
+    }
+    let mut value =
+        serializer.serialize_struct("DeviceResponse", if list_entry { 10 } else { 7 })?;
+    value.serialize_field("id", record.identifier)?;
+    value.serialize_field("name", record.name)?;
+    value.serialize_field("type", &record.device_type)?;
+    value.serialize_field("identifier", record.identifier)?;
+    value.serialize_field("creationDate", record.creation_date)?;
+    if list_entry {
+        value.serialize_field(
+            "devicePendingAuthRequest",
+            &record.pending_auth_request.map(|pending| PendingResponse {
+                id: pending.id,
+                creation_date: pending.creation_date,
+            }),
+        )?;
+        value.serialize_field("encryptedPublicKey", &None::<&str>)?;
+        value.serialize_field("encryptedUserKey", &None::<&str>)?;
+    }
+    value.serialize_field("isTrusted", &false)?;
+    value.serialize_field("object", "device")?;
+    value.end()
+}
+
+/// Streaming ten-field list entries over a stable, caller/provider-owned view.
+/// This does not allocate a response collection or impose a fixed device-count limit.
+pub struct DeviceListResponse<D: crate::devices::DeviceListData> {
+    devices: D,
+}
+impl<D: crate::devices::DeviceListData> DeviceListResponse<D> {
+    /// Direct serializers must supply an already-authorized view; VaultService checks it.
+    pub const fn new(devices: D) -> Self {
+        Self { devices }
+    }
+}
+impl<D: crate::devices::DeviceListData> core::fmt::Debug for DeviceListResponse<D> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DeviceListResponse")
+            .field("count", &self.devices.len())
+            .finish_non_exhaustive()
+    }
+}
+impl<D: crate::devices::DeviceListData> Serialize for DeviceListResponse<D> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{Error, SerializeSeq, SerializeStruct};
+        struct Entries<'a, D>(&'a D);
+        struct Entry<'a>(crate::devices::DeviceRecord<'a>);
+        impl Serialize for Entry<'_> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serialize_device(self.0, serializer, true)
+            }
+        }
+        impl<D: crate::devices::DeviceListData> Serialize for Entries<'_, D> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                let mut entries = serializer.serialize_seq(Some(self.0.len()))?;
+                for index in 0..self.0.len() {
+                    let record = self
+                        .0
+                        .get(index)
+                        .ok_or_else(|| S::Error::custom("The device list view is incomplete."))?;
+                    entries.serialize_element(&Entry(record))?;
+                }
+                entries.end()
+            }
+        }
+        let mut value = serializer.serialize_struct("DeviceListResponse", 3)?;
+        value.serialize_field("data", &Entries(&self.devices))?;
+        value.serialize_field("object", "list")?;
+        value.serialize_field("continuationToken", &None::<&str>)?;
+        value.end()
+    }
+}
+
 pub const MAX_URIS: usize = 32;
 pub const MAX_FIELDS: usize = 64;
 pub const MAX_PASSWORD_HISTORY: usize = 32;
@@ -858,6 +982,75 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_wire_projections_keep_exact_nulls_fields_and_redacted_debug() {
+        use crate::devices::{DeviceRecord, DeviceRegistration, PendingDeviceAuthRequest};
+        let record = DeviceRecord {
+            owner_id: "hidden-owner",
+            identifier: "hidden-identifier",
+            name: "hidden-name\"雪\0",
+            device_type: 14,
+            creation_date: "hidden-creation",
+            pending_auth_request: Some(PendingDeviceAuthRequest {
+                id: "hidden-pending",
+                creation_date: "hidden-pending-time",
+            }),
+        };
+        let single = DeviceResponse::new(record);
+        let base = serde_json::to_value(&single).unwrap();
+        assert_eq!(
+            base,
+            serde_json::json!({"id":record.identifier,"identifier":record.identifier,"name":record.name,"type":14,"creationDate":record.creation_date,"isTrusted":false,"object":"device"})
+        );
+        let records = [
+            record,
+            DeviceRecord {
+                pending_auth_request: None,
+                ..record
+            },
+        ];
+        let list = DeviceListResponse::new(records.as_slice());
+        let value = serde_json::to_value(&list).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 3);
+        assert_eq!(value["object"], "list");
+        assert!(value["continuationToken"].is_null());
+        for device in value["data"].as_array().unwrap() {
+            assert_eq!(device.as_object().unwrap().len(), 10);
+            for (key, expected) in base.as_object().unwrap() {
+                assert_eq!(&device[key], expected);
+            }
+            assert!(device["encryptedPublicKey"].is_null());
+            assert!(device["encryptedUserKey"].is_null());
+            assert!(device.get("ownerId").is_none());
+        }
+        assert_eq!(
+            value["data"][0]["devicePendingAuthRequest"],
+            serde_json::json!({"id":"hidden-pending","creationDate":"hidden-pending-time"})
+        );
+        assert!(value["data"][1]["devicePendingAuthRequest"].is_null());
+        for known in [false, true] {
+            assert_eq!(
+                serde_json::to_value(KnownDeviceResponse(known)).unwrap(),
+                known
+            );
+        }
+        let request = KnownDeviceRequest {
+            email: "hidden-email",
+            identifier: "hidden-id",
+        };
+        let registration = DeviceRegistration {
+            identifier: "hidden-id",
+            name: "hidden-name",
+            device_type: 14,
+        };
+        let debug = std::format!(
+            "{request:?} {registration:?} {record:?} {:?} {single:?} {list:?}",
+            record.pending_auth_request.unwrap()
+        );
+        assert!(!debug.contains("hidden"));
+    }
+
     use std::string::ToString;
     #[test]
     fn domain_request_fields_keep_positional_order_null_clears_and_signed_i32_bounds() {

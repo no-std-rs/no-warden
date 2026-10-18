@@ -4,6 +4,7 @@ use no_warden::{
     account_keys::{AccountKeyState, AccountKeyStorage},
     account_profile::AccountProfileStorage,
     bulk::{CipherBulkOperation, CipherBulkStorage, ValidatedCipherBulk},
+    devices::{DeviceRecord, DeviceRegistration, DeviceStorage},
     domains::{DomainSettingsData, DomainSettingsStorage},
     identity::{ApiKeyDevice, IdentityStorage, ReauthenticationProof, Secret},
     import::{ImportData, ImportStorage, ValidatedImport},
@@ -33,6 +34,8 @@ pub struct Store {
     account_key_cache: Option<CachedAccountKeys>,
     public_key_cache: Option<String>,
     domain_settings_cache: crate::domains::Settings,
+    device_list_cache: crate::devices::Registry,
+    device_cache: Option<crate::devices::Record>,
 }
 
 // Owned query results keep the optional core response borrows tied to this
@@ -178,7 +181,9 @@ impl Store {
             CREATE TABLE IF NOT EXISTS attachments(id TEXT PRIMARY KEY, cipher_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE, file_name TEXT NOT NULL, key TEXT, size INTEGER NOT NULL CHECK(size>=0), data BLOB);
             CREATE INDEX IF NOT EXISTS attachments_cipher ON attachments(cipher_id);
             CREATE TABLE IF NOT EXISTS attachment_downloads(token TEXT PRIMARY KEY, attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE, expires INTEGER NOT NULL);
-            CREATE TABLE IF NOT EXISTS sessions(access TEXT PRIMARY KEY, refresh TEXT UNIQUE NOT NULL, owner TEXT NOT NULL REFERENCES accounts(id), access_expires INTEGER NOT NULL, refresh_expires INTEGER NOT NULL);")?;
+            CREATE TABLE IF NOT EXISTS sessions(access TEXT PRIMARY KEY, refresh TEXT UNIQUE NOT NULL, owner TEXT NOT NULL REFERENCES accounts(id), access_expires INTEGER NOT NULL, refresh_expires INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS device_registry(owner TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, identifier TEXT NOT NULL, name TEXT NOT NULL, device_type INTEGER NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, PRIMARY KEY(owner,identifier));
+            CREATE TABLE IF NOT EXISTS session_devices(access TEXT PRIMARY KEY REFERENCES sessions(access) ON DELETE CASCADE, owner TEXT NOT NULL, identifier TEXT NOT NULL, FOREIGN KEY(owner,identifier) REFERENCES device_registry(owner,identifier) ON DELETE CASCADE);")?;
         // SQLite inherits the private database mode for new sidecars. Also
         // narrow sidecars left behind by an earlier permissive installation.
         #[cfg(unix)]
@@ -196,6 +201,8 @@ impl Store {
             account_key_cache: None,
             public_key_cache: None,
             domain_settings_cache: crate::domains::Settings::default(),
+            device_list_cache: crate::devices::Registry::default(),
+            device_cache: None,
         })
     }
 
@@ -602,6 +609,33 @@ impl CipherBulkStorage for Store {
     }
 }
 
+impl DeviceStorage for Store {
+    type Devices<'a> = &'a crate::devices::Registry;
+
+    fn known_device(&mut self, decoded_email: &str, identifier: &str) -> rusqlite::Result<bool> {
+        self.db.query_row("SELECT EXISTS(SELECT 1 FROM device_registry d JOIN accounts a ON a.id=d.owner WHERE a.email=?1 AND d.identifier=?2)", params![decoded_email.to_lowercase(),identifier], |row| row.get(0))
+    }
+    fn devices(&mut self, owner: &str) -> rusqlite::Result<Self::Devices<'_>> {
+        self.device_list_cache = crate::devices::list(&self.db, owner)?;
+        Ok(&self.device_list_cache)
+    }
+    fn device(
+        &mut self,
+        owner: &str,
+        identifier: &str,
+    ) -> rusqlite::Result<Option<DeviceRecord<'_>>> {
+        self.device_cache = crate::devices::load(&self.db, owner, identifier)?;
+        Ok(self.device_cache.as_ref().map(crate::devices::Record::view))
+    }
+    fn register_device(
+        &mut self,
+        owner: &str,
+        registration: &DeviceRegistration<'_>,
+    ) -> rusqlite::Result<()> {
+        crate::devices::register(&mut self.db, owner, registration)
+    }
+}
+
 impl DomainSettingsStorage for Store {
     type Settings<'a>
         = &'a crate::domains::Settings
@@ -880,10 +914,216 @@ impl Storage for Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use no_warden::{ErrorKind, VaultService};
+    use no_warden::{ErrorKind, VaultService, devices::DeviceListData};
     use serde::Deserialize;
 
     const CIPHERTEXT: &str = "2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+    fn device_rows(store: &Store) -> Vec<String> {
+        store.db.prepare("SELECT owner||':'||identifier||':'||name||':'||device_type||':'||created||':'||updated FROM device_registry ORDER BY owner,identifier").unwrap().query_map([], |row| row.get(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
+    }
+
+    #[test]
+    fn device_registry_preserves_metadata_credentials_vault_revisions_and_foreign_state() {
+        let mut store = profile_fixture();
+        let before = snapshot(&store);
+        let authority = account_authority_snapshot(&store);
+        for owner in ["alice", "bob"] {
+            let registration = DeviceRegistration {
+                identifier: "Shared-Device",
+                name: if owner == "alice" { "NUL\0雪" } else { "Bob" },
+                device_type: if owner == "alice" { i32::MIN } else { i32::MAX },
+            };
+            VaultService::new(&mut store)
+                .register_device(owner, &registration)
+                .unwrap();
+        }
+        let original = crate::devices::load(&store.db, "alice", "Shared-Device")
+            .unwrap()
+            .unwrap();
+        let foreign = device_rows(&store)
+            .into_iter()
+            .filter(|row| row.starts_with("bob:"))
+            .collect::<Vec<_>>();
+        store.db.execute("UPDATE device_registry SET updated='2000-01-01T00:00:00.000000Z' WHERE owner='alice'", []).unwrap();
+        let changed = DeviceRegistration {
+            identifier: "Shared-Device",
+            name: "replacement",
+            device_type: 14,
+        };
+        VaultService::new(&mut store)
+            .register_device("alice", &changed)
+            .unwrap();
+        let retained = crate::devices::load(&store.db, "alice", "Shared-Device")
+            .unwrap()
+            .unwrap();
+        assert!(
+            retained.name == original.name
+                && retained.device_type == original.device_type
+                && retained.created == original.created
+        );
+        let updated: String = store
+            .db
+            .query_row(
+                "SELECT updated FROM device_registry WHERE owner='alice'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(updated != "2000-01-01T00:00:00.000000Z");
+        assert!(chrono::DateTime::parse_from_rfc3339(&retained.created).is_ok());
+        assert_eq!(retained.created.split('.').nth(1).unwrap().len(), 7);
+        assert!(
+            snapshot(&store) == before && account_authority_snapshot(&store) == authority,
+            "Device registration changed account authority, revision or vault state."
+        );
+        assert!(
+            device_rows(&store)
+                .into_iter()
+                .filter(|row| row.starts_with("bob:"))
+                .collect::<Vec<_>>()
+                == foreign
+        );
+        for (email, identifier, expected) in [
+            ("ALICE@EXAMPLE.TEST", "Shared-Device", true),
+            (" alice@example.test", "Shared-Device", false),
+            ("alice@example.test ", "Shared-Device", false),
+            ("alice@example.test", "shared-device", false),
+            ("missing@example.test", "Shared-Device", false),
+        ] {
+            assert_eq!(
+                DeviceStorage::known_device(&mut store, email, identifier).unwrap(),
+                expected
+            );
+        }
+        let single = serde_json::to_value(
+            VaultService::new(&mut store)
+                .get_device("alice", "Shared-Device")
+                .unwrap(),
+        )
+        .unwrap();
+        let list =
+            serde_json::to_value(VaultService::new(&mut store).list_devices("alice").unwrap())
+                .unwrap();
+        assert_eq!(single.as_object().unwrap().len(), 7);
+        assert_eq!(list["data"][0].as_object().unwrap().len(), 10);
+        assert!(
+            list["data"][0]["devicePendingAuthRequest"].is_null()
+                && list["data"][0]["encryptedPublicKey"].is_null()
+                && list["data"][0]["encryptedUserKey"].is_null()
+        );
+        assert!(
+            single["name"] == "NUL\0雪"
+                && single["type"] == i32::MIN
+                && single["isTrusted"] == false
+        );
+        assert!(
+            VaultService::new(&mut store)
+                .get_device("bob", "missing")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn device_registry_ignores_document_extensions_and_rolls_back_provider_failures() {
+        for trigger in [
+            "CREATE TRIGGER reject_device_write AFTER INSERT ON device_registry BEGIN UPDATE accounts SET revision='corrupt' WHERE id=NEW.owner; SELECT RAISE(FAIL,'injected registry failure'); END;",
+            "CREATE TABLE failed_device_commit(owner TEXT REFERENCES accounts(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER reject_device_commit AFTER INSERT ON device_registry BEGIN INSERT INTO failed_device_commit(owner) VALUES('missing'); END;",
+        ] {
+            let mut store = setup();
+            store.db.execute("UPDATE accounts SET document=json_set(document,'$.devices',json('[{\"identifier\":\"forged\"}]'),'$.deviceIdentifier','forged') WHERE id='alice'", []).unwrap();
+            assert!(
+                !DeviceStorage::known_device(&mut store, "alice@example.test", "forged").unwrap()
+            );
+            assert_eq!(
+                DeviceStorage::devices(&mut store, "alice").unwrap().len(),
+                0
+            );
+            let before = snapshot(&store);
+            let authority = account_authority_snapshot(&store);
+            store.db.execute_batch(trigger).unwrap();
+            let registration = DeviceRegistration {
+                identifier: "new-device",
+                name: "fixture",
+                device_type: 8,
+            };
+            assert!(
+                VaultService::new(&mut store)
+                    .register_device("alice", &registration)
+                    .is_err()
+            );
+            assert!(
+                device_rows(&store).is_empty()
+                    && snapshot(&store) == before
+                    && account_authority_snapshot(&store) == authority,
+                "Failed device registration changed persisted state."
+            );
+            assert!(store.db.is_autocommit());
+        }
+        let mut store = setup();
+        let registration = DeviceRegistration {
+            identifier: "",
+            name: "",
+            device_type: 14,
+        };
+        VaultService::new(&mut store)
+            .register_device("alice", &registration)
+            .unwrap();
+        assert!(DeviceStorage::known_device(&mut store, "alice@example.test", "").unwrap());
+        assert!(
+            VaultService::new(&mut store)
+                .register_device("missing", &registration)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn device_registry_and_session_bindings_survive_private_database_reopen() {
+        let directory =
+            std::env::temp_dir().join(format!("no-warden-devices-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("vault.db");
+        let mut store = Store::open(path.to_str().unwrap()).unwrap();
+        store.db.execute("INSERT INTO accounts(id,email,document,password,revision) VALUES('alice','alice@example.test','{}','preserved-verifier',?1)", [now()]).unwrap();
+        let registration = DeviceRegistration {
+            identifier: "Restart-Device",
+            name: "Original",
+            device_type: 8,
+        };
+        VaultService::new(&mut store)
+            .register_device("alice", &registration)
+            .unwrap();
+        store.db.execute("INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES(?1,'synthetic-refresh','alice',4000000000,4000000000)", [crate::digest("synthetic-access")]).unwrap();
+        crate::devices::bind(&store.db, "alice", "Restart-Device", "synthetic-access").unwrap();
+        let before = device_rows(&store);
+        drop(store);
+        let mut reopened = Store::open(path.to_str().unwrap()).unwrap();
+        assert!(device_rows(&reopened) == before);
+        assert!(
+            DeviceStorage::known_device(&mut reopened, "ALICE@EXAMPLE.TEST", "Restart-Device")
+                .unwrap()
+        );
+        assert!(
+            crate::devices::refresh_binding(&reopened.db, "synthetic-refresh", "alice")
+                .unwrap()
+                .as_deref()
+                == Some("Restart-Device")
+        );
+        assert!(
+            crate::devices::refresh_binding(&reopened.db, "synthetic-refresh", "bob")
+                .unwrap()
+                .is_none()
+        );
+        reopened.db.execute("DELETE FROM sessions", []).unwrap();
+        assert!(
+            crate::devices::refresh_binding(&reopened.db, "synthetic-refresh", "alice")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(device_rows(&reopened).len(), 1);
+        drop(reopened);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     fn domain_rows(store: &Store) -> Vec<(String, String, String)> {
         store.db.prepare("SELECT owner,excluded_globals,equivalent_domains FROM account_domains ORDER BY owner").unwrap()

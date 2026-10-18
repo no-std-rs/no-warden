@@ -39,23 +39,23 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 63 routed patterns, 36 with typed requests, 51 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 66 routed patterns, 37 with typed requests, 54 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 60 partial and 234 unimplemented. Query/rank/configuration
+status: 63 partial and 231 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
 
-Twenty-three local patterns have some typed response representation, including
+Twenty-six local patterns have some typed response representation, including
 the domain settings projections and empty mutation response, explicit API-key
 responses, and attachment responses. Bulk cipher lists use the generic `ListResponse`
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 55 patterns, negative
-HTTP evidence for 54, 93 named HTTP cases, and 31 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 58 patterns, negative
+HTTP evidence for 57, 101 named HTTP cases, and 31 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -460,3 +460,46 @@ verified. The CLI trace catalog is likewise empty: captured-route claims require
 an audited command, the locked client version, and a current-source runtime
 receipt supplied through `API_CLI_TRACE_RECEIPTS`. Successful cache commands or
 unresolved trace names do not satisfy that requirement.
+
+## Device discovery
+
+The discovery chunk adds three pinned routes through an opt-in `DeviceStorage`
+provider and `VaultService` methods:
+
+| Method and route | Verified contract |
+| --- | --- |
+| `GET /api/devices/knowndevice` | Public base64url email/header lookup; bare JSON boolean |
+| `GET /api/devices` | Authenticated owner-only list; ten-field entries |
+| `GET /api/devices/identifier/<id>` | Authenticated exact identifier lookup; seven-field response |
+
+The [pinned discovery handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1504-L1580)
+use opaque identifiers in headers and login forms. The authenticated lookup path
+instead follows the ASCII letter/digit/hyphen guard after percent-decoding,
+without UUID normalization. Missing or foreign records return 400; invalid
+path syntax returns 422 after authentication. Known-device lookup lowercases
+the decoded email without trimming and matches the exact identifier. Invalid or
+missing required headers return 400; bearer authentication is not required.
+
+Successful password and personal API-key logins register the owner/device pair.
+Repeated login retains the first name, parsed type and creation date, following
+[upstream device reuse](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L776-L797).
+The adapter binds newly issued sessions to that identity and retains it on
+refresh. Its savepoint provides atomic registration/session issuance, with
+rollback and database-reopen evidence. Device-only operations preserve account
+revision and vault contents. Legacy sessions remain valid without fabricated
+bindings; the existing stricter single-use refresh policy remains a separate
+compatibility limitation.
+
+Borrowed core records and streamed responses require no allocator. The
+known-device request represents decoded headers and has no JSON decoder. The
+core list model can expose a two-field pending-auth request, while the adapter
+currently emits null and does not implement that lifecycle. Trust/key setup,
+push-token routes, notification policy and legacy registry backfill remain open.
+
+All eight Rust device cases pass against the adapter and official Vaultwarden
+`1.37.4`: 199 requests including six identity requests. Those comprise five login
+attempts (four successful and one rejected) and one refresh. The existing
+32-case personal selection passes separately; fresh reference processes keep
+both selections within the unchanged default login limit. The default adapter
+entry point runs all 40 cases. No CLI device-route trace or full-parity flag is
+claimed, and the full API delivery goal remains open.

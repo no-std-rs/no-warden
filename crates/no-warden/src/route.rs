@@ -39,6 +39,9 @@ pub enum Route<'a> {
     RevisionDate,
     Token,
     Sync,
+    KnownDevice,
+    Devices,
+    DeviceGet(&'a str),
     DomainsGet,
     DomainsUpdate,
     Folders,
@@ -81,6 +84,7 @@ impl Route<'_> {
                 | Self::Prelogin
                 | Self::Register
                 | Self::Token
+                | Self::KnownDevice
                 | Self::AttachmentDownload(_, _)
         )
     }
@@ -118,6 +122,8 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (Get, "/api/accounts/revision-date") => Some(RevisionDate),
         (Post, "/identity/connect/token") => Some(Token),
         (Get, "/api/sync") => Some(Sync),
+        (Get, "/api/devices/knowndevice") => Some(KnownDevice),
+        (Get, "/api/devices") => Some(Devices),
         (Get, "/api/settings/domains") => Some(DomainsGet),
         (Post | Put, "/api/settings/domains") => Some(DomainsUpdate),
         (Get, "/api/folders") => Some(Folders),
@@ -145,6 +151,12 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
             | "/api/ciphers/unarchive",
         ) => None,
         _ => {
+            if let Some(identifier) = path.strip_prefix("/api/devices/identifier/") {
+                // The adapter percent-decodes and applies upstream IdFromParam.
+                // Capture invalid values too so that guard can return 422 rather than 404.
+                return (method == Get && !identifier.is_empty() && !identifier.contains('/'))
+                    .then_some(DeviceGet(identifier));
+            }
             if let Some(tail) = path.strip_prefix("/api/users/") {
                 let (id, "public-key") = tail.split_once('/')? else {
                     return None;
@@ -236,6 +248,41 @@ fn valid_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn device_discovery_routes_keep_public_headers_and_authenticated_opaque_paths_distinct() {
+        for (path, expected) in [
+            ("/api/devices/knowndevice", Route::KnownDevice),
+            ("/api/devices/?future=yes", Route::Devices),
+            (
+                "/api/devices/identifier/MixedCase-123",
+                Route::DeviceGet("MixedCase-123"),
+            ),
+            ("/api/devices/identifier/%41%2b", Route::DeviceGet("%41%2b")),
+            (
+                "/api/devices/identifier/invalid_+",
+                Route::DeviceGet("invalid_+"),
+            ),
+        ] {
+            assert_eq!(classify(Method::Get, path), Some(expected));
+            assert_eq!(
+                expected.requires_authentication(),
+                !matches!(expected, Route::KnownDevice)
+            );
+            for method in [Method::Post, Method::Put, Method::Delete, Method::Options] {
+                assert_eq!(classify(method, path), None);
+            }
+        }
+        for path in [
+            "/api/devices/identifier/",
+            "/api/devices/identifier/id/extra",
+            "/api/devices/identifier/id/token",
+            "/api/devices/unknown",
+            "/api/devices/knowndevice/extra",
+        ] {
+            assert_eq!(classify(Method::Get, path), None);
+        }
+    }
+
     #[test]
     fn domain_settings_routes_require_authentication_and_preserve_method_aliases() {
         for (method, expected) in [

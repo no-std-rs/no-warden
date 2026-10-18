@@ -290,3 +290,40 @@ table. Registration extras do not seed this state. Updates preserve unrelated
 account and vault data; transaction failures preserve both settings and revision.
 The bare-metal consumer encodes both response projections and `{}` mutation
 responses, and decodes settings requests without a global allocator.
+
+Device discovery uses the opt-in `DeviceStorage` provider. Its stable borrowed
+`DeviceListData` view and `DeviceRecord` let the core stream exact list and
+single-device projections without an allocator. `DeviceRegistration` comes only
+from a verified password or personal API-key login. The provider resolves an
+exact owner/identifier pair, retains its initial name, type and creation time,
+and may update activity without advancing the account revision. Headers, email
+lowercasing, percent decoding, clocks and token issuance stay in adapters.
+`KnownDeviceRequest` is already-decoded borrowed header input, with no JSON
+serialization or deserialization traits. Its response serializes as a bare
+boolean.
+
+The list projection adds three fields to the seven-field single-device
+projection: pending authentication metadata and two null encrypted-key fields.
+`PendingDeviceAuthRequest` models only its ID and creation date; it does not
+implement approval or authentication-request workflows. The standalone provider
+currently supplies no pending request, so all three extra fields are null.
+
+The standalone adapter keeps the registry in its own SQLite table keyed by
+`(owner, identifier)`. Account-document extensions and registration extras do not
+create devices. The login savepoint covers the core registration hook, activity,
+session insertion and device binding. Session, binding and deferred-commit
+failures roll back all of them, including cleanup of expired sessions. Successful
+login does not change account keys, credentials, revisions or vault contents.
+Repeated login retains the original metadata even when a client submits a new
+name or type. A separate binding table associates each new access session with
+its authenticated owner and device; the JWT includes that exact identifier in
+`device`.
+
+Refresh uses the stored binding and ignores submitted device metadata. It
+atomically touches the registered device, rotates refresh authority, and binds
+the new session to the same owner and identifier. Existing access tokens retain
+their original expiry. Older sessions without binding rows remain usable and
+refresh without inventing a device; no legacy registry backfill is implemented.
+Registry and binding records survive private-database reopen. Push-token
+management, device approval, pending-authentication lifecycle, device removal and
+notification delivery remain separate tracked work.
