@@ -9,6 +9,8 @@ use crate::{
     wire::{CipherCreateRequest, CipherRequest, FolderRequest, RegisterRequest},
 };
 
+pub use crate::import::{ImportData, ImportPolicy, ImportStorage, ImportView, ValidatedImport};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ItemMetadata<'a> {
     pub owner_id: &'a str,
@@ -361,7 +363,7 @@ impl<S: Storage> VaultService<S> {
     }
 }
 
-fn require_owner(owner: &str) -> Result<(), ApiError> {
+pub(crate) fn require_owner(owner: &str) -> Result<(), ApiError> {
     if owner.is_empty() {
         Err(ApiError::new(
             ErrorKind::Unauthorized,
@@ -372,7 +374,10 @@ fn require_owner(owner: &str) -> Result<(), ApiError> {
     }
 }
 
-fn validate_encrypted_for(owner: &str, request: &CipherRequest<'_>) -> Result<(), ApiError> {
+pub(crate) fn validate_encrypted_for(
+    owner: &str,
+    request: &CipherRequest<'_>,
+) -> Result<(), ApiError> {
     if request
         .encrypted_for
         .is_some_and(|account| account != owner)

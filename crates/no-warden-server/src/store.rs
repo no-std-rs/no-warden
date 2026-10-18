@@ -1,5 +1,6 @@
 use no_warden::{
     Storage,
+    import::{ImportData, ImportStorage, ValidatedImport},
     service::ItemMetadata,
     wire::{CipherRequest, FolderRequest, RegisterRequest},
 };
@@ -181,40 +182,120 @@ impl Store {
     }
 
     fn save(&mut self, owner: &str, id: &str, kind: &str) -> rusqlite::Result<()> {
-        let mut doc = self.pending.clone();
         let tx = self.db.transaction()?;
-        let existing = item(&tx, owner, id, kind)?;
-        let revision = next_revision(&tx, owner)?;
-        doc["id"] = json!(id);
-        doc["object"] = json!(if kind == "cipher" {
-            "cipherDetails"
-        } else {
-            kind
-        });
-        doc["revisionDate"] = json!(revision);
-        if kind == "cipher" {
-            doc["creationDate"] = existing
-                .as_ref()
-                .map(|v| v["creationDate"].clone())
-                .unwrap_or(json!(revision));
-            doc["deletedDate"] = existing
-                .as_ref()
-                .map(|v| v["deletedDate"].clone())
-                .unwrap_or(Value::Null);
-            doc["organizationId"] = Value::Null;
-            doc["collectionIds"] = json!([]);
-            doc["attachments"] = Value::Null;
-            doc["edit"] = json!(true);
-            doc["viewPassword"] = json!(true);
-            doc["organizationUseTotp"] = json!(false);
-            doc["permissions"] = json!({"delete":true,"restore":true});
-            doc.as_object_mut()
-                .expect("validated object")
-                .remove("lastKnownRevisionDate");
-        }
-        let deleted = doc.get("deletedDate").is_some_and(|v| !v.is_null());
-        require_change(tx.execute("INSERT INTO items(id,owner,kind,document,deleted,revision,created) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET document=excluded.document,revision=excluded.revision,deleted=excluded.deleted WHERE items.owner=excluded.owner AND items.kind=excluded.kind",
+        save_document(&tx, owner, id, kind, self.pending.clone(), true)?;
+        tx.commit()
+    }
+}
+
+// The caller owns the transaction. Imports use insert-only writes so a generated
+// identifier collision cannot replace an existing item.
+fn save_document(
+    db: &Connection,
+    owner: &str,
+    id: &str,
+    kind: &str,
+    mut doc: Value,
+    allow_update: bool,
+) -> rusqlite::Result<()> {
+    let existing = if allow_update {
+        item(db, owner, id, kind)?
+    } else {
+        None
+    };
+    let revision = next_revision(db, owner)?;
+    doc["id"] = json!(id);
+    doc["object"] = json!(if kind == "cipher" {
+        "cipherDetails"
+    } else {
+        kind
+    });
+    doc["revisionDate"] = json!(revision);
+    if kind == "cipher" {
+        doc["creationDate"] = existing
+            .as_ref()
+            .map(|v| v["creationDate"].clone())
+            .unwrap_or(json!(revision));
+        doc["deletedDate"] = existing
+            .as_ref()
+            .map(|v| v["deletedDate"].clone())
+            .unwrap_or(Value::Null);
+        doc["organizationId"] = Value::Null;
+        doc["collectionIds"] = json!([]);
+        doc["attachments"] = Value::Null;
+        doc["edit"] = json!(true);
+        doc["viewPassword"] = json!(true);
+        doc["organizationUseTotp"] = json!(false);
+        doc["permissions"] = json!({"delete":true,"restore":true});
+        doc.as_object_mut()
+            .expect("validated object")
+            .remove("lastKnownRevisionDate");
+    } else if kind == "folder" {
+        // Folders have no creation or trash lifecycle in the upstream wire model.
+        let fields = doc.as_object_mut().expect("validated object");
+        fields.remove("creationDate");
+        fields.remove("deletedDate");
+    }
+    let deleted = doc.get("deletedDate").is_some_and(|v| !v.is_null());
+    require_change(db.execute(if allow_update { "INSERT INTO items(id,owner,kind,document,deleted,revision,created) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET document=excluded.document,revision=excluded.revision,deleted=excluded.deleted WHERE items.owner=excluded.owner AND items.kind=excluded.kind" } else { "INSERT INTO items(id,owner,kind,document,deleted,revision,created) VALUES(?1,?2,?3,?4,?5,?6,?7)" },
             params![id,owner,kind,doc.to_string(),deleted,revision,revision])?)?;
+    bump(db, owner, &revision)?;
+    Ok(())
+}
+
+impl ImportStorage for Store {
+    fn commit_personal_import<'a, I: ImportData<'a> + ?Sized>(
+        &mut self,
+        owner: &str,
+        plan: &ValidatedImport<'_, 'a, I>,
+    ) -> Result<(), Self::Error> {
+        let data = plan.data();
+        let mut folder_mapping = vec![None; data.cipher_count()];
+        plan.fill_folder_mapping(&mut folder_mapping)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let tx = self.db.transaction()?;
+        // Resolve against the pre-import snapshot, before inserting any folders.
+        // Repeated unknown IDs must create distinct folders, as upstream does.
+        let mut folders = Vec::with_capacity(data.folder_count());
+        let mut create = Vec::with_capacity(data.folder_count());
+        for index in 0..data.folder_count() {
+            let requested = data.folder(index).ok_or(rusqlite::Error::InvalidQuery)?;
+            let existing = if let Some(id) = requested.id {
+                item(&tx, owner, id, "folder")?.is_some()
+            } else {
+                false
+            };
+            folders.push(if existing {
+                requested.id.expect("existing ID").to_owned()
+            } else {
+                uuid::Uuid::new_v4().to_string()
+            });
+            create.push(!existing);
+        }
+        for (index, id) in folders.iter().enumerate() {
+            if create[index] {
+                let document = self.pending["folders"][index].clone();
+                save_document(&tx, owner, id, "folder", document, false)?;
+            }
+        }
+        for (index, folder_index) in folder_mapping.into_iter().enumerate() {
+            let folder_id = folder_index.map(|folder| folders[folder].as_str());
+            let request = plan
+                .cipher_for_create(index, folder_id)
+                .ok_or(rusqlite::Error::InvalidQuery)?;
+            let mut document = self.pending["ciphers"][index].clone();
+            document["folderId"] = request.folder_id.map_or(Value::Null, |id| json!(id));
+            save_document(
+                &tx,
+                owner,
+                &uuid::Uuid::new_v4().to_string(),
+                "cipher",
+                document,
+                false,
+            )?;
+        }
+        // Even an empty import advances the account revision on the reference server.
+        let revision = next_revision(&tx, owner)?;
         bump(&tx, owner, &revision)?;
         tx.commit()
     }
@@ -345,6 +426,120 @@ mod tests {
     use serde::Deserialize;
 
     const CIPHERTEXT: &str = "2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+    fn import(store: &mut Store, owner: &str, document: &Value) -> Result<(), no_warden::ApiError> {
+        let folders = Vec::deserialize(&document["folders"]).unwrap();
+        let ciphers = Vec::deserialize(&document["ciphers"]).unwrap();
+        let relationships = Vec::deserialize(&document["folderRelationships"]).unwrap();
+        store.pending = document.clone();
+        VaultService::new(store).import_personal(
+            owner,
+            &no_warden::import::ImportView {
+                folders: &folders,
+                ciphers: &ciphers,
+                folder_relationships: &relationships,
+            },
+        )
+    }
+
+    #[test]
+    fn a_late_import_write_failure_rolls_back_the_entire_batch() {
+        let mut store = setup();
+        save(&mut store, "alice", "existing", "folder", None);
+        save(&mut store, "bob", "foreign", "folder", None);
+        let before = snapshot(&store);
+        store
+            .db
+            .execute_batch(
+                "CREATE TRIGGER reject_second_imported_cipher BEFORE INSERT ON items
+             WHEN NEW.kind='cipher' AND json_extract(NEW.document,'$.favorite')=1
+             BEGIN SELECT RAISE(ABORT,'injected import failure'); END;",
+            )
+            .unwrap();
+        let document = json!({
+            "folders": [{"name": CIPHERTEXT}],
+            "ciphers": [
+                {"type":2,"name":CIPHERTEXT,"secureNote":{"type":0}},
+                {"type":2,"name":CIPHERTEXT,"secureNote":{"type":0},"favorite":true}
+            ],
+            "folderRelationships": [{"key":0,"value":0},{"key":1,"value":0}]
+        });
+        assert_eq!(
+            import(&mut store, "alice", &document).unwrap_err().kind,
+            ErrorKind::Storage
+        );
+        assert_eq!(snapshot(&store), before);
+    }
+
+    #[test]
+    fn import_uses_a_folder_snapshot_and_fresh_server_metadata() {
+        let mut store = setup();
+        save(&mut store, "alice", "existing", "folder", None);
+        save(&mut store, "bob", "foreign", "folder", None);
+        let owned = store.item("alice", "existing", "folder").unwrap().unwrap();
+        let foreign = store.item("bob", "foreign", "folder").unwrap().unwrap();
+        let document = json!({
+            "folders": [
+                {"id":"existing","name":CIPHERTEXT},
+                {"id":"foreign","name":CIPHERTEXT},
+                {"id":"not-present","name":CIPHERTEXT},
+                {"id":"not-present","name":CIPHERTEXT,
+                 "creationDate":"1900-01-01T00:00:00Z","deletedDate":"1900-01-01T00:00:00Z",
+                 "futureEncryptedField":CIPHERTEXT}
+            ],
+            "ciphers": [{
+                "id":"client-id","type":2,"name":CIPHERTEXT,"secureNote":{"type":0,"futureEncryptedField":CIPHERTEXT},
+                "folderId":"foreign","deletedDate":"1900-01-01T00:00:00Z",
+                "creationDate":"1900-01-01T00:00:00Z","revisionDate":"1900-01-01T00:00:00Z",
+                "lastKnownRevisionDate":"1900-01-01T00:00:00Z"
+            }],
+            "folderRelationships": [{"key":0,"value":1}]
+        });
+        import(&mut store, "alice", &document).unwrap();
+        let folders = store.items("alice", "folder").unwrap();
+        assert_eq!(folders.len(), 4);
+        for folder in &folders {
+            assert!(folder.get("creationDate").is_none());
+            assert!(folder.get("deletedDate").is_none());
+        }
+        assert!(
+            folders
+                .iter()
+                .any(|folder| folder["futureEncryptedField"] == CIPHERTEXT)
+        );
+        let deleted_folders: i64 = store
+            .db
+            .query_row(
+                "SELECT count(*) FROM items WHERE kind='folder' AND deleted != 0",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(deleted_folders, 0);
+        assert_eq!(
+            store.item("alice", "existing", "folder").unwrap().unwrap(),
+            owned
+        );
+        assert_eq!(
+            store.item("bob", "foreign", "folder").unwrap().unwrap(),
+            foreign
+        );
+        let ciphers = store.items("alice", "cipher").unwrap();
+        assert_eq!(ciphers.len(), 1);
+        let cipher = &ciphers[0];
+        assert_ne!(cipher["id"], "client-id");
+        assert_ne!(cipher["folderId"], "foreign");
+        assert!(
+            folders
+                .iter()
+                .any(|folder| folder["id"] == cipher["folderId"])
+        );
+        assert!(cipher["deletedDate"].is_null());
+        assert_ne!(cipher["creationDate"], "1900-01-01T00:00:00Z");
+        assert_eq!(cipher["creationDate"], cipher["revisionDate"]);
+        assert_eq!(cipher["secureNote"], document["ciphers"][0]["secureNote"]);
+        assert!(cipher.get("lastKnownRevisionDate").is_none());
+    }
 
     fn setup() -> Store {
         let store = Store::open(":memory:").unwrap();

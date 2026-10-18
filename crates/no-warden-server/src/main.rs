@@ -16,8 +16,11 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use no_warden::{
     ApiError, VaultService,
+    import::ImportView,
     route::{self, Route},
-    wire::{CipherRequest, FolderRequest, RegisterRequest},
+    wire::{
+        CipherRequest, FolderRelationship, FolderRequest, ImportFolderRequest, RegisterRequest,
+    },
 };
 use rand::{RngCore, rngs::OsRng};
 use rusqlite::{OptionalExtension, params};
@@ -250,6 +253,41 @@ async fn dispatch(
     let owner = owner.ok_or_else(unauthorized)?;
     let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
     match route {
+        Route::CipherImport => {
+            let document: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
+            let folders: Vec<ImportFolderRequest<'_>> = document
+                .get("folders")
+                .and_then(Value::as_array)
+                .ok_or_else(invalid)?
+                .iter()
+                .map(ImportFolderRequest::deserialize)
+                .collect::<Result<_, _>>()
+                .map_err(|_| invalid())?;
+            let ciphers: Vec<CipherRequest<'_>> = document
+                .get("ciphers")
+                .and_then(Value::as_array)
+                .ok_or_else(invalid)?
+                .iter()
+                .map(CipherRequest::deserialize)
+                .collect::<Result<_, _>>()
+                .map_err(|_| invalid())?;
+            let folder_relationships: Vec<FolderRelationship> = document
+                .get("folderRelationships")
+                .and_then(Value::as_array)
+                .ok_or_else(invalid)?
+                .iter()
+                .map(FolderRelationship::deserialize)
+                .collect::<Result<_, _>>()
+                .map_err(|_| invalid())?;
+            let input = ImportView {
+                folders: &folders,
+                ciphers: &ciphers,
+                folder_relationships: &folder_relationships,
+            };
+            store.pending = document.clone();
+            VaultService::new(&mut *store).import_personal(&owner, &input)?;
+            Ok(StatusCode::OK.into_response())
+        }
         Route::UserKeyId => {
             let request: no_warden::wire::UserKeyIdRequest<'_> =
                 serde_json::from_slice(&body).map_err(|_| invalid())?;

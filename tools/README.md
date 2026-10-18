@@ -63,10 +63,30 @@ enforcement, escaped opaque cipher blobs, encrypted FIDO2 records, clone
 wrappers, legacy folder aliases, organization alias rejection, and preservation
 of archived dates.
 
+The original 37 CLI lifecycle commands remain intact. The suite then imports
+unencrypted Bitwarden JSON and CSV fixtures through the official CLI, which
+encrypts their contents before upload. JSON covers logins, secure notes, cards,
+and identities; CSV covers logins and secure notes. Escaped Unicode folder names,
+multiline notes, custom fields, and item-to-folder links are checked again after
+discarding the CLI cache and logging in afresh. Fixture files live in the private
+temporary directory and are removed in `finally`. CSV folder checks include the
+client's backslash normalization and automatic ancestor-folder creation.
+
+The personal-import HTTP checks follow the pinned relationship semantics:
+existing owned folder IDs are reused, foreign or unknown IDs create fresh owned
+folders, duplicate relationship keys use the last value, unknown folder indexes
+clear the mapping, and unknown item indexes are ignored. Rejected batches must
+leave items, folders, and revision unchanged under the standalone provider's
+atomic transaction contract. This rollback requirement is a local guarantee;
+the examined Vaultwarden handler saves entries sequentially without an enclosing
+import transaction.
+
 The persistence test starts its own standalone server twice on a free loopback
 port, using one temporary SQLite database. It verifies graceful shutdown,
 encrypted account and owner data, folders, active and trashed ciphers, revisions,
-and authentication sessions across restart. Build `no-warden-server` first, or
+and authentication sessions across restart. It also imports encrypted login and
+secure-note fixtures and verifies their exact stored content and folder links
+after restart. Build `no-warden-server` first, or
 set `NO_WARDEN_BIN` to its binary path. The test stops its child processes and
 removes the temporary database on success or failure.
 
@@ -99,6 +119,12 @@ CLI `2026.10.0` commands passed against both no-warden and upstream Vaultwarden
 HTTP suite also passed all 20 tests, and the standalone restart durability check
 passed. These checks establish the tested personal
 vault lifecycle; they do not establish compatibility with every Bitwarden API.
+
+The personal-import follow-up passed on 2026-10-18: the same 51 official CLI
+commands passed against no-warden and the actual Vaultwarden `1.37.4` binary
+above, including JSON/CSV imports and decryption after discarding the client
+cache. The expanded standalone HTTP suite passed all 27 tests, and imported
+encrypted items and folder links survived the standalone restart check.
 
 `seed-account.mjs` can also register a single explicit test account. Supply
 `BW_E2E_EMAIL`, `BW_E2E_PASSWORD`, and optionally `BW_E2E_SERVER` in the environment.

@@ -40,6 +40,7 @@ pub enum Route<'a> {
     Ciphers,
     CipherCreate,
     CipherCreateWrapped,
+    CipherImport,
     CipherGet(&'a str),
     CipherUpdate(&'a str),
     CipherSoftDelete(&'a str),
@@ -83,6 +84,8 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (Post, "/api/ciphers") => Some(CipherCreate),
         (Post, "/api/ciphers/create") => Some(CipherCreateWrapped),
         (_, "/api/ciphers/create") => None,
+        (Post, "/api/ciphers/import") => Some(CipherImport),
+        (_, "/api/ciphers/import") => None,
         _ => {
             if let Some(tail) = path.strip_prefix("/api/folders/") {
                 if let Some((id, "delete")) = tail.split_once('/') {
@@ -155,7 +158,14 @@ mod tests {
         );
         for method in [Method::Get, Method::Put, Method::Delete] {
             assert_eq!(classify(method, "/api/ciphers/create"), None);
+            assert_eq!(classify(method, "/api/ciphers/import"), None);
         }
+        assert_eq!(
+            classify(Method::Post, "/api/ciphers/import"),
+            Some(Route::CipherImport)
+        );
+        assert!(Route::CipherImport.requires_authentication());
+        assert_eq!(classify(Method::Post, "/api/import-ciphers"), None);
         assert_eq!(
             classify(Method::Post, "/api/ciphers/item-id"),
             Some(Route::CipherUpdate("item-id"))

@@ -131,6 +131,26 @@ try {
   await request(`/api/ciphers/${deleted.id}/delete`, { method: "PUT", token });
   const trashed = await request(`/api/ciphers/${deleted.id}`, { token });
   assert.equal(typeof trashed.deletedDate, "string");
+  const preImport = await request("/api/sync", { token });
+  await request("/api/ciphers/import", {
+    method: "POST", token,
+    body: {
+      folders: [{ id: folder.id, name: account.keys.encryptedPrivateKey }, { name: account.key }],
+      ciphers: [
+        { ...body, encryptedFor: preImport.profile.id, futureProtocolExtension: { imported: true, opaque: '"quoted" \\ café 🔐' } },
+        { type: 2, encryptedFor: preImport.profile.id, name: account.key, notes: account.key, secureNote: { type: 0 } },
+      ],
+      folderRelationships: [{ key: 0, value: 1 }, { key: 1, value: 0 }],
+    },
+  });
+  const postImport = await request("/api/sync", { token });
+  const imported = postImport.ciphers.filter(item => !preImport.ciphers.some(old => old.id === item.id));
+  assert.equal(imported.length, 2, "Both imported items must be present before restart");
+  const importedFolder = postImport.folders.find(candidate => candidate.id !== folder.id);
+  assert(importedFolder, "Import must create its additional folder");
+  assert.equal(imported.find(item => item.type === 1).folderId, importedFolder.id);
+  assert.equal(imported.find(item => item.type === 2).folderId, folder.id);
+  assert.equal(postImport.folders.find(candidate => candidate.id === folder.id).name, folder.name);
   const userKeyId = randomBytes(32).toString("base64");
   await request("/api/accounts/key-management/user-key-id", { method: "POST", token, body: { userKeyId } });
   const before = await request("/api/sync", { token });
@@ -152,6 +172,8 @@ try {
   assert.deepEqual(await request(`/api/ciphers/${active.id}`, { token }), active);
   assert.deepEqual(await request(`/api/ciphers/${trashed.id}`, { token }), trashed);
   assert.deepEqual(await request(`/api/folders/${folder.id}`, { token }), folder);
+  assert.deepEqual(await request(`/api/folders/${importedFolder.id}`, { token }), importedFolder);
+  for (const item of imported) assert.deepEqual(await request(`/api/ciphers/${item.id}`, { token }), item);
   assert.equal(await request("/api/accounts/revision-date", { token }), revision);
   assert.equal(after.profile.privateKey, account.keys.encryptedPrivateKey);
   assert.equal(after.profile.accountKeys.publicKeyEncryptionKeyPair.publicKey, account.keys.publicKey);
@@ -164,7 +186,7 @@ try {
   assert.equal(refreshed.UserDecryptionOptions.UserKeyId, userKeyId);
   assert.deepEqual((await request("/api/sync", { token: refreshed.access_token })).profile, before.profile);
   await stopServer(child);
-  console.log("PASS: graceful restart preserves SQLite account keys, escaped names, owner data, folders, active/trash ciphers, revisions, bearer sessions, and refresh tokens.");
+  console.log("PASS: graceful restart preserves SQLite keys, escaped names, owner data, imported items/folder links, active/trash ciphers, revisions, bearer sessions, and refresh tokens.");
 } finally {
   await Promise.allSettled([...children].map(record => stopServer(record, false)));
   rmSync(directory, { recursive: true, force: true });
