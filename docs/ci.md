@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 330 active Rust tests: 150 core, 118 host, and 62 conformance
+The workspace has 351 active Rust tests: 159 core, 127 host, and 65 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -41,9 +41,9 @@ against Vaultwarden `1.37.4`: 199 requests, including five login attempts (four
 successful and one rejected) and one refresh. They verify known-device headers,
 exact owner-only projections, path guards, login metadata retention, API-key
 registration and refresh identity without changing account/vault state.
-The default adapter job runs all 80 cases, including authentication-request login,
-real-time expiry and modern registration. All 80 cases passed locally with
-3579 counted requests.
+The default adapter job runs all 88 cases, including authentication-request login,
+real-time expiry, modern registration and account security. All 88 cases pass locally
+with 3871 counted requests.
 The eight authentication-request login cases also passed against Vaultwarden
 `1.37.4`: 444 requests per server, including 43 identity requests and a real
 301-second expiry check.
@@ -53,7 +53,7 @@ and authentication/path/JSON guard order. The public clears use the reference
 configuration with push disabled; actual relay behavior remains open.
 Reference comparisons use `--suite personal`, `--suite devices`, and
 `--suite device-tokens`, `--suite auth-requests`, `--suite auth-responses`,
-`--suite auth-login`, and `--suite registration` in separate
+`--suite auth-login`, `--suite registration`, and `--suite account-security` in separate
 fresh disposable Vaultwarden processes. The separate reference CLI comparison starts another fresh process, preserving the
 reference's default ten-login limit.
 The required client job reruns the unchanged 120-command CLI flow for the final
@@ -204,3 +204,13 @@ login budgets under unchanged reference limits; no forwarding headers or clock
 overrides are used. This adds roughly five minutes to the HTTP job. The
 no-allocator consumer links the borrowed convenience decoder and private
 record/context/device types without a secret serializer or clock dependency.
+
+The account-security selection adds eight matching HTTP cases on both actual
+servers: 292 requests each, including nine identity requests, two authentication
+request creations and three public polls. These cover policy/proof/schema
+guards, owner-wide existing-session/device invalidation, preserved API-key and
+auth-request recovery, and renewed stamp projection in profile/sync/JWT. Core and
+host tests independently verify proof/provider ordering, private authority,
+rollback and durable reopen. These HTTP checks add no CLI command or captured
+route trace; the official 120-command regression remains a separate final-head
+requirement.

@@ -73,7 +73,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Provider conflict errors | `Storage::map_error` can preserve an HTTP 409 conflict | Core provider tests |
 
 The allocation-free core's models include login, secure note, card, identity,
-and SSH-key items, plus optional opaque blob data. Its 150 unit tests cover the
+and SSH-key items, plus optional opaque blob data. Its 159 unit tests cover the
 typed fields, bounded collections and import decoding, validation, ownership,
 lifecycle rules, folder mapping, the atomic import and bulk provider contracts,
 API-key proof selection and authorization, and attachment lifecycle and provider
@@ -97,9 +97,9 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 330 active workspace unit tests pass: 150 core, 118 host and 62 support,
+All 351 active workspace unit tests pass: 159 core, 127 host and 65 support,
 plus one ignored support test. They include modern registration, deferred email
-validation and the corrected concurrency fixtures. Clippy with warnings denied
+validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
 doctest, formatting, Clippy with warnings denied, minimum Rust versions,
 no-allocator, bare-metal and embedded consumers. The verified 61 JavaScript HTTP
@@ -474,8 +474,8 @@ corrected servers. That unchanged baseline uses legacy fixture registration and
 adds no modern-registration command or route-trace claim.
 The prior combined local milestone remains 72 cases/3038 requests, including
 the selected eight-case login comparison with 444 requests against each server.
-The expanded default selection contains 80 cases; its final combined result is
-separate. SMTP, invitations/emergency access,
+The registration milestone expanded the default selection to 80 cases; the
+current combined result appears below. SMTP, invitations/emergency access,
 placeholder completion, signup/configuration policy, rate controls,
 notifications, complete header grammar, error envelopes and transport limits
 remain partial. This chunk
@@ -666,3 +666,36 @@ This adapter is a conformance host. It has no deployment hardening, login abuse
 controls, two-factor authentication, administrative account recovery, or schema
 migration policy yet. Keep real vaults in an established service until those
 capabilities and an independent security review are complete.
+
+## Password verification and stamp renewal
+
+The personal password-verification contract accepts a required camelCase-only
+`masterPasswordHash` and returns exactly `{"Object":"masterPasswordPolicy"}`
+when no policy applies. The allocation-free extension also models an externally
+supplied seven-field policy and a server-verifier upgrade callback. The callback
+is separate from client KDF metadata; the current adapter uses current-policy
+verifiers and does not implement stale-verifier migration or organization/SSO
+policy aggregation.
+
+Stamp renewal accepts the shared exclusive password/protected-action OTP proof
+and returns empty 200. The adapter uses private stamp authority, projects it in
+profile/sync/JWT, advances owner revision and atomically removes all owner
+sessions and registered devices. It preserves encrypted vault data, account keys,
+password/API credentials, other owners and pending/approved authentication
+requests. An unused approved request can still grant a new login within its
+original five-minute, same-peer contract. Successful protected-action OTP,
+remembered 2FA and logout notification delivery remain unverified/unsupported by
+the adapter. Its rollback guarantee is stronger than upstream sequential failure
+semantics, which remain partial.
+
+All eight selected Rust HTTP cases pass against the actual adapter and
+Vaultwarden `1.37.4`: 292 counted requests per server, including nine identity
+requests (eight successful grants and one rejected old refresh), two public
+authentication-request creations and three response polls. The selected group
+uses a fresh reference with unchanged rate limits. These direct HTTP checks add
+no official CLI command or captured CLI-route claim.
+
+The expanded default local selection passes all 88 cases with 3871 counted HTTP
+requests, including real authentication-request expiry and modern registration.
+A fresh official Bitwarden CLI `2026.10.0` regression also passes all 120 commands
+against each server. It adds no account-security CLI command or captured route trace.

@@ -21,10 +21,11 @@ use no_warden::{
         DeviceListResponse, DevicePushTokenRequest, DeviceResponse, DomainSettingsRequest,
         DomainSettingsResponse, DomainSettingsUpdateResponse, ImportRequest,
         InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
-        PasswordOrOtpRequest, PreloginRequest, PreloginResponse, ProfileUpdateRequest,
-        RegistrationAuthentication, RegistrationCredentials, RegistrationFinishRequest,
-        RegistrationFinishResponse, RegistrationUnlock, RegistrationVerificationRequest,
-        RegistrationVerificationToken, UserPublicKeyResponse,
+        MasterPasswordPolicy, MasterPasswordPolicyResponse, PasswordOrOtpRequest, PreloginRequest,
+        PreloginResponse, ProfileUpdateRequest, RegistrationAuthentication,
+        RegistrationCredentials, RegistrationFinishRequest, RegistrationFinishResponse,
+        RegistrationUnlock, RegistrationVerificationRequest, RegistrationVerificationToken,
+        SecretVerificationRequest, UserPublicKeyResponse,
     },
 };
 
@@ -115,6 +116,33 @@ pub extern "C" fn _start() -> ! {
     if let Ok((proof, _)) = proof {
         let _ = black_box(proof.proof());
     }
+    let verification = serde_json_core::from_slice::<SecretVerificationRequest<'_>>(black_box(
+        br#"{"masterPasswordHash":"test-only-authorization-hash"}"#,
+    ));
+    black_box(verification);
+    let mut policy_output = [0_u8; 512];
+    for policy in [
+        None,
+        Some(MasterPasswordPolicy {
+            min_complexity: Some(3),
+            min_length: Some(12),
+            require_lower: true,
+            require_upper: true,
+            require_numbers: true,
+            require_special: false,
+            enforce_on_login: true,
+        }),
+    ] {
+        let _ = black_box(serde_json_core::to_slice(
+            &MasterPasswordPolicyResponse { policy },
+            &mut policy_output,
+        ));
+    }
+    black_box(policy_output);
+    black_box(classify(
+        Method::Post,
+        black_box("/api/accounts/security-stamp"),
+    ));
     let credentials = serde_json_core::from_slice::<ClientCredentialsRequest<'_>>(black_box(
         br#"{"grant_type":"client_credentials","client_id":"user.opaque:ID","client_secret":"test-only-key","scope":"api","deviceIdentifier":"device","deviceName":"bare metal","deviceType":"iOS"}"#,
     ));

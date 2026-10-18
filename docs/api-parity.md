@@ -39,23 +39,23 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 78 routed patterns, 43 with typed requests, 66 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 80 routed patterns, 45 with typed requests, 68 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 73 partial and 221 unimplemented. Query/rank/configuration
+status: 77 partial and 217 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
 
-32 local patterns have some typed response representation, including
+35 local patterns have some typed response representation, including
 the domain settings projections and empty mutation response, explicit API-key
 responses, and attachment responses. Bulk cipher lists use the generic `ListResponse`
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 68 patterns, negative
-HTTP evidence for 67, 133 named HTTP cases, and 31 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 72 patterns, negative
+HTTP evidence for 71, 149 named HTTP cases, and 31 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -724,5 +724,36 @@ Official CLI `2026.10.0` separately passed its 120-command baseline against both
 servers. These results establish no CLI registration command or captured route
 trace and do not complete broader registration parity.
 
-The combined local selection passed all 80 cases with 3579 counted HTTP requests,
+The registration milestone combined local selection passed all 80 cases with 3579 counted HTTP requests,
 including the real 301-second authentication-request expiry case.
+
+## Account proof and stamp renewal subset
+
+Two authenticated routes add reusable verification and stamp-renewal services
+through `AccountSecurityStorage`. Verification has a required secret and explicit
+optional policy projection; the personal default preserves upstream's exact
+PascalCase `Object`. Stamp renewal reuses exclusive password/protected-action OTP
+proof selection. The adapter binds both routes to a verified device before JSON
+guards and uses private stamp state in profile, sync and JWT issuance.
+
+The reset transaction advances owner revision and removes owner access/refresh
+sessions and devices while preserving encrypted data, keys, API credentials,
+other accounts and pending/approved authentication requests. The latter can
+still authorize a fresh login under their original deadline, peer and one-use
+checks. SQL tests separately establish rollback, durable reopen and resistance
+to forged stamp fields in account documents. The adapter's atomic rollback is
+stronger than upstream's sequential failure behavior.
+
+Organization/SSO policy aggregation, stale verifier migration, successful
+protected-action OTP, remembered 2FA, notifications, enabled relay behavior and
+complete error/configuration variants remain open. The ledger links both new
+operations as partial; the full API goal remains unfinished.
+
+All eight selected account-security cases pass against both actual servers:
+292 HTTP requests each, including nine identity requests. These comparisons
+exercise existing-bearer and old-refresh rejection, private stamp projections,
+device cleanup, preserved credentials/requests and owner isolation. They add no
+captured CLI-route evidence or full-parity status.
+
+The expanded default local selection passes all 88 cases with 3871 counted HTTP
+requests, including real authentication-request expiry and modern registration.

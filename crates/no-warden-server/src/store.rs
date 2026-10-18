@@ -3,6 +3,7 @@ use no_warden::{
     Storage,
     account_keys::{AccountKeyState, AccountKeyStorage},
     account_profile::AccountProfileStorage,
+    account_security::AccountSecurityStorage,
     auth_login::{AuthRequestLoginRecord, AuthRequestLoginStorage},
     auth_requests::{AuthRequestContext, AuthRequestRecord, AuthRequestStorage},
     auth_responses::AuthRequestResponseStorage,
@@ -201,6 +202,7 @@ impl Store {
             CREATE INDEX IF NOT EXISTS auth_requests_owner_device ON auth_requests(owner,request_device_identifier,creation_date DESC);
             CREATE TABLE IF NOT EXISTS session_devices(access TEXT PRIMARY KEY REFERENCES sessions(access) ON DELETE CASCADE, owner TEXT NOT NULL, identifier TEXT NOT NULL, FOREIGN KEY(owner,identifier) REFERENCES device_registry(owner,identifier) ON DELETE CASCADE);")?;
         db.execute_batch(crate::registration::SCHEMA)?;
+        db.execute_batch(crate::account_security::SCHEMA)?;
         // SQLite inherits the private database mode for new sidecars. Also
         // narrow sidecars left behind by an earlier permissive installation.
         #[cfg(unix)]
@@ -629,6 +631,34 @@ impl CipherBulkStorage for Store {
             bump(&tx, owner, &revision)?;
         }
         tx.commit()
+    }
+}
+
+impl AccountSecurityStorage for Store {
+    fn verify_account_security_proof(
+        &mut self,
+        owner: &str,
+        proof: ReauthenticationProof<'_>,
+    ) -> rusqlite::Result<bool> {
+        self.verify_reauthentication(owner, proof)
+    }
+    fn upgrade_account_password_verifier(
+        &mut self,
+        _owner: &str,
+        _password: &Secret<'_>,
+    ) -> rusqlite::Result<()> {
+        // This adapter creates every verifier with its current Argon2 policy.
+        // Legacy verifier migration is an opt-in embedding-provider concern.
+        Ok(())
+    }
+    fn account_master_password_policy(
+        &mut self,
+        _owner: &str,
+    ) -> rusqlite::Result<Option<no_warden::wire::MasterPasswordPolicy>> {
+        Ok(None)
+    }
+    fn reset_account_security_stamp(&mut self, owner: &str) -> rusqlite::Result<()> {
+        crate::account_security::reset(&mut self.db, owner)
     }
 }
 
@@ -1170,6 +1200,249 @@ impl Storage for Store {
 mod tests {
     use super::*;
 
+    fn account_security_fixture() -> Store {
+        let mut store = auth_request_fixture();
+        let encoded = Argon2::default()
+            .hash_password(
+                b"security-proof\0\xe9\x9b\xaa",
+                &SaltString::generate(&mut OsRng),
+            )
+            .unwrap()
+            .to_string();
+        store
+            .db
+            .execute(
+                "UPDATE accounts SET password=?1 WHERE id='alice'",
+                [encoded],
+            )
+            .unwrap();
+        store
+            .db
+            .execute(
+                "INSERT INTO account_security(owner,stamp) VALUES('bob','foreign-private-stamp')",
+                [],
+            )
+            .unwrap();
+        for owner in ["alice", "bob"] {
+            let access = format!("security-{owner}-access");
+            let refresh = format!("security-{owner}-refresh");
+            store.db.execute("INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES(?1,?2,?3,4000000000,4000000000)",params![crate::digest(&access),crate::digest(&refresh),owner]).unwrap();
+            crate::devices::bind(&store.db, owner, "Request-Device", &access).unwrap();
+            store.db.execute("INSERT INTO device_push_tokens(owner,identifier,token) VALUES(?1,'Request-Device','opaque-private-push')",[owner]).unwrap();
+        }
+        for _ in 0..3 {
+            create_fixture_auth_request(&mut store, "alice@example.test", "Request-Device", 8)
+                .unwrap();
+        }
+        create_fixture_auth_request(&mut store, "bob@example.test", "Request-Device", 8).unwrap();
+        let ids: Vec<String> = store
+            .db
+            .prepare("SELECT id FROM auth_requests WHERE owner='alice' ORDER BY rowid")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        for id in [&ids[1], &ids[2]] {
+            respond_fixture_auth(
+                &mut store,
+                id,
+                "Request-Device",
+                "opaque-key",
+                Some("opaque-hash"),
+                true,
+            )
+            .unwrap();
+        }
+        store
+            .consume_auth_request_login(
+                "alice",
+                &ids[2],
+                crate::auth_requests::unix_nanos(chrono::Utc::now()),
+            )
+            .unwrap();
+        store
+    }
+    fn account_security_snapshot(store: &Store) -> Vec<String> {
+        let mut rows = snapshot(store);
+        rows.extend(account_authority_snapshot(store));
+        rows.extend(device_rows(store));
+        rows.extend(device_push_rows(store));
+        rows.extend(auth_request_rows(store));
+        rows.extend(store.db.prepare("SELECT 'stamp:'||owner||':'||stamp FROM account_security UNION ALL SELECT 'binding:'||access||':'||owner||':'||identifier FROM session_devices ORDER BY 1").unwrap().query_map([],|row|row.get::<_,String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap());
+        rows
+    }
+    fn account_security_reset(store: &mut Store) -> Result<(), no_warden::ApiError> {
+        no_warden::VaultService::new(store).reset_security_stamp(
+            "alice",
+            &no_warden::wire::PasswordOrOtpRequest {
+                master_password_hash: Some(Secret::new("security-proof\0雪")),
+                otp: None,
+            },
+        )
+    }
+    #[test]
+    fn account_security_password_verification_is_exact_and_current_verifier_is_read_only() {
+        let mut store = account_security_fixture();
+        let before = account_security_snapshot(&store);
+        let changes = store.db.total_changes();
+        let response = no_warden::VaultService::new(&mut store)
+            .verify_password(
+                "alice",
+                &no_warden::wire::SecretVerificationRequest {
+                    master_password_hash: Secret::new("security-proof\0雪"),
+                },
+            )
+            .unwrap();
+        assert!(
+            serde_json::to_value(response).unwrap() == json!({"Object":"masterPasswordPolicy"})
+        );
+        for owner in ["alice", "bob", "missing"] {
+            assert!(
+                no_warden::VaultService::new(&mut store)
+                    .verify_password(
+                        owner,
+                        &no_warden::wire::SecretVerificationRequest {
+                            master_password_hash: Secret::new("wrong")
+                        }
+                    )
+                    .is_err()
+            );
+        }
+        assert!(
+            account_security_snapshot(&store) == before && store.db.total_changes() == changes,
+            "Password verification mutated current account state."
+        );
+    }
+    #[test]
+    fn account_security_reset_revokes_only_owner_devices_and_preserves_credentials_vault_and_requests()
+     {
+        let mut store = account_security_fixture();
+        assert!(crate::account_security::stamp(&store.db, "alice").unwrap() == "alice");
+        let account = store.account("id", "alice").unwrap().unwrap();
+        let bob = store.account("id", "bob").unwrap().unwrap();
+        let before = snapshot(&store);
+        let authority = account_authority_snapshot(&store);
+        let requests = auth_request_rows(&store);
+        let foreign_devices: Vec<_> = device_rows(&store)
+            .into_iter()
+            .filter(|row| row.starts_with("bob:"))
+            .collect();
+        let foreign_push: Vec<_> = device_push_rows(&store)
+            .into_iter()
+            .filter(|row| row.starts_with("bob:"))
+            .collect();
+        account_security_reset(&mut store).unwrap();
+        let stamp = crate::account_security::stamp(&store.db, "alice").unwrap();
+        assert!(
+            uuid::Uuid::parse_str(&stamp).is_ok() && stamp != "alice" && stamp != "preserved-stamp"
+        );
+        let mut after = store.account("id", "alice").unwrap().unwrap();
+        assert!(after["revisionDate"] != account["revisionDate"]);
+        after["revisionDate"] = account["revisionDate"].clone();
+        assert!(after == account && store.account("id", "bob").unwrap().unwrap() == bob);
+        let retained_before: Vec<_> = before
+            .into_iter()
+            .filter(|row| !row.starts_with("account:alice:"))
+            .collect();
+        let retained_after: Vec<_> = snapshot(&store)
+            .into_iter()
+            .filter(|row| !row.starts_with("account:alice:"))
+            .collect();
+        assert!(retained_before == retained_after);
+        let credentials_before: Vec<_> = authority
+            .into_iter()
+            .filter(|row| !row.starts_with("session:"))
+            .collect();
+        let credentials_after: Vec<_> = account_authority_snapshot(&store)
+            .into_iter()
+            .filter(|row| !row.starts_with("session:"))
+            .collect();
+        assert!(credentials_before == credentials_after && auth_request_rows(&store) == requests);
+        assert!(
+            device_rows(&store) == foreign_devices
+                && device_push_rows(&store) == foreign_push
+                && crate::account_security::stamp(&store.db, "bob").unwrap()
+                    == "foreign-private-stamp"
+        );
+        for table in [
+            "sessions",
+            "session_devices",
+            "device_registry",
+            "device_push_tokens",
+        ] {
+            let sql = format!("SELECT COUNT(*) FROM {table} WHERE owner='alice'");
+            let count: i64 = store.db.query_row(&sql, [], |row| row.get(0)).unwrap();
+            assert_eq!(count, 0);
+        }
+        let foreign_sessions: i64 = store
+            .db
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE owner='bob'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(foreign_sessions, 1);
+        assert!(crate::protocol::profile(&account, &stamp)["securityStamp"] == stamp);
+    }
+    #[test]
+    fn account_security_reset_rolls_back_every_mutation_and_deferred_commit_failure() {
+        for phase in 0..7 {
+            let mut store = account_security_fixture();
+            store.db.execute("INSERT INTO account_security(owner,stamp) VALUES('alice','prior-private-stamp')",[]).unwrap();
+            let before = account_security_snapshot(&store);
+            store.db.execute_batch(match phase {
+                0=>"CREATE TRIGGER fail_security BEFORE INSERT ON account_security BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                1=>"CREATE TRIGGER fail_security BEFORE UPDATE OF stamp ON account_security BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                2=>"CREATE TRIGGER fail_security BEFORE UPDATE OF revision ON accounts BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                3=>"CREATE TRIGGER fail_security BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                4=>"CREATE TRIGGER fail_security BEFORE DELETE ON device_registry BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                5=>"CREATE TRIGGER fail_security AFTER DELETE ON device_registry BEGIN SELECT RAISE(FAIL,'fixture'); END;",
+                _=>"CREATE TABLE failed_security_commit(owner TEXT REFERENCES accounts(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_security AFTER DELETE ON device_registry BEGIN INSERT INTO failed_security_commit(owner) VALUES('missing'); END;",
+            }).unwrap();
+            assert!(account_security_reset(&mut store).is_err());
+            assert!(
+                account_security_snapshot(&store) == before,
+                "Security reset failure escaped its savepoint."
+            );
+            store
+                .db
+                .execute_batch("DROP TRIGGER fail_security")
+                .unwrap();
+            assert!(account_security_reset(&mut store).is_ok());
+        }
+    }
+    #[test]
+    fn account_security_private_stamp_and_revocation_survive_reopen_and_renew_again() {
+        let directory = std::env::temp_dir().join(format!(
+            "no-warden-account-security-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("vault.sqlite");
+        let mut store = account_security_fixture();
+        account_security_reset(&mut store).unwrap();
+        let stamp = crate::account_security::stamp(&store.db, "alice").unwrap();
+        let rows = account_security_snapshot(&store);
+        store
+            .db
+            .execute("VACUUM INTO ?1", [path.to_str().unwrap()])
+            .unwrap();
+        drop(store);
+        let mut reopened = Store::open(path.to_str().unwrap()).unwrap();
+        assert!(
+            account_security_snapshot(&reopened) == rows
+                && crate::account_security::stamp(&reopened.db, "alice").unwrap() == stamp
+        );
+        account_security_reset(&mut reopened).unwrap();
+        assert!(crate::account_security::stamp(&reopened.db, "alice").unwrap() != stamp);
+        let requests = auth_request_rows(&reopened);
+        assert!(!requests.is_empty());
+        drop(reopened);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     fn modern_token(store: &mut Store, email: &str, name: Option<&str>) -> String {
         store.registration_issuer =
             crate::registration::issuer("https://ORIGIN.example.test:443/path")
@@ -1311,7 +1584,10 @@ mod tests {
         let mut after_authority = account_authority_snapshot(&store);
         after_authority.retain(|row| !row.starts_with(&format!("password:{id}:")));
         assert!(after == before && after_authority == authority && device_rows(&store) == devices);
-        let profile = crate::protocol::profile(&account);
+        let profile = crate::protocol::profile(
+            &account,
+            &crate::account_security::stamp(&store.db, id).unwrap(),
+        );
         assert!(profile["emailVerified"] == true && profile["name"] == "NUL\0claim 雪");
         let projected = crate::protocol::prelogin(&account, false);
         assert!(projected["kdf"] == -7 && projected["kdfIterations"] == -8);
@@ -3383,7 +3659,8 @@ mod tests {
             Storage::insert_account(&mut store, "new-account", &request).unwrap();
             let saved = store.account("id", "new-account").unwrap().unwrap();
             assert!(saved["avatarColor"].is_null());
-            assert!(crate::protocol::profile(&saved)["avatarColor"].is_null());
+            let stamp = crate::account_security::stamp(&store.db, "new-account").unwrap();
+            assert!(crate::protocol::profile(&saved, &stamp)["avatarColor"].is_null());
             assert!(saved["futureRegistrationField"] == document["futureRegistrationField"]);
             assert!(saved["name"] == document["name"]);
             assert!(saved.get("_password").is_none());
@@ -3420,7 +3697,8 @@ mod tests {
                 saved == expected,
                 "Profile metadata changed across database reopen."
             );
-            let profile = crate::protocol::profile(&saved);
+            let stamp = crate::account_security::stamp(&store.db, "alice").unwrap();
+            let profile = crate::protocol::profile(&saved, &stamp);
             assert!(profile["name"] == "");
             assert!(profile["avatarColor"] == "éabcde");
         }

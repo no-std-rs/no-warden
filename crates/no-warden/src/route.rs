@@ -31,6 +31,8 @@ pub enum Route<'a> {
     RegistrationFinish,
     AccountApiKey,
     AccountRotateApiKey,
+    AccountVerifyPassword,
+    AccountSecurityStamp,
     AccountKeysGet,
     AccountKeysInitialize,
     UserPublicKey(&'a str),
@@ -131,6 +133,8 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (Post, "/identity/accounts/register/finish") => Some(RegistrationFinish),
         (Post, "/api/accounts/api-key") => Some(AccountApiKey),
         (Post, "/api/accounts/rotate-api-key") => Some(AccountRotateApiKey),
+        (Post, "/api/accounts/verify-password") => Some(AccountVerifyPassword),
+        (Post, "/api/accounts/security-stamp") => Some(AccountSecurityStamp),
         (Get, "/api/accounts/keys") => Some(AccountKeysGet),
         (Post, "/api/accounts/keys") => Some(AccountKeysInitialize),
         (Get, "/api/accounts/profile") => Some(Profile),
@@ -518,6 +522,16 @@ mod tests {
                 Route::ProfileUpdate,
             ),
             (Method::Put, "/api/accounts/avatar", Route::AvatarUpdate),
+            (
+                Method::Post,
+                "/api/accounts/verify-password/?future=true",
+                Route::AccountVerifyPassword,
+            ),
+            (
+                Method::Post,
+                "/api/accounts/security-stamp",
+                Route::AccountSecurityStamp,
+            ),
         ] {
             assert_eq!(classify(method, path), Some(expected));
             assert!(expected.requires_authentication());
@@ -531,6 +545,14 @@ mod tests {
         }
         for method in [Method::Get, Method::Post, Method::Delete, Method::Options] {
             assert!(classify(method, "/api/accounts/avatar").is_none());
+        }
+        for path in [
+            "/api/accounts/verify-password",
+            "/api/accounts/security-stamp",
+        ] {
+            for method in [Method::Get, Method::Put, Method::Delete, Method::Options] {
+                assert!(classify(method, path).is_none());
+            }
         }
         for path in [
             "/api/accounts/profile/unknown",
