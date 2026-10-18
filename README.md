@@ -14,5 +14,16 @@ verification, and transport. The standalone adapter demonstrates those boundarie
 Development proceeds in reviewable pull requests with Rust checks, real-client
 integration tests, and Codex review. See [ROADMAP.md](ROADMAP.md).
 
+```sh
+cargo test --workspace
+cargo build --manifest-path checks/no-alloc/Cargo.toml \
+  --target riscv32imac-unknown-none-elf
+```
+
+The library lives in [`crates/no-warden`](crates/no-warden). Its `VaultService`
+accepts a caller-provided `Storage` implementation; borrowed request models and
+bounded collections require no allocator. See [architecture](docs/architecture.md)
+and [CI and review](docs/ci.md).
+
 Licensed under MIT OR Apache-2.0. This is an independent project and is not
 affiliated with Bitwarden or Vaultwarden.
