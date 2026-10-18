@@ -15,6 +15,29 @@ Development proceeds in reviewable pull requests with Rust checks, real-client
 integration tests, and Codex review. See [ROADMAP.md](ROADMAP.md).
 
 ```sh
+cargo run -p no-warden-server --release
+```
+
+The server listens on `127.0.0.1:8000` and persists encrypted vaults in
+`no-warden.db`. Set `NO_WARDEN_DB`, `NO_WARDEN_BIND`, and `NO_WARDEN_URL` to change
+the database, listener, and externally advertised URL. Current clients require
+HTTPS; use a trusted TLS reverse proxy for manual client connections.
+
+In another terminal, run the actual client and authorization checks:
+
+```sh
+npm ci --prefix tools
+bash tools/e2e.sh
+node --test tools/server-tests.mjs
+```
+
+The suite runs the pinned official Bitwarden CLI `2026.10.0`, creates disposable
+accounts, and provides trusted loopback TLS automatically. It uses its own CLI
+cache and never opens your existing vault. See [test tools](tools/README.md).
+
+For the Rust checks and the separate bare-metal consumer:
+
+```sh
 cargo test --workspace
 cargo build --manifest-path checks/no-alloc/Cargo.toml \
   --target riscv32imac-unknown-none-elf
@@ -24,6 +47,20 @@ The library lives in [`crates/no-warden`](crates/no-warden). Its `VaultService`
 accepts a caller-provided `Storage` implementation; borrowed request models and
 bounded collections require no allocator. See [architecture](docs/architecture.md)
 and [CI and review](docs/ci.md).
+
+Use the core from another application:
+
+```toml
+[dependencies]
+no-warden = { git = "https://github.com/no-std-rs/no-warden" }
+```
+
+Supported personal-vault operations include registration, PBKDF2/Argon2 KDF
+discovery, password authentication, refresh rotation, profile and sync, folders,
+encrypted ciphers, trash and restore. Organizations, sharing, attachments,
+Sends, notifications and the remaining account APIs are tracked in the roadmap.
+The local conformance adapter needs further hardening before production use.
+See the [verified compatibility matrix](docs/compatibility.md) for exact scope.
 
 Licensed under MIT OR Apache-2.0. This is an independent project and is not
 affiliated with Bitwarden or Vaultwarden.

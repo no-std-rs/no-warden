@@ -30,3 +30,33 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup toolchain install 1.85.0 --profile minimal
       - run: cargo +1.85.0 check -p no-warden --lib --locked
+      - run: rustup toolchain install 1.89.0 --profile minimal
+      - run: cargo +1.89.0 check -p no-warden-server --locked
+  bitwarden-cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: tools/package-lock.json
+      - run: rustup update stable --no-self-update
+      - run: rustup default stable
+      - run: npm ci --prefix tools
+      - run: cargo build -p no-warden-server --locked
+      - name: Real client and authorization checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          NO_WARDEN_DB="$RUNNER_TEMP/no-warden.db" target/debug/no-warden-server > "$RUNNER_TEMP/no-warden.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true; cat "$RUNNER_TEMP/no-warden.log"' EXIT
+          for attempt in $(seq 1 100); do
+            if curl -fsS http://127.0.0.1:8000/health >/dev/null; then break; fi
+            sleep 0.1
+          done
+          curl -fsS http://127.0.0.1:8000/health
+          node --test tools/server-tests.mjs
+          node tools/persistence.mjs
+          bash tools/e2e.sh
