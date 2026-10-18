@@ -41,6 +41,8 @@ pub enum Route<'a> {
     AuthRequestCreate,
     AuthRequests,
     AuthRequestGet(&'a str),
+    AuthRequestUpdate(&'a str),
+    AuthRequestResponse(&'a str),
     Sync,
     KnownDevice,
     Devices,
@@ -90,6 +92,7 @@ impl Route<'_> {
                 | Self::Register
                 | Self::Token
                 | Self::AuthRequestCreate
+                | Self::AuthRequestResponse(_)
                 | Self::KnownDevice
                 | Self::DevicePushClear(_)
                 | Self::AttachmentDownload(_, _)
@@ -161,9 +164,19 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         ) => None,
         _ => {
             if let Some(id) = path.strip_prefix("/api/auth-requests/") {
-                // UUID decoding/validation belongs to the authenticated adapter guard.
-                return (method == Get && !id.is_empty() && !id.contains('/'))
-                    .then_some(AuthRequestGet(id));
+                // UUID/query guards belong to the adapter, with route-specific authentication.
+                if let Some((id, action)) = id.split_once('/') {
+                    return (method == Get && !id.is_empty() && action == "response")
+                        .then_some(AuthRequestResponse(id));
+                }
+                if id.is_empty() {
+                    return None;
+                }
+                return match method {
+                    Get => Some(AuthRequestGet(id)),
+                    Put => Some(AuthRequestUpdate(id)),
+                    _ => None,
+                };
             }
             if let Some(identifier) = path.strip_prefix("/api/devices/identifier/") {
                 // The adapter percent-decodes and applies upstream IdFromParam.
@@ -272,6 +285,58 @@ fn valid_segment(segment: &str) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn auth_request_decisions_and_public_code_responses_preserve_route_specific_guards() {
+        for (method, path, expected, authenticated) in [
+            (
+                Method::Put,
+                "/api/auth-requests/Mixed-Case",
+                Route::AuthRequestUpdate("Mixed-Case"),
+                true,
+            ),
+            (
+                Method::Put,
+                "/api/auth-requests/invalid%2Fid",
+                Route::AuthRequestUpdate("invalid%2Fid"),
+                true,
+            ),
+            (
+                Method::Put,
+                "/api/auth-requests/pending",
+                Route::AuthRequestUpdate("pending"),
+                true,
+            ),
+            (
+                Method::Get,
+                "/api/auth-requests/Mixed-Case/response/?code=opaque%2Bcode",
+                Route::AuthRequestResponse("Mixed-Case"),
+                false,
+            ),
+            (
+                Method::Get,
+                "/api/auth-requests/id/response",
+                Route::AuthRequestResponse("id"),
+                false,
+            ),
+        ] {
+            assert_eq!(classify(method, path), Some(expected));
+            assert_eq!(expected.requires_authentication(), authenticated);
+        }
+        for method in [Method::Post, Method::Put, Method::Delete, Method::Options] {
+            assert!(classify(method, "/api/auth-requests/id/response?code=x").is_none());
+        }
+        for method in [Method::Post, Method::Delete, Method::Options] {
+            assert!(classify(method, "/api/auth-requests/id").is_none());
+        }
+        for path in [
+            "/api/auth-requests//response",
+            "/api/auth-requests/id/response/extra",
+            "/api/auth-requests/id/unknown",
+        ] {
+            assert!(classify(Method::Get, path).is_none());
+        }
+    }
+
+    #[test]
     fn auth_request_creation_and_discovery_routes_keep_public_and_authenticated_guards_distinct() {
         for (method, path, expected, authenticated) in [
             (
@@ -304,18 +369,14 @@ mod tests {
             assert_eq!(expected.requires_authentication(), authenticated);
         }
         for path in ["/api/auth-requests/pending", "/api/auth-requests/id"] {
-            for method in [Method::Post, Method::Put, Method::Delete, Method::Options] {
+            for method in [Method::Post, Method::Delete, Method::Options] {
                 assert!(classify(method, path).is_none());
             }
         }
         for method in [Method::Put, Method::Delete, Method::Options] {
             assert!(classify(method, "/api/auth-requests").is_none());
         }
-        for path in [
-            "/api/auth-requests//",
-            "/api/auth-requests/id/response",
-            "/api/auth-requests/id/extra",
-        ] {
+        for path in ["/api/auth-requests//", "/api/auth-requests/id/extra"] {
             assert!(classify(Method::Get, path).is_none());
         }
     }

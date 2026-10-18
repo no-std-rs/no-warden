@@ -307,7 +307,7 @@ projection: pending authentication metadata and two null encrypted-key fields.
 `PendingDeviceAuthRequest` models only its ID and creation date. The standalone
 provider projects the latest pending request for the exact owner and requesting
 device, or null when none exists. The two encrypted-key fields remain null.
-Approval and login workflows remain separate.
+Approval decisions update this pending view; auth-request login remains separate.
 
 The standalone adapter keeps the registry in its own SQLite table keyed by
 `(owner, identifier)`. Account-document extensions and registration extras do not
@@ -325,9 +325,9 @@ atomically touches the registered device, rotates refresh authority, and binds
 the new session to the same owner and identifier. Existing access tokens retain
 their original expiry. Older sessions without binding rows remain usable and
 refresh without inventing a device; no legacy registry backfill is implemented.
-Registry and binding records survive private-database reopen. Device approval,
-auth-request response/login and expiry cleanup, device removal and notification
-delivery remain separate tracked work.
+Registry and binding records survive private-database reopen. Auth-request login
+and expiry cleanup, device removal and notification delivery remain separate
+tracked work.
 
 `DevicePushStorage` is a separate opt-in provider for push-token ordering.
 `DevicePushTokenRequest` borrows its opaque string, decodes/serializes without an
@@ -394,6 +394,43 @@ IP-equivalence test. Vaultwarden can honor configured `X-Real-IP` from trusted
 proxies, including local peers under its defaults. That forwarded-IP policy is
 not implemented here. The canonical origin derived from the configured URL,
 without its path, does match upstream. Authenticated auth-request reads require
-a verified session-device binding before UUID path validation; existing unbound sessions keep their older
-API behavior. Notifications/events, approval/public response polling, auth-request
-login, expiry jobs, proxy policy and public abuse controls remain open.
+a verified session-device binding before UUID path validation; existing unbound
+sessions keep their older API behavior. Auth-request login, notifications/events, expiry jobs, proxy policy
+and public abuse controls remain open.
+
+`AuthRequestResponseStorage` extends `AuthRequestStorage` with decisions and
+code-verified reads, without adding crypto or persistence to the core. The
+borrowed `AuthRequestUpdateRequest` carries the exact response device identifier,
+key, optional hash and boolean decision. The service checks owner/request state,
+compares the body device to the verified session device, and rejects any already
+answered request before calling the provider. The adapter keeps session, UUID
+and owned-JSON guards in that order.
+
+Approval atomically saves the key, exact optional hash, `approved: Some(true)`,
+response device ID and fresh response date. Rejection deletes the pending row and
+returns an adapter-owned cached snapshot of its prior fields with a fresh
+response date; it does not save `Some(false)` or use the rejected body's key/hash.
+Both operations preserve account revisions, device activity, credentials,
+sessions, vault data and foreign requests. A savepoint covers update/delete and
+any triggered writes. No fallible database read is needed after commit. Tests
+cover late-write/deferred-commit rollback and durable approval/deletion on reopen.
+
+Public response polling requires an exact access code, original raw device type
+and recorded IP, and can read pending or approved requests repeatedly without
+consumption. The core accepts a redacted `Secret`; its provider verifies codes.
+The host computes fixed-size HMAC-SHA256 fingerprints with a public domain
+separator and compares them through `Mac::verify_slice`, avoiding plaintext
+prefix or length equality checks. The tags are not stored or exposed. Missing
+records and code/type/IP mismatches have the same public 400 error. UUID and
+required query guards run first; absent `code` returns 422.
+
+Polling uses the documented direct-peer IP policy and ignores bearer credentials
+and forwarding headers. The required query follows Rocket's first matching name
+root, including scalar dotted/bracketed suffixes; form decoding converts `+` to
+space and `%2B` to plus exactly once. The operation neither grants a session nor
+consumes a request for login. Eight focused HTTP cases pass against the adapter
+and Vaultwarden `1.37.4`: 322 requests and four successful logins per server.
+The combined local HTTP run passes all 64 cases and 2594 requests. Current
+client regression status is recorded in [verified compatibility](compatibility.md).
+Login, notifications/events, expiry jobs, proxy parity and public rate controls
+remain open.

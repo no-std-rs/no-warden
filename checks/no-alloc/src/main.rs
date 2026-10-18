@@ -14,12 +14,12 @@ use no_warden::{
     wire::{
         AccountKeys, AccountKeysResponse, ApiKeyResponse, AttachmentRequest, AttachmentResponse,
         AttachmentUploadResponse, AuthRequestCreateRequest, AuthRequestListResponse,
-        AuthRequestResponse, AvatarUpdateRequest, CipherIdsRequest, CipherRequest,
-        ClientCredentialsRequest, DeviceListResponse, DevicePushTokenRequest, DeviceResponse,
-        DomainSettingsRequest, DomainSettingsResponse, DomainSettingsUpdateResponse, ImportRequest,
-        InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
-        PasswordOrOtpRequest, PreloginRequest, PreloginResponse, ProfileUpdateRequest,
-        UserPublicKeyResponse,
+        AuthRequestResponse, AuthRequestUpdateRequest, AvatarUpdateRequest, CipherIdsRequest,
+        CipherRequest, ClientCredentialsRequest, DeviceListResponse, DevicePushTokenRequest,
+        DeviceResponse, DomainSettingsRequest, DomainSettingsResponse,
+        DomainSettingsUpdateResponse, ImportRequest, InitializedAccountKeysResponse,
+        KnownDeviceRequest, KnownDeviceResponse, PasswordOrOtpRequest, PreloginRequest,
+        PreloginResponse, ProfileUpdateRequest, UserPublicKeyResponse,
     },
 };
 
@@ -196,6 +196,22 @@ pub extern "C" fn _start() -> ! {
     if let Ok((auth, _)) = auth {
         let _ = black_box(serde_json_core::to_slice(&auth, &mut auth_output));
     }
+    let approval = serde_json_core::from_slice::<AuthRequestUpdateRequest<'_>>(black_box(
+        br#"{"deviceIdentifier":"embedded-response-device","key":"opaque-wrapped-key","masterPasswordHash":null,"requestApproved":true}"#,
+    ));
+    if let Ok((approval, _)) = approval {
+        let _ = black_box(serde_json_core::to_slice(&approval, &mut auth_output));
+    }
+    let poll_code = Secret::new(black_box("caller-supplied-test-code"));
+    black_box(poll_code.expose_secret());
+    black_box(classify(
+        Method::Put,
+        black_box("/api/auth-requests/request-id"),
+    ));
+    black_box(classify(
+        Method::Get,
+        black_box("/api/auth-requests/request-id/response?code=caller-supplied-test-code"),
+    ));
     let auth_context = AuthRequestContext {
         device_type: 25,
         request_ip: "127.0.0.1",
@@ -216,6 +232,24 @@ pub extern "C" fn _start() -> ! {
         creation_date: "2026-01-01T00:00:00Z",
         response_date: None,
     };
+    for state in [
+        AuthRequestRecord {
+            key: Some("opaque-wrapped-key"),
+            master_password_hash: Some("opaque-master-password-hash"),
+            approved: Some(true),
+            response_date: Some("2026-01-01T00:01:00Z"),
+            ..auth_record
+        },
+        AuthRequestRecord {
+            response_date: Some("2026-01-01T00:01:00Z"),
+            ..auth_record
+        },
+    ] {
+        let _ = black_box(serde_json_core::to_slice(
+            &AuthRequestResponse::stored(black_box(state), auth_context.origin),
+            &mut auth_output,
+        ));
+    }
     let _ = black_box(serde_json_core::to_slice(
         &AuthRequestResponse::created(black_box(auth_record), auth_context.origin),
         &mut auth_output,

@@ -263,9 +263,8 @@ regardless of device metadata supplied in the refresh form.
 The allocation-free core exposes `DeviceStorage`, borrowed header input, and
 explicit boolean/list/single response projections. The standalone adapter owns
 the persistent registry, session binding and `device` JWT claim. Legacy sessions
-without bindings remain valid and are not backfilled. Approval, auth-request
-response/login, device removal, notification behavior and broader device
-management remain unimplemented. The direct HTTP comparison establishes only
+without bindings remain valid and are not backfilled. Auth-request login, device
+removal, notification behavior and broader device management remain unimplemented. The direct HTTP comparison establishes only
 this discovery/login-binding contract, with no CLI device-route trace claim.
 
 ## Device push tokens
@@ -380,9 +379,61 @@ decoded creation attempts below the unchanged upstream public burst of 50. The
 suite includes a NUL/Unicode/non-UUID device identifier. Host tests separately
 verify hidden activity/state preservation, rollback, durable private storage and
 peer metadata; response projections alone do not establish those properties.
-Approval, public response polling, auth-request login, notifications/events,
-expiry cleanup, trusted proxy policy and local rate controls remain open. No
+Auth-request login, notifications/events, expiry cleanup, trusted proxy policy
+and local rate controls remain open. No
 CLI auth-request route claim or complete authentication parity is established.
+
+## Auth-request approval and response polling
+
+The [pinned decision and polling handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1745-L1861)
+add two routes without granting an auth-request login:
+
+| Method and route | Contract |
+| --- | --- |
+| `PUT /api/auth-requests/<id>` | Authenticated owner decision; JSON device must match the verified session device |
+| `GET /api/auth-requests/<id>/response?code=...` | Public code/type/IP-protected read; bearer ignored |
+
+The PUT body requires string `deviceIdentifier`, string `key`, boolean
+`requestApproved`, and optional nullable string `masterPasswordHash`. Positional
+order is device, key, hash, decision; `["device","key",null,true]` is valid.
+Strings stay opaque, including empty/control/Unicode values. Missing/wrong-typed
+known fields and duplicate known fields return 422; syntax and surplus positional
+elements return 400. Unknown fields are ignored. Authentication/session binding
+precedes UUID validation, which precedes JSON decoding. A foreign/missing request,
+a mismatched body device or an already-answered request rejects before mutation.
+
+True decisions save `approved: true`, the supplied key/hash, the response device
+and fresh response time. False decisions delete the pending record. Their
+response still contains its old key/hash and null approval, with a fresh
+`responseDate`; the rejected body's key/hash are ignored. Responses retain the
+same eleven-field projection. Pending-list and device metadata remove a decided
+request, exposing an older pending request when one exists. Both actions preserve
+account revision, device activity, sessions, vault and unrelated requests.
+
+Public polling first applies UUID and required `code` query guards. A missing
+query field returns 422; empty and bare `code` reach verification. The first
+matching case-sensitive `code` root wins, including dotted/bracketed scalar forms.
+Form decoding changes literal `+` to space, `%2B` to plus, and percent-decodes once
+with lossy UTF-8 handling. A wrong code, original raw `device-type`, recorded IP,
+or missing record returns the same opaque 400 error. Code verification belongs
+to the provider and uses constant-time fixed-size HMAC tag verification in the
+host. Pending and approved records can be polled repeatedly, with no consumption
+or implicit expiry. Rejected records are gone and return 400.
+
+The optional device-type fallback and direct-peer/forwarding-header limitation
+are unchanged. Canonical configured origin remains the response origin. The
+no-allocation core exposes `AuthRequestResponseStorage` and borrowed update data;
+clocks, code verification, storage and HTTP/query guards remain adapter duties.
+Host tests cover rejection snapshots, constant-time primitive usage, wrong proofs,
+rollback and reopen. All eight selected HTTP cases pass against the adapter and
+official Vaultwarden `1.37.4`: 322 counted requests and four successful logins
+per server. Eleven creates and 33 guard-valid polls produce 44 admitted public
+attempts; six additional query/path guard rejections do not reach the handler
+rate limiter. The reference retains its public burst of 50. The combined local
+HTTP run passes all 64 cases and 2594 requests. Current client regression status
+is recorded in [verified compatibility](compatibility.md). Notifications/events,
+auth-request login, expiry cleanup, trusted proxy policy and local rate controls
+remain open; this is not full auth parity.
 
 ## Profile, account keys, and synchronization
 
@@ -587,7 +638,7 @@ refresh expiry, cross-account IDs, stale revisions, oversized input, and
 persistence without plaintext vault data remain ongoing regression requirements.
 
 Browser/mobile clients, organizations, attachments, Send, two-factor login,
-device approval, SSO, passkey authentication, key rotation, push notifications,
+auth-request login/device trust, SSO, passkey authentication, key rotation, push notifications,
 and recovery need separate implementation and actual-client evidence. A passing personal
 CLI test must not be described as complete Bitwarden or Vaultwarden parity.
 

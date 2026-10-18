@@ -49,6 +49,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | `GET /api/devices/knowndevice`, `GET /api/devices`, `GET /api/devices/identifier/<id>` | Public exact header lookup, authenticated owner-only device projections, verified-login registry and refresh binding | Eight matching Rust HTTP cases against both servers; core/provider and host rollback/reopen tests; no CLI device-route trace claim |
 | `POST`/`PUT /api/devices/identifier/<id>/token` and `/clear-token` | Bound-session token writes and disabled-relay public no-op clears, with empty 200 responses | Core/provider and host rollback/reopen tests; eight matching Rust HTTP cases and a separate private read-only stored-state probe on both servers; no CLI route attribution |
 | `POST /api/auth-requests`, owner GET, base/pending list aliases | Public known-device creation, eleven-field projections, owner-only pending discovery and latest device pending metadata | Eight matching Rust HTTP cases on both servers; core/provider and host rollback/reopen/peer tests; no CLI auth-request route claim |
+| `PUT /api/auth-requests/<id>`, public `GET /api/auth-requests/<id>/response` | Verified-session approval/rejection and exact code/type/IP response polling, without login consumption | Core/provider and host tests; eight matching HTTP cases on both actual servers; no new client-route claim |
 | Folder CRUD and POST aliases | Opaque names, four-field responses, owner isolation, clear references without changing cipher revisions | CLI baseline; core/host tests and the focused HTTP comparison described below |
 | Cipher CRUD | Opaque ciphertext and unknown JSON fields | CLI, HTTP, storage tests |
 | Personal v2 attachment reservation and multipart upload | Opaque encrypted metadata and bytes; declared/measured size checks | Core, real CLI on both servers, matching HTTP |
@@ -70,7 +71,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Provider conflict errors | `Storage::map_error` can preserve an HTTP 409 conflict | Core provider tests |
 
 The allocation-free core's models include login, secure note, card, identity,
-and SSH-key items, plus optional opaque blob data. Its 117 unit tests cover the
+and SSH-key items, plus optional opaque blob data. Its 126 unit tests cover the
 typed fields, bounded collections and import decoding, validation, ownership,
 lifecycle rules, folder mapping, the atomic import and bulk provider contracts,
 API-key proof selection and authorization, and attachment lifecycle and provider
@@ -93,9 +94,12 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 81 Rust host tests pass and cover storage and transport rules. The host-only
-Rust conformance crate adds 52 unit tests. All 250 workspace unit tests, the core
-doctest, formatting, Clippy, minimum-Rust-version and bare-metal checks pass.
+All 92 Rust host tests pass and cover storage and transport rules. The current
+workspace passes 274 active unit tests: 126 core, 92 host and 56 support tests;
+one additional test is ignored. Its core doctest, formatting, Clippy with warnings
+denied, minimum-Rust-version, no-allocator, bare-metal and embedded-consumer
+checks pass. The 61 JavaScript HTTP checks and restart-persistence regression
+also pass against the updated adapter.
 These establish wire preservation and authorization for the new shapes,
 aliases, and personal imports independently of the CLI evidence.
 They do not prove that a real client can decrypt a blob or use stored passkey
@@ -137,9 +141,8 @@ The selected `--suite personal` run combines folder, account-key, profile/avatar
 and domain checks: all 32 cases pass against each server, with 1417 counted
 requests and nine password logins, excluding fixture registrations. Its full
 91-entry catalog matches the ordered public reference fingerprint. The verified
-120-command CLI baseline remains separate client evidence; required CI reruns it
-for the auth-request changes. No CLI domain mutation or direct settings request is
-attributed to that result.
+120-command CLI baseline remains separate client evidence. No CLI domain mutation
+or direct settings request is attributed to that result.
 
 The selected `--suite devices` run passes all eight cases against the adapter and
 official Vaultwarden `1.37.4`: 199 counted HTTP requests per server, including
@@ -147,10 +150,11 @@ six identity requests. Those comprise five login attempts (four successful and
 one rejected password) and one refresh. The reference `personal` and `devices`
 runs use separate fresh processes with unchanged upstream login rate limits;
 their combined login attempts would exceed the reference's ten-request login
-burst. The current local `--suite all` run passes all 56 cases and 2272 counted
-HTTP requests. Reference comparisons select `personal`, `devices`, `device-tokens` and
-`auth-requests` in separate fresh processes; no combined 56-case reference run
-is claimed. Fixture registration requests are outside the counted suite requests.
+burst. The prior local `--suite all` subtotal passed 56 cases and 2272 counted
+HTTP requests. The expanded local run now passes all 64 cases and 2594 counted
+requests. Reference comparisons select `personal`, `devices`, `device-tokens`,
+`auth-requests` and `auth-responses` in separate fresh processes; no combined
+64-case reference run is claimed. Fixture registration requests are outside the counted suite requests.
 
 The device comparison verifies public known-device headers, trailing-padding
 removal, strict base64url and UTF-8 handling, email lowercasing without trimming,
@@ -169,16 +173,15 @@ results do not establish CLI device-route traces or full device-management parit
 boolean/list/single serializers. `KnownDeviceRequest` is borrowed header input,
 without JSON serialization/deserialization traits. The two-field pending model
 now projects the latest pending request from the separate auth-request provider;
-approval and login remain open. Dedicated registry and per-session binding
+approval decisions change that view, while auth-request login remains open. Dedicated registry and per-session binding
 tables ignore account-document device extras. Host tests preserve account
 revisions, credentials, keys, vault and foreign state; inject provider, session,
 binding and deferred-commit failures; and reopen the private database. Refresh
 failure also preserves its original authority and device activity. New JWTs
 carry the bound `device`; existing unbound sessions remain valid, with legacy
-backfill still open. Device removal/approval, auth-request response/login and
-notifications remain pending. Required CI reruns the unchanged
-120-command real CLI suite for this chunk; the device HTTP proof does not add a
-CLI command or broader client claim.
+backfill still open. Device removal, auth-request login and notifications remain
+pending. The device HTTP proof does not add a CLI command or broader client
+claim.
 
 The push-token chunk adds authenticated POST/PUT token aliases and public
 POST/PUT clear aliases. All eight selected `--suite device-tokens` HTTP cases pass
@@ -196,8 +199,7 @@ and account revisions. The SQL observations establish unchanged activity;
 literal zero SQL writes is the stronger host-test result checked with abort
 triggers. Reference runs preserve their default login and public-clear rate
 limits.
-The unchanged 120-command CLI baseline requires its CI rerun; this chunk adds no
-CLI device-token route claim or full-parity flag.
+This focused HTTP proof adds no CLI device-token route claim or full-parity flag.
 
 The write target is the verified session-bound device, regardless of a valid
 path identifier or request device/owner fields. The path remains syntax-guarded.
@@ -234,9 +236,8 @@ requests, five successful logins and 33 decoded create attempts per server.
 The reference retains its public burst limit of 50. Tests cover public creation,
 owner GET, both pending-list aliases, opaque code/key/device identifiers including
 a NUL/Unicode/non-UUID device ID, schema/positional inputs, raw optional device-type
-handling, owner isolation, UUID guards and pending-device projection. The fresh
-120-command CLI regression remains pending; these HTTP checks add no CLI
-approval/login or request-trace claim.
+handling, owner isolation, UUID guards and pending-device projection. These HTTP
+checks add no CLI approval/login or request-trace claim.
 
 `AuthRequestStorage` extends the allocation-free device provider with owned-owner
 lookup, atomic creation and stable indexed borrowed reads. The adapter lowercases
@@ -264,10 +265,48 @@ excluding the path, does match upstream.
 
 Authenticated reads require a verified session binding before path parsing;
 legacy unbound sessions keep their older routes but receive 401 here. Public
-creation requires no bearer. Approval, public response polling, auth-request
-login, notifications/events, expiry jobs, trusted proxy policy and local rate
-controls remain open. Complete auth-request lifecycle and upstream API parity
+creation requires no bearer. Auth-request login, notifications/events, expiry
+jobs, trusted proxy policy and local rate controls remain open. Complete auth-request lifecycle and upstream API parity
 remain delivery goals.
+
+The approval/response chunk passes all eight selected `--suite auth-responses`
+cases against the actual adapter and official Vaultwarden `1.37.4`: 322 counted
+HTTP requests and four successful logins per server. Its eleven creates and 33
+guard-valid polls use 44 admitted public attempts; six additional query/path
+guard rejections do not reach the handler's limiter. The reference retains its
+public burst limit of 50. This is separate approval/polling evidence; no
+notification or auth-request login interoperability is established.
+The required client job reruns the unchanged 120-command CLI regression for
+the final head. Its verified baseline passes against both servers; it does not
+exercise authentication-request login.
+No new CLI auth-request route trace or full-parity claim is made.
+
+The PUT service requires the body device to match the verified bound session,
+rejects missing/foreign or already-answered requests, then asks the provider to
+commit. True decisions store the exact opaque key, optional hash, response device,
+`Some(true)` approval and a fresh timestamp. False deletes the pending row and
+returns a cached snapshot with its old fields/null approval and fresh response
+date. The rejected request's supplied key/hash do not enter that snapshot.
+Decisions remove the request from pending lists/device projections. Eleven new
+host tests cover schema/guard order, repeated approval rejection, old-state delete
+snapshots, wrong owner/device, update/delete late-write and deferred-commit
+rollback, private reopen, and preservation of account/device/session/vault state.
+
+Public polling ignores bearer credentials and requires the exact code, original
+raw device type and recorded IP. The adapter uses fixed-size HMAC-SHA256
+fingerprints and `Mac::verify_slice` for constant-time code comparison; it does
+not compare code strings directly or expose tags. Missing records and wrong
+code/type/IP return the same 400 error. A missing `code` query field returns 422;
+empty values are valid inputs. First matching scalar roots win, form `+` becomes
+space and percent decoding occurs once. Pending and approved responses remain
+readable without mutation or login consumption; rejection makes them unavailable.
+
+The actual HTTP comparison verifies the focused wire contract; hidden rollback
+and durable state guarantees come from host/provider tests. The direct socket
+peer policy still ignores forwarding headers and does
+not implement upstream trusted-proxy IP behavior. Notifications/events,
+auth-request login, expiry cleanup, proxy policy and public abuse controls remain
+open, along with the full upstream API parity goal.
 
 `GET /api/settings/domains` includes every global catalog group with its computed
 exclusion flag. Sync includes custom groups and only unexcluded catalog groups,
@@ -362,8 +401,8 @@ All eight Rust folder cases pass against the adapter and official Vaultwarden
 folder route patterns. These runs verify projection, opaque names, ignored body
 IDs, positional inputs, JSON rejections, ownership, UUID guards, deletion effects,
 and unauthenticated access. The 118-command CLI result above is the previously
-verified baseline against both servers; the required client job reruns it with
-this chunk.
+verified baseline against both servers. Current client regression status is
+recorded with the approval/polling results above.
 Folder notifications and WebSocket/push behavior, complete error envelopes,
 content-type handling, and transport-limit parity remain open. In particular,
 the adapter's 16-MiB request cap differs from upstream's

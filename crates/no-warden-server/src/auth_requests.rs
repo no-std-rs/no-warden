@@ -1,6 +1,6 @@
 //! Adapter parsing and persistence for pending authentication-request discovery.
 //! Pinned Vaultwarden 58a980f850464f7d9cdc99a765df36f0a3308b91:
-//! accounts.rs:1650-1743,1863-1900, auth.rs:610-636 and models/auth_request.rs.
+//! accounts.rs:1650-1900, auth.rs:610-636 and models/auth_request.rs.
 //! Access codes are stored privately and never enter wire projections or diagnostics.
 
 use crate::Failure;
@@ -18,6 +18,20 @@ pub struct Input {
 pub fn parse_input(body: &[u8]) -> Result<Input, Failure> {
     serde_json::from_slice(body).map_err(crate::json_guard_error)
 }
+// The optional slot has no explicit default: omitted object fields are None,
+// while positional input still requires the third slot before the bool.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInput {
+    pub device_identifier: String,
+    pub key: String,
+    pub master_password_hash: Option<String>,
+    pub request_approved: bool,
+}
+pub fn parse_update(body: &[u8]) -> Result<UpdateInput, Failure> {
+    serde_json::from_slice(body).map_err(crate::json_guard_error)
+}
+
 pub fn device_type(headers: &HeaderMap) -> i32 {
     headers
         .get("device-type")
@@ -131,6 +145,97 @@ pub fn create(
     Ok(record)
 }
 
+// A fixed-size HMAC-SHA256 fingerprint makes the comparison independent of
+// code contents and avoids prefix/length short-circuit string equality. This
+// domain separator is public; the fingerprints are neither stored nor exposed.
+// Mac::verify_slice performs the constant-time tag comparison.
+pub fn verify_code(stored: &str, supplied: &no_warden::identity::Secret<'_>) -> bool {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let fingerprint = |value: &str| {
+        let mut mac = Hmac::<Sha256>::new_from_slice(b"no-warden/auth-request/access-code/v1")
+            .expect("HMAC key size");
+        mac.update(value.as_bytes());
+        mac
+    };
+    let expected = fingerprint(stored).finalize().into_bytes();
+    fingerprint(supplied.expose_secret())
+        .verify_slice(&expected)
+        .is_ok()
+}
+pub fn by_code(
+    db: &rusqlite::Connection,
+    id: &str,
+    code: &no_warden::identity::Secret<'_>,
+) -> rusqlite::Result<Option<Record>> {
+    use rusqlite::OptionalExtension;
+    let record = db.query_row("SELECT id,owner,request_device_identifier,device_type,request_ip,access_code,public_key,encrypted_key,master_password_hash,approved,creation_date,response_date FROM auth_requests WHERE id=?1", [id], row).optional()?;
+    Ok(record.filter(|record| verify_code(&record.access_code, code)))
+}
+pub fn respond(
+    db: &mut rusqlite::Connection,
+    owner: &str,
+    id: &str,
+    request: &no_warden::wire::AuthRequestUpdateRequest<'_>,
+) -> rusqlite::Result<Record> {
+    let tx = db.savepoint()?;
+    let mut record = load(&tx, owner, id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+    if record.approved.is_some() {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    let date = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+    let changed = if request.request_approved {
+        tx.execute("UPDATE auth_requests SET encrypted_key=?1,master_password_hash=?2,approved=1,response_device_id=?3,response_date=?4 WHERE owner=?5 AND id=?6 AND approved IS NULL", rusqlite::params![request.key,request.master_password_hash,request.device_identifier,date,owner,id])?
+    } else {
+        tx.execute(
+            "DELETE FROM auth_requests WHERE owner=?1 AND id=?2 AND approved IS NULL",
+            rusqlite::params![owner, id],
+        )?
+    };
+    if changed != 1 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    if request.request_approved {
+        record.key = Some(request.key.into());
+        record.master_password_hash = request.master_password_hash.map(str::to_owned);
+        record.approved = Some(true);
+    }
+    record.responded = Some(date);
+    tx.commit()?;
+    Ok(record)
+}
+
+// Root extraction follows the same pinned Rocket NameView rules used for the
+// verified sync query: leading dot/bracket and scalar nested suffixes are valid.
+fn query_root(name: &str) -> &str {
+    if name.starts_with('=') {
+        return "";
+    }
+    if let Some(bracketed) = name.strip_prefix('[') {
+        return bracketed.split(']').next().unwrap_or_default();
+    }
+    name.strip_prefix('.')
+        .unwrap_or(name)
+        .split(['.', '['])
+        .next()
+        .unwrap_or_default()
+}
+pub fn query_code(query: Option<&str>) -> Result<String, Failure> {
+    let missing = || {
+        Failure(
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "Invalid auth request query",
+        )
+    };
+    let pairs: Vec<(String, String)> =
+        serde_urlencoded::from_str(query.unwrap_or_default()).map_err(|_| missing())?;
+    pairs
+        .into_iter()
+        .find(|(name, _)| query_root(name) == "code")
+        .map(|(_, value)| value)
+        .ok_or_else(missing)
+}
+
 // Rocket percent-decodes a raw path parameter once before UuidFromParam. Retain
 // the decoded spelling, including UUID case, braces and URN forms.
 pub fn path_id(raw: &str) -> Result<String, Failure> {
@@ -164,6 +269,67 @@ pub fn path_id(raw: &str) -> Result<String, Failure> {
 mod tests {
     use super::*;
     use axum::http::StatusCode;
+
+    #[test]
+    fn auth_response_update_schema_preserves_optional_slot_and_opaque_strings() {
+        for body in [br#"{"deviceIdentifier":"","key":"","requestApproved":true}"#.as_slice(),br#"["opaque","key",null,false]"#,br#"{"deviceIdentifier":"NUL\u0000\u96ea","key":"future","masterPasswordHash":"","requestApproved":false,"ignored":1}"#] {
+            assert!(parse_update(body).is_ok());
+        }
+        for body in [b"{}".as_slice(),b"null",b"[]",br#"["d","k",true]"#,br#"["d","k",null]"#,br#"{"deviceIdentifier":"d","key":null,"requestApproved":true}"#,br#"{"deviceIdentifier":"d","key":"k","masterPasswordHash":false,"requestApproved":true}"#,br#"{"deviceIdentifier":"d","key":"k","requestApproved":1}"#,br#"{"deviceIdentifier":"d","key":"k","requestApproved":true,"requestApproved":false}"#] {
+            let Err(error)=parse_update(body) else{panic!("Invalid auth-response schema accepted.")};assert_eq!(error.0,StatusCode::UNPROCESSABLE_ENTITY);
+        }
+        for body in [b"".as_slice(), b"{", br#"["d","k",null,true,null]"#] {
+            let Err(error) = parse_update(body) else {
+                panic!("Invalid auth-response syntax accepted.")
+            };
+            assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        }
+    }
+    #[test]
+    fn auth_response_code_query_uses_rocket_first_root_and_form_decoding() {
+        for (query, expected) in [
+            ("code", ""),
+            ("code=", ""),
+            ("ignored=x&code=NUL%00caf%C3%A9", "NUL\0café"),
+            ("code=a+b", "a b"),
+            ("code=a%2Bb", "a+b"),
+            ("code=%252B", "%2B"),
+            ("code=first&code=second", "first"),
+            ("Code=ignored&code=second", "second"),
+            ("code.foo=first", "first"),
+            ("[code]=first", "first"),
+            (".code=first", "first"),
+            ("[code=first", "first"),
+            ("code=%FF", "�"),
+            ("code=%GG", "%GG"),
+        ] {
+            let parsed =
+                query_code(Some(query)).unwrap_or_else(|_| panic!("Valid code query rejected."));
+            assert!(parsed == expected);
+        }
+        for query in [None, Some(""), Some("other=code"), Some("Code=ignored")] {
+            let Err(error) = query_code(query) else {
+                panic!("Missing required code query accepted.")
+            };
+            assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
+        }
+    }
+    #[test]
+    fn auth_response_code_comparison_checks_fixed_size_tags_without_plaintext_equality() {
+        use no_warden::identity::Secret;
+        for code in [
+            "",
+            "a",
+            "NUL\0café 雪",
+            "a reasonably long opaque access code",
+        ] {
+            assert!(verify_code(code, &Secret::new(code)));
+            assert!(!verify_code(code, &Secret::new(&format!("{code}x"))));
+            assert!(!verify_code(&format!("{code}x"), &Secret::new(code)));
+        }
+        assert!(!verify_code("prefix-a", &Secret::new("prefix-b")));
+        assert!(!verify_code("prefix-a", &Secret::new("different")));
+    }
 
     #[test]
     fn auth_request_json_schema_retains_opaque_fields_and_error_categories() {
