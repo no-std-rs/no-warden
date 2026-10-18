@@ -15,6 +15,8 @@ enum Suite {
     AuthLogin,
     Registration,
     AccountSecurity,
+    AccountKdf,
+    AccountKdfCli,
 }
 
 impl Suite {
@@ -33,6 +35,8 @@ impl Suite {
             "auth-login" => Self::AuthLogin,
             "registration" => Self::Registration,
             "account-security" => Self::AccountSecurity,
+            "account-kdf" => Self::AccountKdf,
+            "account-kdf-cli" => Self::AccountKdfCli,
             _ => return None,
         })
     }
@@ -57,7 +61,7 @@ fn check<E: Display>(result: Result<(), E>) {
 
 fn usage() {
     eprintln!(
-        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security]"
+        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli]"
     );
 }
 
@@ -108,5 +112,12 @@ fn main() {
     }
     if suite.includes(Suite::AccountSecurity) {
         check(no_warden_conformance::account_security::run());
+    }
+    if suite.includes(Suite::AccountKdf) {
+        check(no_warden_conformance::account_kdf::run());
+    }
+    // Explicit opt-in: the default HTTP selection needs no installed CLI.
+    if suite == Suite::AccountKdfCli {
+        check(no_warden_conformance::account_kdf::run_cli());
     }
 }

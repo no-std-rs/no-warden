@@ -84,6 +84,60 @@ pub struct RegistrationKdf {
     pub kdf_parallelism: Option<i32>,
 }
 
+/// KDF-change authentication fields, in the upstream positional order. These aliases are
+/// deliberately narrower than the separate registration authentication representation.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountKdfAuthentication<'a> {
+    #[serde(alias = "Salt")]
+    pub salt: &'a str,
+    #[serde(alias = "Kdf")]
+    pub kdf: RegistrationKdf,
+    #[serde(borrow, alias = "MasterPasswordAuthenticationHash")]
+    pub master_password_authentication_hash: Secret<'a>,
+}
+impl core::fmt::Debug for AccountKdfAuthentication<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AccountKdfAuthentication")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Canonical-only KDF-change unlock fields, preserving opaque wrapped keys verbatim.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountKdfUnlock<'a> {
+    pub salt: &'a str,
+    pub kdf: RegistrationKdf,
+    #[serde(borrow)]
+    pub master_key_wrapped_user_key: Secret<'a>,
+}
+impl core::fmt::Debug for AccountKdfUnlock<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AccountKdfUnlock").finish_non_exhaustive()
+    }
+}
+
+/// Nested-only `/accounts/kdf` request. Field order matches positional Serde input.
+/// All three top-level fields are required; legacy flattened credentials are not a fallback.
+/// Borrowed decoding supports unescaped strings; an adapter can decode escaped strings into
+/// owned/caller-provided storage before constructing this view. Credentials have no Serialize.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountKdfRequest<'a> {
+    #[serde(borrow)]
+    pub authentication_data: AccountKdfAuthentication<'a>,
+    #[serde(borrow)]
+    pub unlock_data: AccountKdfUnlock<'a>,
+    #[serde(borrow)]
+    pub master_password_hash: Secret<'a>,
+}
+impl core::fmt::Debug for AccountKdfRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AccountKdfRequest").finish_non_exhaustive()
+    }
+}
+
 #[derive(Deserialize)]
 pub struct RegistrationAuthentication<'a> {
     #[serde(alias = "Kdf")]
@@ -1396,6 +1450,120 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_kdf_wire_preserves_nested_aliases_positional_order_and_borrowing() {
+        let input = r#"{"authenticationData":{"Salt":"private-salt雪","Kdf":{"kdfType":-2,"iterations":-3,"memory":4,"parallelism":5},"MasterPasswordAuthenticationHash":"private-new"},"unlockData":{"salt":"private-salt雪","kdf":{"kdf":-2,"kdfIterations":-3,"kdfMemory":4,"kdfParallelism":5},"masterKeyWrappedUserKey":"private-key"},"masterPasswordHash":"private-old","ignored":{"future":true}}"#;
+        let request: AccountKdfRequest<'_> = serde_json::from_str(input).unwrap();
+        assert_eq!(request.authentication_data.kdf, request.unlock_data.kdf);
+        assert!(request.authentication_data.salt == "private-salt雪");
+        assert!(request.master_password_hash.expose_secret() == "private-old");
+        assert!(
+            request
+                .authentication_data
+                .master_password_authentication_hash
+                .expose_secret()
+                == "private-new"
+        );
+        assert!(
+            request
+                .unlock_data
+                .master_key_wrapped_user_key
+                .expose_secret()
+                == "private-key"
+        );
+        for value in [
+            request.authentication_data.salt,
+            request.master_password_hash.expose_secret(),
+            request
+                .authentication_data
+                .master_password_authentication_hash
+                .expose_secret(),
+            request
+                .unlock_data
+                .master_key_wrapped_user_key
+                .expose_secret(),
+        ] {
+            let pointer = value.as_ptr() as usize;
+            assert!(
+                (input.as_ptr() as usize..input.as_ptr() as usize + input.len()).contains(&pointer)
+            );
+        }
+        for rendered in [
+            std::format!("{request:?}"),
+            std::format!("{:?}", request.authentication_data),
+            std::format!("{:?}", request.unlock_data),
+        ] {
+            assert!(!rendered.contains("private"));
+        }
+        let input = r#"[["",[-2147483648,-2147483648,null,null],""],["",[-2147483648,-2147483648,null,null],""],""]"#;
+        let request: AccountKdfRequest<'_> = serde_json::from_str(input).unwrap();
+        assert!(request.authentication_data.salt.is_empty());
+        assert!(
+            request
+                .authentication_data
+                .master_password_authentication_hash
+                .expose_secret()
+                .is_empty()
+        );
+        assert!(
+            request
+                .unlock_data
+                .master_key_wrapped_user_key
+                .expose_secret()
+                .is_empty()
+        );
+        assert!(request.master_password_hash.expose_secret().is_empty());
+        assert_eq!(request.unlock_data.kdf.kdf, i32::MIN);
+        let input = r#"{"authenticationData":{"salt":"salt","kdf":{"kdf":0,"kdfIterations":100000},"masterPasswordAuthenticationHash":"new"},"unlockData":{"salt":"salt","kdf":{"kdf":0,"kdfIterations":100000},"masterKeyWrappedUserKey":"key"},"masterPasswordHash":"old"}"#;
+        assert!(serde_json::from_str::<AccountKdfRequest<'_>>(input).is_ok());
+    }
+
+    #[test]
+    fn account_kdf_wire_rejects_legacy_and_registration_aliases_missing_or_duplicate_fields() {
+        use std::string::String;
+
+        let authentication = r#"{"salt":"salt","kdf":{"kdf":0,"kdfIterations":100000},"masterPasswordAuthenticationHash":"new"}"#;
+        let unlock = r#"{"salt":"salt","kdf":{"kdf":0,"kdfIterations":100000},"masterKeyWrappedUserKey":"key"}"#;
+        let canonical = std::format!(
+            r#"{{"authenticationData":{authentication},"unlockData":{unlock},"masterPasswordHash":"old"}}"#
+        );
+        for invalid in [
+            String::from("{}"),
+            String::from("[]"),
+            String::from(
+                r#"{"kdf":0,"kdfIterations":100000,"key":"key","newMasterPasswordHash":"new","masterPasswordHash":"old"}"#,
+            ),
+            canonical.replace("authenticationData", "AuthenticationData"),
+            canonical.replace("unlockData", "UnlockData"),
+            canonical.replace("masterPasswordHash", "MasterPasswordHash"),
+            canonical.replace("masterPasswordAuthenticationHash", "hash"),
+            canonical.replace("masterKeyWrappedUserKey", "key"),
+            canonical.replace(r#""unlockData":{"salt""#, r#""unlockData":{"Salt""#),
+            canonical.replace(
+                r#""unlockData":{"salt":"salt","kdf""#,
+                r#""unlockData":{"salt":"salt","Kdf""#,
+            ),
+            canonical.replace(
+                r#""masterPasswordHash":"old""#,
+                r#""masterPasswordHash":null"#,
+            ),
+            canonical.replace(r#""masterPasswordHash":"old""#, r#""masterPasswordHash":7"#),
+            canonical.replace(
+                r#""masterPasswordHash":"old""#,
+                r#""masterPasswordHash":"old","masterPasswordHash":"other""#,
+            ),
+            canonical.replace(
+                r#""salt":"salt","kdf""#,
+                r#""salt":"salt","Salt":"other","kdf""#,
+            ),
+            canonical.replace("100000", "2147483648"),
+            std::format!(r#"[{authentication},{unlock}]"#),
+            std::format!(r#"[{authentication},{unlock},"old",null]"#),
+        ] {
+            assert!(serde_json::from_str::<AccountKdfRequest<'_>>(&invalid).is_err());
+        }
+    }
 
     #[test]
     fn password_verification_wire_requires_only_canonical_hash_and_redacts_opaque_proofs() {

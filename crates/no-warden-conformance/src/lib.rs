@@ -3,6 +3,7 @@
 //! Rust runners exercise the official CLI and portable HTTP protocol contracts.
 #![forbid(unsafe_code)]
 
+pub mod account_kdf;
 pub mod account_keys;
 pub mod account_profile;
 pub mod account_security;

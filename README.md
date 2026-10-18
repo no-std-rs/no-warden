@@ -76,13 +76,15 @@ bounded collections require no allocator. Opt-in `ImportStorage`,
 `CipherBulkStorage`, `IdentityStorage`, `AccountKeyStorage`,
 `AccountProfileStorage`, `DomainSettingsStorage`, `DeviceStorage`,
 `DevicePushStorage`, `AuthRequestStorage`, `AuthRequestResponseStorage`,
-`AuthRequestLoginStorage`, `RegistrationStorage`, `AccountSecurityStorage`, and
+`AuthRequestLoginStorage`, `RegistrationStorage`, `AccountSecurityStorage`,
+`AccountKdfStorage`, and
 `AttachmentStorage` providers add
 batch operations,
 credential and account-key services, profile metadata and equivalent-domain updates, device discovery,
 registration after verified login, push-token ordering, pending auth-request
 creation/discovery, approval/code-protected polling, one-use access-code login,
 modern account verification/finish, password verification, security-stamp renewal,
+client KDF transitions,
 and attachment transitions
 without adding an allocator. See [architecture](docs/architecture.md) and
 [CI and review](docs/ci.md).

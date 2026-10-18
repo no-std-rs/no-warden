@@ -14,12 +14,12 @@ use no_warden::{
     route::{Method, classify},
     service::ImportData,
     wire::{
-        AccountKeys, AccountKeysResponse, ApiKeyResponse, AttachmentRequest, AttachmentResponse,
-        AttachmentUploadResponse, AuthRequestCreateRequest, AuthRequestListResponse,
-        AuthRequestLoginRequest, AuthRequestResponse, AuthRequestUpdateRequest,
-        AvatarUpdateRequest, CipherIdsRequest, CipherRequest, ClientCredentialsRequest,
-        DeviceListResponse, DevicePushTokenRequest, DeviceResponse, DomainSettingsRequest,
-        DomainSettingsResponse, DomainSettingsUpdateResponse, ImportRequest,
+        AccountKdfRequest, AccountKeys, AccountKeysResponse, ApiKeyResponse, AttachmentRequest,
+        AttachmentResponse, AttachmentUploadResponse, AuthRequestCreateRequest,
+        AuthRequestListResponse, AuthRequestLoginRequest, AuthRequestResponse,
+        AuthRequestUpdateRequest, AvatarUpdateRequest, CipherIdsRequest, CipherRequest,
+        ClientCredentialsRequest, DeviceListResponse, DevicePushTokenRequest, DeviceResponse,
+        DomainSettingsRequest, DomainSettingsResponse, DomainSettingsUpdateResponse, ImportRequest,
         InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
         MasterPasswordPolicy, MasterPasswordPolicyResponse, PasswordOrOtpRequest, PreloginRequest,
         PreloginResponse, ProfileUpdateRequest, RegistrationAuthentication,
@@ -143,6 +143,11 @@ pub extern "C" fn _start() -> ! {
         Method::Post,
         black_box("/api/accounts/security-stamp"),
     ));
+    let kdf = serde_json_core::from_slice::<AccountKdfRequest<'_>>(black_box(
+        br#"{"authenticationData":{"salt":"bare-metal@example.com","kdf":{"kdf":0,"kdfIterations":700000},"masterPasswordAuthenticationHash":"new-opaque-proof"},"unlockData":{"salt":"bare-metal@example.com","kdf":{"kdf":0,"kdfIterations":700000},"masterKeyWrappedUserKey":"opaque-rewrapped-key"},"masterPasswordHash":"old-opaque-proof"}"#,
+    ));
+    let _ = black_box(kdf);
+    black_box(classify(Method::Post, black_box("/api/accounts/kdf")));
     let credentials = serde_json_core::from_slice::<ClientCredentialsRequest<'_>>(black_box(
         br#"{"grant_type":"client_credentials","client_id":"user.opaque:ID","client_secret":"test-only-key","scope":"api","deviceIdentifier":"device","deviceName":"bare metal","deviceType":"iOS"}"#,
     ));

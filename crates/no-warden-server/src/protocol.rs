@@ -150,7 +150,7 @@ pub fn user_decryption(account: &Value) -> Value {
 /// authenticating the request. This builder does not authenticate an account.
 pub fn token_fields(account: &Value) -> Value {
     let settings = kdf(account, false);
-    json!({
+    let mut response = json!({
         "Key": account["key"],
         "PrivateKey": account["keys"]["encryptedPrivateKey"],
         "AccountKeys": account_keys(account),
@@ -171,7 +171,16 @@ pub fn token_fields(account: &Value) -> Value {
             },
             "Object": "userDecryptionOptions",
         },
-    })
+    });
+    // Password/auth-request grants omit only this top-level field for an empty
+    // wrapped key. Their nested decryption fragments retain the exact value.
+    if account["key"].as_str() == Some("") {
+        response
+            .as_object_mut()
+            .expect("token fields")
+            .remove("Key");
+    }
+    response
 }
 
 /// Personal API-key grants have access-only authority and a distinct upstream
@@ -179,6 +188,8 @@ pub fn token_fields(account: &Value) -> Value {
 pub fn api_key_token_fields(account: &Value) -> Value {
     let mut response = token_fields(account);
     let fields = response.as_object_mut().expect("token fields");
+    // API-key login has an unconditional Key field, including an empty value.
+    fields.insert("Key".into(), account["key"].clone());
     fields.remove("MasterPasswordPolicy");
     fields["UserDecryptionOptions"]
         .as_object_mut()
@@ -202,6 +213,30 @@ pub fn api_key_token_fields(account: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_wrapped_key_omits_password_top_level_key_but_keeps_api_and_nested_values() {
+        let account = json!({"key":"","email":"alice@example.test","keys":{"publicKey":"public","encryptedPrivateKey":"private"}});
+        let password = token_fields(&account);
+        assert!(
+            password.get("Key").is_none(),
+            "Password grant must omit an empty top-level Key."
+        );
+        assert!(
+            password["UserDecryptionOptions"]["MasterPasswordUnlock"]["MasterKeyWrappedUserKey"]
+                == ""
+        );
+        let api = api_key_token_fields(&account);
+        assert!(api.get("Key").is_some_and(|value| value == ""));
+        assert!(
+            api["UserDecryptionOptions"]["MasterPasswordUnlock"]["MasterKeyWrappedUserKey"] == ""
+        );
+        assert!(profile(&account, "private-stamp")["key"] == "");
+        assert!(user_decryption(&account)["masterPasswordUnlock"]["masterKeyWrappedUserKey"] == "");
+        let nonempty = json!({"key":"opaque-key"});
+        assert!(token_fields(&nonempty)["Key"] == "opaque-key");
+        assert!(api_key_token_fields(&nonempty)["Key"] == "opaque-key");
+    }
 
     #[test]
     fn profile_projects_raw_empty_names_and_authoritative_avatar_without_extensions() {

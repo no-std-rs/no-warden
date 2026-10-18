@@ -1,6 +1,7 @@
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use no_warden::{
     Storage,
+    account_kdf::{AccountKdfStorage, ValidatedAccountKdf},
     account_keys::{AccountKeyState, AccountKeyStorage},
     account_profile::AccountProfileStorage,
     account_security::AccountSecurityStorage,
@@ -634,6 +635,74 @@ impl CipherBulkStorage for Store {
     }
 }
 
+impl AccountKdfStorage for Store {
+    type Salt = String;
+    fn verify_account_kdf_password(
+        &mut self,
+        owner: &str,
+        proof: &Secret<'_>,
+    ) -> rusqlite::Result<Option<String>> {
+        let account: Option<(String, String)> = self
+            .db
+            .query_row(
+                "SELECT email,password FROM accounts WHERE id=?1",
+                [owner],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((email, verifier)) = account else {
+            return Ok(None);
+        };
+        if verify_credential(Some(&verifier), proof.expose_secret())? {
+            // Pinned User::master_password_salt policy, from authoritative SQL.
+            Ok(Some(email.trim().to_lowercase()))
+        } else {
+            Ok(None)
+        }
+    }
+    fn change_account_kdf(
+        &mut self,
+        owner: &str,
+        plan: &ValidatedAccountKdf<'_>,
+    ) -> rusqlite::Result<()> {
+        let tx = self.db.savepoint()?;
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT password FROM accounts WHERE id=?1",
+                [owner],
+                |row| row.get(0),
+            )
+            .optional()?;
+        // Reject a plan authorized against an earlier password, including a
+        // competing connection's committed update, before any mutation.
+        if !verify_credential(
+            previous.as_deref(),
+            plan.old_password_hash().expose_secret(),
+        )? {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        let verifier = Argon2::default()
+            .hash_password(
+                plan.new_password_hash().expose_secret().as_bytes(),
+                &SaltString::generate(&mut OsRng),
+            )
+            .map_err(|_| rusqlite::Error::InvalidQuery)?
+            .to_string();
+        let revision = next_revision(&tx, owner)?;
+        let kdf = plan.kdf();
+        require_change(tx.execute(
+            "UPDATE accounts SET password=?1,document=json_set(document,'$.key',?2,'$.kdf',?3,'$.kdfIterations',?4,'$.kdfMemory',?5,'$.kdfParallelism',?6) WHERE id=?7",
+            params![verifier,plan.key().expose_secret(),kdf.kdf,kdf.kdf_iterations,kdf.kdf_memory,kdf.kdf_parallelism,owner],
+        )?)?;
+        tx.execute("INSERT INTO account_security(owner,stamp) VALUES(?1,?2) ON CONFLICT(owner) DO UPDATE SET stamp=excluded.stamp",params![owner,uuid::Uuid::new_v4().to_string()])?;
+        bump(&tx, owner, &revision)?;
+        // The stamp invalidates old access JWTs; refresh rotation invalidates
+        // old refresh tokens upstream. Preserve device records and push data.
+        tx.execute("DELETE FROM sessions WHERE owner=?1", [owner])?;
+        tx.commit()
+    }
+}
+
 impl AccountSecurityStorage for Store {
     fn verify_account_security_proof(
         &mut self,
@@ -1199,6 +1268,361 @@ impl Storage for Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn account_kdf_request<'a>(
+        old: &'a str,
+        new: &'a str,
+        key: &'a str,
+        kdf: no_warden::wire::RegistrationKdf,
+    ) -> no_warden::wire::AccountKdfRequest<'a> {
+        no_warden::wire::AccountKdfRequest {
+            authentication_data: no_warden::wire::AccountKdfAuthentication {
+                salt: "alice@example.test",
+                kdf,
+                master_password_authentication_hash: Secret::new(new),
+            },
+            unlock_data: no_warden::wire::AccountKdfUnlock {
+                salt: "alice@example.test",
+                kdf,
+                master_key_wrapped_user_key: Secret::new(key),
+            },
+            master_password_hash: Secret::new(old),
+        }
+    }
+    fn account_kdf_settings() -> no_warden::wire::RegistrationKdf {
+        no_warden::wire::RegistrationKdf {
+            kdf: 0,
+            kdf_iterations: 700_000,
+            kdf_memory: None,
+            kdf_parallelism: None,
+        }
+    }
+    fn account_kdf_preserved_rows(store: &Store) -> Vec<String> {
+        let mut rows: Vec<_> = snapshot(store)
+            .into_iter()
+            .filter(|row| !row.starts_with("account:alice:"))
+            .collect();
+        rows.extend(
+            account_authority_snapshot(store)
+                .into_iter()
+                .filter(|row| !row.starts_with("password:alice:") && !row.starts_with("session:")),
+        );
+        rows.extend(device_rows(store));
+        rows.extend(device_push_rows(store));
+        rows.extend(auth_request_rows(store));
+        rows.extend(store.db.prepare("SELECT 'session:'||access||':'||refresh||':'||owner||':'||access_expires||':'||refresh_expires FROM sessions WHERE owner<>'alice' UNION ALL SELECT 'binding:'||access||':'||owner||':'||identifier FROM session_devices WHERE owner<>'alice' UNION ALL SELECT 'stamp:'||owner||':'||stamp FROM account_security WHERE owner<>'alice' ORDER BY 1").unwrap().query_map([],|row|row.get::<_,String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap());
+        rows
+    }
+    #[test]
+    fn account_kdf_change_replaces_only_credentials_key_metadata_stamp_and_sessions() {
+        let mut store = account_security_fixture();
+        let mut old = "security-proof\0雪";
+        for (new, key, kdf) in [
+            (
+                "new-proof\0雪",
+                "wrapped-key\0雪",
+                no_warden::wire::RegistrationKdf {
+                    kdf: -7,
+                    kdf_iterations: -8,
+                    kdf_memory: Some(-9),
+                    kdf_parallelism: Some(-10),
+                },
+            ),
+            ("", "", account_kdf_settings()),
+        ] {
+            let before = store.account("id", "alice").unwrap().unwrap();
+            let preserved = account_kdf_preserved_rows(&store);
+            let stamp = crate::account_security::stamp(&store.db, "alice").unwrap();
+            let request = account_kdf_request(old, new, key, kdf);
+            no_warden::VaultService::new(&mut store)
+                .change_kdf("alice", &request)
+                .unwrap();
+            let mut saved = store.account("id", "alice").unwrap().unwrap();
+            assert!(
+                saved["key"] == key
+                    && saved["kdf"] == kdf.kdf
+                    && saved["kdfIterations"] == kdf.kdf_iterations
+                    && saved["kdfMemory"].is_null()
+                    && saved["kdfParallelism"].is_null()
+            );
+            assert!(saved["revisionDate"] != before["revisionDate"]);
+            let mut expected = before.clone();
+            for field in [
+                "key",
+                "kdf",
+                "kdfIterations",
+                "kdfMemory",
+                "kdfParallelism",
+                "revisionDate",
+            ] {
+                saved.as_object_mut().unwrap().remove(field);
+                expected.as_object_mut().unwrap().remove(field);
+            }
+            assert!(
+                saved == expected && account_kdf_preserved_rows(&store) == preserved,
+                "KDF mutation changed unrelated authority or payloads."
+            );
+            let next = crate::account_security::stamp(&store.db, "alice").unwrap();
+            assert!(uuid::Uuid::parse_str(&next).is_ok() && next != stamp);
+            assert!(
+                store
+                    .verify_account_kdf_password("alice", &Secret::new(old))
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                store
+                    .verify_account_kdf_password("alice", &Secret::new(new))
+                    .unwrap()
+                    .as_deref()
+                    == Some("alice@example.test")
+            );
+            for table in ["sessions", "session_devices"] {
+                let count: i64 = store
+                    .db
+                    .query_row(
+                        &format!("SELECT COUNT(*) FROM {table} WHERE owner='alice'"),
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(count, 0);
+            }
+            old = new;
+        }
+    }
+    #[test]
+    fn account_kdf_proof_and_salt_use_private_sql_authority_and_rejections_never_write() {
+        let mut store = account_security_fixture();
+        let mut account = store.account("id", "alice").unwrap().unwrap();
+        account["email"] = json!("forged@example.test");
+        store
+            .db
+            .execute(
+                "UPDATE accounts SET document=?1,email=' ALICE@EXAMPLE.TEST ' WHERE id='alice'",
+                [account.to_string()],
+            )
+            .unwrap();
+        assert!(
+            store
+                .verify_account_kdf_password("alice", &Secret::new("security-proof\0雪"))
+                .unwrap()
+                .as_deref()
+                == Some("alice@example.test")
+        );
+        let before = account_security_snapshot(&store);
+        let changes = store.db.total_changes();
+        for phase in 0..6 {
+            let mut request =
+                account_kdf_request("security-proof\0雪", "new", "key", account_kdf_settings());
+            match phase {
+                0 => request.master_password_hash = Secret::new("wrong"),
+                1 => request.authentication_data.salt = "forged@example.test",
+                2 => request.unlock_data.salt = "ALICE@EXAMPLE.TEST",
+                3 => request.unlock_data.kdf.kdf_iterations = 700_001,
+                4 => {
+                    request.authentication_data.kdf.kdf_iterations = 99_999;
+                    request.unlock_data.kdf.kdf_iterations = 99_999;
+                }
+                _ => {
+                    request.authentication_data.kdf = no_warden::wire::RegistrationKdf {
+                        kdf: 1,
+                        kdf_iterations: 1,
+                        kdf_memory: Some(14),
+                        kdf_parallelism: Some(1),
+                    };
+                    request.unlock_data.kdf = request.authentication_data.kdf;
+                }
+            }
+            assert!(
+                no_warden::VaultService::new(&mut store)
+                    .change_kdf("alice", &request)
+                    .is_err()
+            );
+        }
+        assert!(
+            account_security_snapshot(&store) == before && store.db.total_changes() == changes,
+            "Invalid KDF change mutated private account state."
+        );
+        let request =
+            account_kdf_request("security-proof\0雪", "new", "key", account_kdf_settings());
+        no_warden::VaultService::new(&mut store)
+            .change_kdf("alice", &request)
+            .unwrap();
+        assert!(store.account("id", "alice").unwrap().unwrap()["email"] == "forged@example.test");
+    }
+    #[test]
+    fn account_kdf_failures_restore_password_key_stamp_revision_sessions_and_foreign_state() {
+        for phase in 0..7 {
+            let mut store = account_security_fixture();
+            store
+                .db
+                .execute(
+                    "INSERT INTO account_security(owner,stamp) VALUES('alice','prior-stamp')",
+                    [],
+                )
+                .unwrap();
+            let before = account_security_snapshot(&store);
+            store.db.execute_batch(match phase {
+                0=>"CREATE TRIGGER fail_kdf BEFORE UPDATE OF password ON accounts BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                1=>"CREATE TRIGGER fail_kdf AFTER UPDATE OF password ON accounts BEGIN SELECT RAISE(FAIL,'fixture'); END;",
+                2=>"CREATE TRIGGER fail_kdf BEFORE INSERT ON account_security BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                3=>"CREATE TRIGGER fail_kdf BEFORE UPDATE OF stamp ON account_security BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                4=>"CREATE TRIGGER fail_kdf BEFORE UPDATE OF revision ON accounts BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                5=>"CREATE TRIGGER fail_kdf AFTER DELETE ON sessions BEGIN SELECT RAISE(FAIL,'fixture'); END;",
+                _=>"CREATE TABLE failed_kdf_commit(owner TEXT REFERENCES accounts(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_kdf AFTER DELETE ON sessions BEGIN INSERT INTO failed_kdf_commit(owner) VALUES('missing'); END;",
+            }).unwrap();
+            let request = account_kdf_request(
+                "security-proof\0雪",
+                "new-proof\0雪",
+                "new-key\0雪",
+                account_kdf_settings(),
+            );
+            assert!(
+                no_warden::VaultService::new(&mut store)
+                    .change_kdf("alice", &request)
+                    .is_err()
+            );
+            assert!(
+                account_security_snapshot(&store) == before && store.db.is_autocommit(),
+                "Failed KDF change escaped its savepoint."
+            );
+            assert!(
+                store
+                    .verify_account_kdf_password("alice", &Secret::new("security-proof\0雪"))
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(
+                store
+                    .verify_account_kdf_password("alice", &Secret::new("new-proof\0雪"))
+                    .unwrap()
+                    .is_none()
+            );
+            store.db.execute_batch("DROP TRIGGER fail_kdf").unwrap();
+            no_warden::VaultService::new(&mut store)
+                .change_kdf("alice", &request)
+                .unwrap();
+        }
+    }
+    #[test]
+    fn account_kdf_reopen_preserves_new_proof_wrapped_key_metadata_and_retained_devices() {
+        let directory = std::env::temp_dir().join(format!(
+            "no-warden-kdf-persistence-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("vault.sqlite");
+        let mut store = account_security_fixture();
+        let request = account_kdf_request(
+            "security-proof\0雪",
+            "",
+            "",
+            no_warden::wire::RegistrationKdf {
+                kdf: 1,
+                kdf_iterations: 1,
+                kdf_memory: Some(15),
+                kdf_parallelism: Some(16),
+            },
+        );
+        no_warden::VaultService::new(&mut store)
+            .change_kdf("alice", &request)
+            .unwrap();
+        let expected = account_security_snapshot(&store);
+        store
+            .db
+            .execute("VACUUM INTO ?1", [path.to_str().unwrap()])
+            .unwrap();
+        drop(store);
+        let mut reopened = Store::open(path.to_str().unwrap()).unwrap();
+        assert!(account_security_snapshot(&reopened) == expected);
+        assert!(
+            reopened
+                .verify_account_kdf_password("alice", &Secret::new(""))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            reopened
+                .verify_account_kdf_password("alice", &Secret::new("security-proof\0雪"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(!device_rows(&reopened).is_empty() && !auth_request_rows(&reopened).is_empty());
+        drop(reopened);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn account_kdf_concurrent_independent_connections_accept_only_one_old_proof() {
+        let directory =
+            std::env::temp_dir().join(format!("no-warden-kdf-race-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("vault.sqlite");
+        let fixture = account_security_fixture();
+        fixture
+            .db
+            .execute("VACUUM INTO ?1", [path.to_str().unwrap()])
+            .unwrap();
+        drop(fixture);
+        // Every fallible connection/schema/WAL step runs before worker barriers.
+        let stores = [
+            Store::open(path.to_str().unwrap()).unwrap(),
+            Store::open(path.to_str().unwrap()).unwrap(),
+        ];
+        for store in &stores {
+            store
+                .db
+                .busy_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+        }
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let workers: Vec<_> = stores
+            .into_iter()
+            .enumerate()
+            .map(|(index, mut store)| {
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let new = if index == 0 {
+                        "winner-zero"
+                    } else {
+                        "winner-one"
+                    };
+                    let request =
+                        account_kdf_request("security-proof\0雪", new, new, account_kdf_settings());
+                    barrier.wait();
+                    no_warden::VaultService::new(&mut store)
+                        .change_kdf("alice", &request)
+                        .is_ok()
+                })
+            })
+            .collect();
+        let outcomes: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        assert_eq!(outcomes.iter().filter(|result| **result).count(), 1);
+        let mut reopened = Store::open(path.to_str().unwrap()).unwrap();
+        let winner = if outcomes[0] {
+            "winner-zero"
+        } else {
+            "winner-one"
+        };
+        assert!(
+            reopened
+                .verify_account_kdf_password("alice", &Secret::new(winner))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            reopened
+                .verify_account_kdf_password("alice", &Secret::new("security-proof\0雪"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(reopened.account("id", "alice").unwrap().unwrap()["key"] == winner);
+        drop(reopened);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     fn account_security_fixture() -> Store {
         let mut store = auth_request_fixture();

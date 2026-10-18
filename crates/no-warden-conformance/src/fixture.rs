@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hmac::{Hmac, Mac};
 use pbkdf2::pbkdf2_hmac;
@@ -41,6 +41,7 @@ enum Failure {
     VerificationUnavailable,
     VerificationToken,
     RegistrationDocument,
+    CredentialRewrap,
 }
 
 impl FixtureError {
@@ -58,6 +59,7 @@ impl FixtureError {
             }
             Failure::VerificationToken => "Registration verification did not return a token.",
             Failure::RegistrationDocument => "The registration fixture is invalid.",
+            Failure::CredentialRewrap => "The PBKDF2 credential rewrap fixture is invalid.",
         }
     }
 }
@@ -142,6 +144,29 @@ fn encrypt(plaintext: &[u8], key: &[u8; 64]) -> Result<String, FixtureError> {
         .try_fill_bytes(&mut iv)
         .map_err(|_| FixtureError(Failure::Randomness))?;
     Ok(encrypt_with_iv(plaintext, key, &iv))
+}
+
+fn decrypt(cipher_string: &str, key: &[u8; 64]) -> Result<Vec<u8>, &'static str> {
+    let encoded = cipher_string
+        .strip_prefix("2.")
+        .ok_or("wrong encryption type")?;
+    let parts: Vec<_> = encoded.split('|').collect();
+    if parts.len() != 3 {
+        return Err("wrong component count");
+    }
+    let iv = STANDARD.decode(parts[0]).map_err(|_| "invalid IV")?;
+    let ciphertext = STANDARD
+        .decode(parts[1])
+        .map_err(|_| "invalid ciphertext")?;
+    let mac = STANDARD.decode(parts[2]).map_err(|_| "invalid MAC")?;
+    let mut verifier = Hmac::<Sha256>::new_from_slice(&key[32..]).map_err(|_| "invalid MAC key")?;
+    verifier.update(&iv);
+    verifier.update(&ciphertext);
+    verifier.verify_slice(&mac).map_err(|_| "MAC mismatch")?;
+    let iv: [u8; 16] = iv.try_into().map_err(|_| "invalid IV length")?;
+    cbc::Decryptor::<aes::Aes256>::new(key[..32].into(), (&iv).into())
+        .decrypt_padded_vec_mut::<Pkcs7>(&ciphertext)
+        .map_err(|_| "invalid padding")
 }
 
 fn openssl(arguments: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>, FixtureError> {
@@ -235,6 +260,66 @@ pub fn registration(email: &str, password: &str, iterations: u32) -> Result<Valu
         "organizationUserId": null,
         "referenceData": null,
     }))
+}
+
+fn pbkdf2_fixture_user_key(fixture: &Value, password: &str) -> Result<[u8; 64], FixtureError> {
+    let invalid = || FixtureError(Failure::CredentialRewrap);
+    if fixture["kdf"].as_i64() != Some(0) {
+        return Err(invalid());
+    }
+    let email = fixture["email"].as_str().ok_or_else(invalid)?;
+    let old_iterations = fixture["kdfIterations"]
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(invalid)?;
+    let old_master_key = master_key(email, password, old_iterations);
+    if fixture["masterPasswordHash"].as_str()
+        != Some(password_hash(&old_master_key, password).as_str())
+    {
+        return Err(invalid());
+    }
+    let wrapped = fixture["key"].as_str().ok_or_else(invalid)?;
+    decrypt(wrapped, &stretch_key(&old_master_key))
+        .map_err(|_| invalid())?
+        .try_into()
+        .map_err(|_| invalid())
+}
+
+/// Encrypt one fixture vault field with its authenticated user key. The key
+/// stays private inside this helper; clients must decrypt the returned envelope.
+pub fn encrypted_pbkdf2_value(
+    fixture: &Value,
+    password: &str,
+    plaintext: &[u8],
+) -> Result<String, FixtureError> {
+    encrypt(plaintext, &pbkdf2_fixture_user_key(fixture, password)?)
+}
+
+/// Rewrap the same fixture user key after changing PBKDF2 iterations. Returned
+/// credentials are private; the server and core never perform this client crypto.
+/// Existing RSA keys, encrypted vault contents and unrelated fixture fields survive.
+pub fn rewrap_pbkdf2(
+    fixture: &Value,
+    password: &str,
+    new_iterations: u32,
+) -> Result<Value, FixtureError> {
+    if new_iterations == 0 {
+        return Err(FixtureError(Failure::InvalidIterations));
+    }
+    let user_key = pbkdf2_fixture_user_key(fixture, password)?;
+    let email = fixture["email"]
+        .as_str()
+        .ok_or(FixtureError(Failure::CredentialRewrap))?;
+    let new_master_key = master_key(email, password, new_iterations);
+    let mut updated = fixture.clone();
+    updated["masterPasswordHash"] = json!(password_hash(&new_master_key, password));
+    updated["key"] = json!(encrypt(&user_key, &stretch_key(&new_master_key))?);
+    updated["kdf"] = json!(0);
+    updated["kdfIterations"] = json!(new_iterations);
+    updated["kdfMemory"] = Value::Null;
+    updated["kdfParallelism"] = Value::Null;
+    Ok(updated)
 }
 
 fn post_registration(server: &str, body: &Value) -> Result<(), FixtureError> {
@@ -338,7 +423,6 @@ pub fn seed_account_without_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aes::cipher::BlockDecryptMut;
     use std::{
         error::Error as _,
         io::{BufRead, BufReader, Read},
@@ -352,30 +436,6 @@ mod tests {
 
     fn hex(value: &[u8]) -> String {
         value.iter().map(|byte| format!("{byte:02x}")).collect()
-    }
-
-    fn decrypt(cipher_string: &str, key: &[u8; 64]) -> Result<Vec<u8>, &'static str> {
-        let encoded = cipher_string
-            .strip_prefix("2.")
-            .ok_or("wrong encryption type")?;
-        let parts: Vec<_> = encoded.split('|').collect();
-        if parts.len() != 3 {
-            return Err("wrong component count");
-        }
-        let iv = STANDARD.decode(parts[0]).map_err(|_| "invalid IV")?;
-        let ciphertext = STANDARD
-            .decode(parts[1])
-            .map_err(|_| "invalid ciphertext")?;
-        let mac = STANDARD.decode(parts[2]).map_err(|_| "invalid MAC")?;
-        let mut verifier =
-            Hmac::<Sha256>::new_from_slice(&key[32..]).map_err(|_| "invalid MAC key")?;
-        verifier.update(&iv);
-        verifier.update(&ciphertext);
-        verifier.verify_slice(&mac).map_err(|_| "MAC mismatch")?;
-        let iv: [u8; 16] = iv.try_into().map_err(|_| "invalid IV length")?;
-        cbc::Decryptor::<aes::Aes256>::new(key[..32].into(), (&iv).into())
-            .decrypt_padded_vec_mut::<Pkcs7>(&ciphertext)
-            .map_err(|_| "invalid padding")
     }
 
     #[test]
@@ -427,6 +487,79 @@ mod tests {
                 Err("MAC mismatch")
             );
             assert_eq!(decrypt(&encrypted, &[0x43; 64]), Err("MAC mismatch"));
+        }
+    }
+
+    #[test]
+    fn pbkdf2_rewrap_preserves_the_user_key_rsa_pair_and_original_fixture() {
+        let email = " Alice@Example.Test ";
+        let password = "synthetic-rewrap-password";
+        let user_key = [0x63; 64];
+        let old_key = stretch_key(&master_key(email, password, 1_000));
+        let fixture = json!({"email":email,"kdf":0,"kdfIterations":1000,
+            "masterPasswordHash":master_password_hash(email,password,1000),
+            "key":encrypt_with_iv(&user_key,&old_key,&[0x17;16]),
+            "keys":{"publicKey":"preserved-public","encryptedPrivateKey":"preserved-private"},
+            "extension":{"opaque":"unchanged"}});
+        let before = fixture.clone();
+        let updated = rewrap_pbkdf2(&fixture, password, 2_000).unwrap();
+        assert!(fixture == before && updated["keys"] == fixture["keys"]);
+        assert!(
+            updated["extension"] == fixture["extension"] && updated["email"] == fixture["email"]
+        );
+        assert!(updated["masterPasswordHash"] == master_password_hash(email, password, 2_000));
+        assert!(updated["kdf"] == 0 && updated["kdfIterations"] == 2_000);
+        assert!(updated["kdfMemory"].is_null() && updated["kdfParallelism"].is_null());
+        let wrapped = updated["key"].as_str().unwrap();
+        let new_key = stretch_key(&master_key(email, password, 2_000));
+        assert!(decrypt(wrapped, &new_key).is_ok_and(|key| key == user_key));
+        assert!(decrypt(wrapped, &old_key).is_err());
+        let encrypted =
+            encrypted_pbkdf2_value(&fixture, password, b"existing encrypted item").unwrap();
+        let recovered = pbkdf2_fixture_user_key(&updated, password).unwrap();
+        assert!(
+            decrypt(&encrypted, &recovered).is_ok_and(|value| value == b"existing encrypted item")
+        );
+        assert!(encrypted_pbkdf2_value(&fixture, "wrong password", b"private").is_err());
+    }
+
+    #[test]
+    fn pbkdf2_rewrap_rejects_bad_proof_tampered_keys_and_invalid_metadata_without_disclosure() {
+        let email = "rewrap@example.test";
+        let password = "synthetic-private-rewrap-password";
+        let key = stretch_key(&master_key(email, password, 1_000));
+        let fixture = json!({"email":email,"kdf":0,"kdfIterations":1000,
+            "masterPasswordHash":master_password_hash(email,password,1000),
+            "key":encrypt_with_iv(&[0x63;64],&key,&[0x17;16])});
+        assert!(rewrap_pbkdf2(&fixture, password, 0).is_err());
+        assert!(rewrap_pbkdf2(&fixture, "wrong password", 2_000).is_err());
+        let mut invalid = Vec::new();
+        for (field, value) in [
+            ("email", Value::Null),
+            ("kdf", json!(1)),
+            ("kdfIterations", json!(0)),
+            ("kdfIterations", json!(-1)),
+            ("kdfIterations", json!(u64::MAX)),
+            ("masterPasswordHash", json!("forged-proof")),
+            ("key", json!("2.invalid|invalid|invalid")),
+            (
+                "key",
+                json!(encrypt_with_iv(&[0x63; 63], &key, &[0x17; 16])),
+            ),
+        ] {
+            let mut value_fixture = fixture.clone();
+            value_fixture[field] = value;
+            invalid.push(value_fixture);
+        }
+        invalid.push(Value::Null);
+        for value in invalid {
+            let Err(error) = rewrap_pbkdf2(&value, password, 2_000) else {
+                panic!("Invalid rewrap fixture accepted.")
+            };
+            for message in [error.to_string(), format!("{error:?}")] {
+                assert!(!message.contains(password) && !message.contains("forged-proof"));
+                assert!(!message.contains(fixture["key"].as_str().unwrap()));
+            }
         }
     }
 

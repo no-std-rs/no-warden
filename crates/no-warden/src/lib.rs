@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
 
+pub mod account_kdf;
 pub mod account_keys;
 pub mod account_profile;
 pub mod account_security;

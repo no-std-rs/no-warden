@@ -595,3 +595,30 @@ rollback than upstream's sequential refresh rotation, save, notification and
 device deletion. Notification delivery and remembered-2FA support remain open.
 An unused approved authentication request retains its original lifetime and
 peer-IP requirements and can authorize a new login after renewal.
+
+## Client KDF transitions
+
+`AccountKdfStorage` adds two opt-in hooks: verify the old opaque client hash and
+return an owned authoritative salt handle, then commit a private validated plan.
+`VaultService::change_kdf` checks the owner and old proof before complete nested
+KDF equality, exact authentication/unlock salts and signed KDF policy. Only the
+shared signed KDF value is reused from registration; this endpoint has a distinct
+three-field nested request, not a legacy-first union. Requests and plans have
+redacted Debug and no general Serialize implementation. Salt normalization,
+verifiers, clocks, randomness and persistence remain external to the no-alloc core.
+
+The adapter rechecks the old proof inside its savepoint, then replaces the server
+verifier, wrapped user key and client KDF metadata, creates a private stamp,
+advances revision and invalidates owner sessions. It preserves device/push
+registrations, asymmetric keys, API credentials, authentication requests, vault
+data and foreign accounts. Rollback covers every local mutation and deferred
+commit failure. This is stronger than upstream's sequential refresh rotation and
+user save; notification delivery and remembered-2FA behavior remain open.
+
+The pinned source trims and Unicode-lowercases stored email for salt comparison;
+Vaultwarden 1.37.4 compares stored email exactly. The provider chooses this policy,
+and the adapter targets the pin. Actual comparisons use ordinary valid lowercase
+account emails, where both agree. No general equality of those versioned edge
+cases is inferred. KDF changes preserve opaque new proof/key strings; client
+reencryption belongs to clients. The host-only fixture rewraps the same user key
+and encrypts an existing item to establish actual CLI decryption after the change.
