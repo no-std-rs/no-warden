@@ -43,6 +43,7 @@ jobs:
       - run: cargo +1.85.0 check -p no-warden --lib --locked
       - run: rustup toolchain install 1.89.0 --profile minimal
       - run: cargo +1.89.0 check -p no-warden-server --locked
+      - run: cargo +1.89.0 check -p no-warden-conformance --locked
   bitwarden-cli:
     runs-on: ubuntu-latest
     env:

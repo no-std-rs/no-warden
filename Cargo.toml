@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/no-warden", "crates/no-warden-server"]
+members = ["crates/no-warden", "crates/no-warden-server", "crates/no-warden-conformance"]
 default-members = ["crates/no-warden"]
 resolver = "2"
 

@@ -31,6 +31,7 @@ test("source enumeration includes the runtime and real-client checks", () => {
   assert(Object.hasOwn(hashes, "crates/no-warden/src/lib.rs"));
   assert(Object.hasOwn(hashes, "tools/e2e.mjs"));
   for (const file of ["seed-account.mjs", "cli-process.mjs", "tls-proxy.mjs"]) assert(Object.hasOwn(hashes, `tools/${file}`));
+  for (const file of ["Cargo.toml", "src/lib.rs", "src/capture.rs", "src/fixture.rs", "src/transport.rs"]) assert(Object.hasOwn(hashes, `crates/no-warden-conformance/${file}`));
   assert(Object.hasOwn(hashes, "tools/package-lock.json"));
   for (const file of ["Cargo.toml", "Cargo.lock", "checks/no-alloc/Cargo.lock", "checks/embedded-vault/Cargo.lock"]) assert(Object.hasOwn(hashes, file));
   assert(Object.values(hashes).every(hash => /^[a-f0-9]{64}$/.test(hash)));
@@ -47,9 +48,9 @@ for (const field of ["http_positive_tested", "http_negative_tested", "http_teste
 }
 
 test("changing a transitive CLI helper invalidates the coverage snapshot", () => {
-  for (const file of ["seed-account.mjs", "cli-process.mjs", "tls-proxy.mjs"]) {
+  for (const file of ["tools/seed-account.mjs", "tools/cli-process.mjs", "tools/tls-proxy.mjs", "crates/no-warden-conformance/src/capture.rs", "crates/no-warden-conformance/src/fixture.rs", "crates/no-warden-conformance/src/transport.rs"]) {
     const hashes = sourceHashes();
-    hashes[`tools/${file}`] = "0".repeat(64);
+    hashes[file] = "0".repeat(64);
     assert.throws(() => validateCoverage(snapshot, hashes), /sources changed/);
   }
 });

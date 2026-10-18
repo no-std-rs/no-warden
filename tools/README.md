@@ -5,6 +5,12 @@ util-linux `prlimit`, and the pinned official Bitwarden CLI. This requirement
 applies to these test tools; the crate and standalone server have separate
 platform requirements.
 
+The host-only `no-warden-conformance` Rust library now provides private subprocess
+capture, encrypted account fixtures, and disposable loopback TLS. Its tests run
+with `cargo test -p no-warden-conformance`; it requires Rust 1.89 and OpenSSL.
+The commands below still use the JavaScript harness. Moving the default CLI
+orchestration to Rust is a subsequent roadmap step, not a completed migration.
+
 ```sh
 npm ci --prefix tools
 ```
