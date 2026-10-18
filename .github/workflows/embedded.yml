@@ -1,0 +1,22 @@
+name: Embedded consumer
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  embedded:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable --no-self-update
+      - run: rustup default stable
+      - run: rustup component add rustfmt clippy
+      - run: rustup target add riscv32imac-unknown-none-elf
+      - run: cargo fmt --manifest-path checks/embedded-vault/Cargo.toml --check
+      - run: cargo clippy --manifest-path checks/embedded-vault/Cargo.toml --all-targets --locked -- -D warnings
+      - run: cargo test --manifest-path checks/embedded-vault/Cargo.toml --locked
+      - run: cargo build --manifest-path checks/embedded-vault/Cargo.toml --locked --features firmware --target riscv32imac-unknown-none-elf
+      - run: rustup toolchain install 1.85.0 --profile minimal
+      - run: cargo +1.85.0 check --manifest-path checks/embedded-vault/Cargo.toml --lib --locked

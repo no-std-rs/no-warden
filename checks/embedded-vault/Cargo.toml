@@ -1,0 +1,27 @@
+[package]
+name = "no-warden-embedded-vault"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[workspace]
+
+[features]
+firmware = []
+
+[dependencies]
+no-warden = { path = "../../crates/no-warden" }
+
+[[bin]]
+name = "embedded-vault"
+path = "src/main.rs"
+required-features = ["firmware"]
+test = false
+bench = false
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
