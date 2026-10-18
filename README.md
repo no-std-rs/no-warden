@@ -3,9 +3,11 @@
 A reusable Rust foundation for Bitwarden-compatible services, with a `no_std`,
 allocation-free API and business-logic core and a standalone local-storage server.
 
-The first milestone is a real Bitwarden CLI personal-vault round trip. This is an
-early implementation, not yet a production password manager or a complete
-Vaultwarden replacement. Client-side vault encryption stays with the client.
+Full Bitwarden/Vaultwarden API parity is the delivery goal. The current verified
+slice is a real Bitwarden CLI personal-vault round trip; the remaining surface
+is tracked in the [API parity inventory](docs/api-parity.md). This is an early
+implementation, not yet a production password manager or a complete Vaultwarden
+replacement. Client-side vault encryption stays with the client.
 
 The core must not depend on HTTP frameworks, databases, operating systems, or a
 global allocator. Host applications provide storage, time, randomness, password

@@ -24,6 +24,17 @@ jobs:
       - run: cargo check -p no-warden --lib --locked --target riscv32imac-unknown-none-elf
       - run: cargo fmt --manifest-path checks/no-alloc/Cargo.toml --check
       - run: cargo build --manifest-path checks/no-alloc/Cargo.toml --locked --target riscv32imac-unknown-none-elf
+      - run: cargo fmt --manifest-path tools/api-inventory/Cargo.toml --check
+      - run: cargo clippy --manifest-path tools/api-inventory/Cargo.toml --all-targets --locked -- -D warnings
+      - run: cargo test --manifest-path tools/api-inventory/Cargo.toml --locked
+      - name: Check the exhaustive pinned server route inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://codeload.github.com/dani-garcia/vaultwarden/tar.gz/58a980f850464f7d9cdc99a765df36f0a3308b91 -o "$RUNNER_TEMP/vaultwarden.tar.gz"
+          mkdir -p "$RUNNER_TEMP/vaultwarden-source"
+          tar --extract --gzip --file "$RUNNER_TEMP/vaultwarden.tar.gz" --directory "$RUNNER_TEMP/vaultwarden-source" --strip-components=1
+          cargo run --manifest-path tools/api-inventory/Cargo.toml --locked -- --source "$RUNNER_TEMP/vaultwarden-source" --check compatibility/vaultwarden-routes.json
   msrv:
     runs-on: ubuntu-latest
     steps:
@@ -44,8 +55,13 @@ jobs:
       - run: rustup update stable --no-self-update
       - run: rustup default stable
       - run: npm ci --prefix tools
+      - run: curl --fail --location --retry 3 https://raw.githubusercontent.com/bitwarden/clients/b449ac1d255784380d75ef026343198891286be7/package-lock.json -o "$RUNNER_TEMP/clients-build-package-lock.json"
       - run: prlimit --version
       - run: node --test tools/repository-policy.test.mjs
+      - run: node --test tools/api-coverage.test.mjs
+      - run: node --test tools/cli-inventory.test.mjs
+        env:
+          BW_CLIENTS_BUILD_LOCK: ${{ runner.temp }}/clients-build-package-lock.json
       - run: node --test tools/cli-process.test.mjs
       - run: cargo build -p no-warden-server --locked
       - name: Real client and authorization checks

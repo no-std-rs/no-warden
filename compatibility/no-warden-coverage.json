@@ -1,0 +1,318 @@
+{
+  "schema_version": 1,
+  "repository": "no-std-rs/no-warden",
+  "snapshot_commit": "f9f5291860aa0ec123ddafe3d55f302752a379a2",
+  "audit_kind": "read-only source/test audit; no implementation changes or test reruns during this inventory pass",
+  "coverage_semantics": {
+    "routed": "Classifier recognizes a method/path shape. This alone is not a semantic implementation, especially reserved names shadowed by {id}.",
+    "typed_request_or_response": "Named borrowed core wire model exists; availability does not imply every upstream field/behavior is modeled, nor that std server uses it.",
+    "core_service_implemented": "Reusable no_std VaultService operation exists. Adapter-only auth/config/profile/sync/read builders are separate.",
+    "http_tested": "At least one checked-in exact-method positive or negative request exists; positive/negative and restart evidence are kept separate.",
+    "cli_command_coverage": "Named pinned CLI2026.10.0 command behavior demonstrated by checked-in e2e suite, historically recorded passing against no-warden and Vaultwarden1.37.4.",
+    "cli_endpoint_attribution": "Static official client callsites are recorded separately. Current harness captures no server request trace, so no per-route trace claim is made.",
+    "full_upstream_parity_verified": "Never inferred from a routed enum, a Value placeholder, a 404 rejection, or one passing command; all records remain false until exhaustive behavior comparison exists."
+  },
+  "routes": [
+    {"method":"GET","path":"/api/config","classifier_enum":"Config","routed":true,"typed_request":false,"typed_response":false,"core_models":{"requests":[],"responses":[]},"core_service_implemented":false,"core_service":null,"server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:138","http_tested":false,"http_positive_tested":false,"http_negative_tested":false,"http_test_names":{"positive":[],"negative":[]},"restart_http_test":null,"cli_command_coverage":["config","password-login"],"cli_endpoint_attribution":"official ApiService GET /config plus successful harness commands; no trace captured","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["Response built by std protocol::config as serde_json::Value; core has no typed configuration response.","Current response hard-codes advertised version, registration availability, empty feature flags; this is not complete server configuration parity."]},
+    {"method":"POST","path":"/api/accounts/prelogin","classifier_enum":"Prelogin","routed":true,"typed_request":true,"typed_response":true,"core_models":{"requests":["PreloginRequest"],"responses":["PreloginResponse"],"limits":"Core response models legacy kdf fields only; modern kdfSettings/salt envelope exists only in std protocol builder. Server parses owned Value rather than the core PreloginRequest."},"core_service_implemented":false,"core_service":null,"server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:145","http_tested":false,"http_positive_tested":false,"http_negative_tested":false,"http_test_names":{"positive":[],"negative":[]},"restart_http_test":null,"cli_command_coverage":[],"cli_endpoint_attribution":"not_established","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["No direct HTTP prelogin test in tools/server-tests.mjs or tools/persistence.mjs.","Unknown email receives default PBKDF2 settings; aliases share one handler.","PBKDF2 fixtures tested with CLI; Argon2 policy has unit coverage but real-client Argon2 account interoperability remains unverified."]},
+    {"method":"POST","path":"/identity/accounts/prelogin","classifier_enum":"Prelogin","routed":true,"typed_request":true,"typed_response":true,"core_models":{"requests":["PreloginRequest"],"responses":["PreloginResponse"],"limits":"Core response models legacy kdf fields only; modern kdfSettings/salt envelope exists only in std protocol builder. Server parses owned Value rather than the core PreloginRequest."},"core_service_implemented":false,"core_service":null,"server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:145","http_tested":false,"http_positive_tested":false,"http_negative_tested":false,"http_test_names":{"positive":[],"negative":[]},"restart_http_test":null,"cli_command_coverage":[],"cli_endpoint_attribution":"not_established","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["No direct HTTP prelogin test in tools/server-tests.mjs or tools/persistence.mjs.","Unknown email receives default PBKDF2 settings; aliases share one handler.","PBKDF2 fixtures tested with CLI; Argon2 policy has unit coverage but real-client Argon2 account interoperability remains unverified."]},
+    {"method":"POST","path":"/identity/accounts/prelogin/password","classifier_enum":"Prelogin","routed":true,"typed_request":true,"typed_response":true,"core_models":{"requests":["PreloginRequest"],"responses":["PreloginResponse"],"limits":"Core response models legacy kdf fields only; modern kdfSettings/salt envelope exists only in std protocol builder. Server parses owned Value rather than the core PreloginRequest."},"core_service_implemented":false,"core_service":null,"server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:145","http_tested":false,"http_positive_tested":false,"http_negative_tested":false,"http_test_names":{"positive":[],"negative":[]},"restart_http_test":null,"cli_command_coverage":["password-login"],"cli_endpoint_attribution":"pinned PasswordPreloginApiService sends this identity path during password login; no request trace captured","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["No direct HTTP prelogin test in tools/server-tests.mjs or tools/persistence.mjs.","Unknown email receives default PBKDF2 settings; aliases share one handler.","PBKDF2 fixtures tested with CLI; Argon2 policy has unit coverage but real-client Argon2 account interoperability remains unverified."]},
+    {"method":"POST","path":"/api/accounts/register","classifier_enum":"Register","routed":true,"typed_request":true,"typed_response":false,"core_models":{"requests":["RegisterRequest","AccountKeys"],"responses":[]},"core_service_implemented":true,"core_service":"VaultService::register + validate_registration + Storage::account_exists/insert_account","server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:160","http_tested":true,"http_positive_tested":true,"http_negative_tested":false,"http_test_names":{"positive":["standalone adapter enforces authentication, isolation, and JSON preservation"],"negative":[]},"restart_http_test":"tools/persistence.mjs","cli_command_coverage":[],"cli_endpoint_attribution":"not_established","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["Positive registration occurs in account() fixture before the nested tests, including profile round-trip assertions.","tools/seed-account.mjs generates PBKDF2/AES-CBC-HMAC/RSA fixture via direct HTTP; this is not a real CLI registration command.","Legacy one-step route only; modern identity registration send-verification-email/finish flow is absent.","Password verifier hashing and persistence live in std adapter, not core."]},
+    {"method":"GET","path":"/api/accounts/profile","classifier_enum":"Profile","routed":true,"typed_request":false,"typed_response":false,"core_models":{"requests":[],"responses":[]},"core_service_implemented":false,"core_service":null,"server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:280","http_tested":true,"http_positive_tested":true,"http_negative_tested":true,"http_test_names":{"positive":["escaped registration names decode and round-trip through the profile"],"negative":["unauthenticated requests and forged bearer tokens are rejected"]},"restart_http_test":null,"cli_command_coverage":[],"cli_endpoint_attribution":"not_established","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["Response is a std Value builder; no core profile response or profile update service.","CLI login/sync demonstrates profile-dependent behavior but does not establish a traced GET /accounts/profile request."]},
+    {"method":"POST","path":"/api/accounts/key-management/user-key-id","classifier_enum":"UserKeyId","routed":true,"typed_request":true,"typed_response":false,"core_models":{"requests":["UserKeyIdRequest"],"responses":[]},"core_service_implemented":false,"core_service":null,"server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:253","http_tested":true,"http_positive_tested":true,"http_negative_tested":true,"http_test_names":{"positive":["persisted user-key IDs reject mismatched encryption metadata before mutation","SDK user-key migration persists once and cannot overwrite the key ID"],"negative":["SDK user-key migration persists once and cannot overwrite the key ID"]},"restart_http_test":"tools/persistence.mjs","cli_command_coverage":[],"cli_endpoint_attribution":"not_established","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["One-time optional account key-ID backfill; rejects overwrite. No key rotation implementation.","Core Storage::user_key_id is a lookup hook used by cipher creates; the account write itself is adapter-only.","CLI includes SDK UserKeyIdBackfillMigration, but current harness does not assert that login performed migration; do not infer per-endpoint CLI coverage from successful login."]},
+    {"method":"GET","path":"/api/accounts/revision-date","classifier_enum":"RevisionDate","routed":true,"typed_request":false,"typed_response":false,"core_models":{"requests":[],"responses":[]},"core_service_implemented":false,"core_service":null,"server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:281","http_tested":true,"http_positive_tested":true,"http_negative_tested":false,"http_test_names":{"positive":["persisted user-key IDs reject mismatched encryption metadata before mutation","decoded field boundaries allow JSON overhead and retain request limits","wrapped clone creation allocates a fresh ID and rejects unsupported ownership"],"negative":[]},"restart_http_test":"tools/persistence.mjs","cli_command_coverage":[],"cli_endpoint_attribution":"not_established","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["Adapter converts persisted RFC3339 revision into epoch milliseconds.","Pinned CLI has getAccountRevisionDate but harness does not prove a route request rather than forced sync."]},
+    {"method":"POST","path":"/identity/connect/token","classifier_enum":"Token","routed":true,"typed_request":false,"typed_response":false,"core_models":{"requests":[],"responses":[]},"core_service_implemented":false,"core_service":null,"server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:178","http_tested":true,"http_positive_tested":true,"http_negative_tested":true,"http_test_names":{"positive":["standalone adapter enforces authentication, isolation, and JSON preservation","SDK user-key migration persists once and cannot overwrite the key ID","refresh rotation keeps unexpired access valid and rejects refresh replay"],"negative":["incorrect password hash cannot authenticate","refresh rotation keeps unexpired access valid and rejects refresh replay"]},"restart_http_test":"tools/persistence.mjs","cli_command_coverage":["password-login"],"cli_endpoint_attribution":"password grant posts to identity /connect/token in pinned client; no request trace captured","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["Form request, OAuth response, access/refresh persistence and crypto are std adapter code; no core typed token model or authentication service.","Only password and refresh_token grants implemented; no client_credentials, API-key login, 2FA, SSO, device login or token revocation.","Direct HTTP proves single-use refresh and preserves prior access expiry. CLI harness does not force refresh or concurrent old-bearer traffic.","Token timestamp expiry and expired-session cleanup exist in source/unit tests; HTTP suite does not wait out expiry.","Adapter intentionally stricter than observed Vaultwarden 1.37.4 refresh replay baseline."]},
+    {"method":"GET","path":"/api/sync","classifier_enum":"Sync","routed":true,"typed_request":false,"typed_response":false,"core_models":{"requests":[],"responses":[]},"core_service_implemented":false,"core_service":null,"server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:293","http_tested":true,"http_positive_tested":true,"http_negative_tested":true,"http_test_names":{"positive":["another user cannot read, edit, trash, restore, or delete the cipher","unknown future JSON fields survive create, update, and sync","persisted user-key IDs reject mismatched encryption metadata before mutation","opaque cipher blobs preserve escaped JSON strings through create, get, edit, and sync","decoded field boundaries allow JSON overhead and retain request limits","encrypted FIDO2 records preserve every stored field through create, update, and sync","wrapped clone creation allocates a fresh ID and rejects unsupported ownership","legacy POST folder update and delete aliases enforce owner isolation","archivedDate survives cipher creation, update, and sync","POST delete alias permanently removes the cipher","SDK user-key migration persists once and cannot overwrite the key ID","refresh rotation keeps unexpired access valid and rejects refresh replay"],"negative":["unauthenticated requests and forged bearer tokens are rejected"]},"restart_http_test":"tools/persistence.mjs","cli_command_coverage":["sync","list-items","get-item","get-folder","list-folders","list-trash"],"cli_endpoint_attribution":"pinned ApiService GET /sync or /sync?excludeDomains=true plus successful harness sync; no request trace captured","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["No core SyncResponse or read/list business service; std adapter emits owner-scoped folders/ciphers/profile.","Organizations, collections, policies, sends and domain lists are empty placeholders, not implemented API families.","Adapter ignores query semantics: it always includes domains even if excludeDomains=true.","Local CLI get/list/search operations validate downloaded content, not separate GET item/list endpoint calls."]},
+    {"method":"GET","path":"/api/folders","classifier_enum":"Folders","routed":true,"typed_request":false,"typed_response":true,"core_models":{"requests":[],"responses":["ListResponse<T>","FolderResponse"],"limits":"Generic list and folder models are available but server serializes stored Value rows."},"core_service_implemented":false,"core_service":null,"server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:299","http_tested":true,"http_positive_tested":false,"http_negative_tested":true,"http_test_names":{"positive":[],"negative":["unauthenticated requests and forged bearer tokens are rejected"]},"restart_http_test":null,"cli_command_coverage":[],"cli_endpoint_attribution":"not_established","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["No positive direct HTTP list request is asserted by current tools; bw list folders reads local synced state."]},
+    {"method":"POST","path":"/api/folders","classifier_enum":"FolderCreate","routed":true,"typed_request":true,"typed_response":true,"core_models":{"requests":["FolderRequest"],"responses":["FolderResponse"]},"core_service_implemented":true,"core_service":"VaultService::create_folder","server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:319","http_tested":true,"http_positive_tested":true,"http_negative_tested":false,"http_test_names":{"positive":["folder ownership is enforced and unknown organization/folder IDs are rejected","legacy POST folder update and delete aliases enforce owner isolation"],"negative":[]},"restart_http_test":"tools/persistence.mjs","cli_command_coverage":["create-folder"],"cli_endpoint_attribution":"pinned FolderApiService.postFolder POST /folders; successful create-folder harness; no trace captured","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":[]},
+    {"method":"GET","path":"/api/folders/{id}","classifier_enum":"FolderGet(id)","routed":true,"typed_request":false,"typed_response":true,"core_models":{"requests":[],"responses":["FolderResponse"]},"core_service_implemented":false,"core_service":null,"server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:309","http_tested":true,"http_positive_tested":true,"http_negative_tested":true,"http_test_names":{"positive":["legacy POST folder update and delete aliases enforce owner isolation"],"negative":["folder ownership is enforced and unknown organization/folder IDs are rejected","legacy POST folder update and delete aliases enforce owner isolation"]},"restart_http_test":"tools/persistence.mjs","cli_command_coverage":[],"cli_endpoint_attribution":"not_established","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["bw get folder reads FolderService state and does not prove this HTTP endpoint."]},
+    {"method":"PUT","path":"/api/folders/{id}","classifier_enum":"FolderUpdate(id)","routed":true,"typed_request":true,"typed_response":true,"core_models":{"requests":["FolderRequest"],"responses":["FolderResponse"]},"core_service_implemented":true,"core_service":"VaultService::update_folder","server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:319","http_tested":true,"http_positive_tested":false,"http_negative_tested":true,"http_test_names":{"positive":[],"negative":["folder ownership is enforced and unknown organization/folder IDs are rejected"]},"restart_http_test":null,"cli_command_coverage":["edit-folder"],"cli_endpoint_attribution":"pinned FolderApiService.putFolder PUT /folders/{id}; successful edit-folder harness; no trace captured","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["Positive update is demonstrated by CLI; direct HTTP suite covers a rejected foreign-owner PUT, not a positive PUT."]},
+    {"method":"POST","path":"/api/folders/{id}","classifier_enum":"FolderUpdate(id)","routed":true,"typed_request":true,"typed_response":true,"core_models":{"requests":["FolderRequest"],"responses":["FolderResponse"]},"core_service_implemented":true,"core_service":"VaultService::update_folder","server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:319","http_tested":true,"http_positive_tested":true,"http_negative_tested":true,"http_test_names":{"positive":["legacy POST folder update and delete aliases enforce owner isolation"],"negative":["legacy POST folder update and delete aliases enforce owner isolation"]},"restart_http_test":null,"cli_command_coverage":[],"cli_endpoint_attribution":"not_established","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["Legacy POST alias has direct positive/negative HTTP coverage."]},
+    {"method":"DELETE","path":"/api/folders/{id}","classifier_enum":"FolderDelete(id)","routed":true,"typed_request":false,"typed_response":false,"core_models":{"requests":[],"responses":[]},"core_service_implemented":true,"core_service":"VaultService::delete_folder","server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:337","http_tested":true,"http_positive_tested":false,"http_negative_tested":true,"http_test_names":{"positive":[],"negative":["folder ownership is enforced and unknown organization/folder IDs are rejected"]},"restart_http_test":null,"cli_command_coverage":["delete-folder"],"cli_endpoint_attribution":"pinned FolderApiService.deleteFolder DELETE /folders/{id}; successful delete-folder harness; no trace captured","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["Storage unit test deleting_folder_preserves_items_and_other_vaults verifies owner-scoped reference cleanup; no positive direct HTTP DELETE is asserted by server-tests."]},
+    {"method":"POST","path":"/api/folders/{id}/delete","classifier_enum":"FolderDelete(id)","routed":true,"typed_request":false,"typed_response":false,"core_models":{"requests":[],"responses":[]},"core_service_implemented":true,"core_service":"VaultService::delete_folder","server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:337","http_tested":true,"http_positive_tested":true,"http_negative_tested":true,"http_test_names":{"positive":["legacy POST folder update and delete aliases enforce owner isolation"],"negative":["legacy POST folder update and delete aliases enforce owner isolation"]},"restart_http_test":null,"cli_command_coverage":[],"cli_endpoint_attribution":"not_established","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":[]},
+    {"method":"GET","path":"/api/ciphers","classifier_enum":"Ciphers","routed":true,"typed_request":false,"typed_response":true,"core_models":{"requests":[],"responses":["ListResponse<T>"],"limits":"Generic list envelope only; there is no typed core CipherResponse."},"core_service_implemented":false,"core_service":null,"server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:299","http_tested":true,"http_positive_tested":false,"http_negative_tested":true,"http_test_names":{"positive":[],"negative":["unauthenticated requests and forged bearer tokens are rejected"]},"restart_http_test":null,"cli_command_coverage":[],"cli_endpoint_attribution":"not_established","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["No positive direct HTTP list request in current tools; bw list items reads synced cache."]},
+    {"method":"POST","path":"/api/ciphers","classifier_enum":"CipherCreate","routed":true,"typed_request":true,"typed_response":false,"core_models":{"requests":["CipherRequest"],"responses":[]},"core_service_implemented":true,"core_service":"VaultService::create_cipher","server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:341","http_tested":true,"http_positive_tested":true,"http_negative_tested":true,"http_test_names":{"positive":["standalone adapter enforces authentication, isolation, and JSON preservation","unknown future JSON fields survive create, update, and sync","persisted user-key IDs reject mismatched encryption metadata before mutation","opaque cipher blobs preserve escaped JSON strings through create, get, edit, and sync","decoded field boundaries allow JSON overhead and retain request limits","encrypted FIDO2 records preserve every stored field through create, update, and sync","archivedDate survives cipher creation, update, and sync","concurrent edits with the same revision allow only one update","POST delete alias permanently removes the cipher"],"negative":["unauthenticated requests and forged bearer tokens are rejected","folder ownership is enforced and unknown organization/folder IDs are rejected","malformed cipher types and missing encrypted names are rejected","persisted user-key IDs reject mismatched encryption metadata before mutation","decoded field boundaries allow JSON overhead and retain request limits","organizationID alias cannot bypass personal-vault ownership validation"]},"restart_http_test":"tools/persistence.mjs","cli_command_coverage":["create-login"],"cli_endpoint_attribution":"pinned apiService.postCipher POST /ciphers in legacy CRUD branch; successful create-login harness; no trace captured","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["Field-level types1..5 have borrowed models and validation; real CLI exercises type1 only.","Opaque data path accepts types1..8 but does not interpret/decrypt a blob; no field-level bankAccount/driversLicense/passport models.","Current-key ID checked only when both provider and request supply an ID; organization IDs rejected."]},
+    {"method":"POST","path":"/api/ciphers/create","classifier_enum":"CipherCreateWrapped","routed":true,"typed_request":true,"typed_response":false,"core_models":{"requests":["CipherCreateRequest","CipherRequest"],"responses":[]},"core_service_implemented":true,"core_service":"VaultService::create_cipher_wrapped -> create_cipher","server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:341","http_tested":true,"http_positive_tested":true,"http_negative_tested":true,"http_test_names":{"positive":["wrapped clone creation allocates a fresh ID and rejects unsupported ownership"],"negative":["wrapped clone creation allocates a fresh ID and rejects unsupported ownership","organizationID alias cannot bypass personal-vault ownership validation"]},"restart_http_test":null,"cli_command_coverage":[],"cli_endpoint_attribution":"not_established","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["Supports cipher/Cipher and collectionIds/CollectionIds wrapper aliases; rejects nonempty collection IDs.","Allocates fresh server ID and ignores source lastKnownRevisionDate; current real CLI harness does not invoke cloning."]},
+    {"method":"GET","path":"/api/ciphers/{id}","classifier_enum":"CipherGet(id)","routed":true,"typed_request":false,"typed_response":false,"core_models":{"requests":[],"responses":[]},"core_service_implemented":false,"core_service":null,"server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:309","http_tested":true,"http_positive_tested":true,"http_negative_tested":true,"http_test_names":{"positive":["another user cannot read, edit, trash, restore, or delete the cipher","opaque cipher blobs preserve escaped JSON strings through create, get, edit, and sync","decoded field boundaries allow JSON overhead and retain request limits","encrypted FIDO2 records preserve every stored field through create, update, and sync","wrapped clone creation allocates a fresh ID and rejects unsupported ownership","concurrent edits with the same revision allow only one update"],"negative":["another user cannot read, edit, trash, restore, or delete the cipher","POST delete alias permanently removes the cipher"]},"restart_http_test":"tools/persistence.mjs","cli_command_coverage":[],"cli_endpoint_attribution":"not_established","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["No core CipherResponse or read service; server returns owner-scoped stored Value.","bw get item decrypts CipherService state and does not prove GET /ciphers/{id}."]},
+    {"method":"PUT","path":"/api/ciphers/{id}","classifier_enum":"CipherUpdate(id)","routed":true,"typed_request":true,"typed_response":false,"core_models":{"requests":["CipherRequest"],"responses":[]},"core_service_implemented":true,"core_service":"VaultService::update_cipher","server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:341","http_tested":true,"http_positive_tested":true,"http_negative_tested":true,"http_test_names":{"positive":["unknown future JSON fields survive create, update, and sync","opaque cipher blobs preserve escaped JSON strings through create, get, edit, and sync","encrypted FIDO2 records preserve every stored field through create, update, and sync","archivedDate survives cipher creation, update, and sync","concurrent edits with the same revision allow only one update"],"negative":["another user cannot read, edit, trash, restore, or delete the cipher","organizationID alias cannot bypass personal-vault ownership validation","concurrent edits with the same revision allow only one update"]},"restart_http_test":"tools/persistence.mjs","cli_command_coverage":["edit-login"],"cli_endpoint_attribution":"pinned ApiService.putCipher PUT /ciphers/{id}; successful edit-login harness; no trace captured","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["Conditional timestamp comparison and atomic database mutation are adapter responsibilities under shared mutex; provider error hook preserves typed conflicts.","No endpoint-level full upstream parity claim."]},
+    {"method":"POST","path":"/api/ciphers/{id}","classifier_enum":"CipherUpdate(id)","routed":true,"typed_request":true,"typed_response":false,"core_models":{"requests":["CipherRequest"],"responses":[]},"core_service_implemented":true,"core_service":"VaultService::update_cipher","server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:341","http_tested":false,"http_positive_tested":false,"http_negative_tested":false,"http_test_names":{"positive":[],"negative":[]},"restart_http_test":null,"cli_command_coverage":[],"cli_endpoint_attribution":"not_established","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["POST alias is routed/implemented but current HTTP and CLI tools do not issue a positive POST item update."]},
+    {"method":"PUT","path":"/api/ciphers/{id}/delete","classifier_enum":"CipherSoftDelete(id)","routed":true,"typed_request":false,"typed_response":false,"core_models":{"requests":[],"responses":[]},"core_service_implemented":true,"core_service":"VaultService::soft_delete_cipher","server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:383","http_tested":true,"http_positive_tested":true,"http_negative_tested":true,"http_test_names":{"positive":[],"negative":["another user cannot read, edit, trash, restore, or delete the cipher"]},"restart_http_test":"tools/persistence.mjs","cli_command_coverage":["trash-item","list-trash"],"cli_endpoint_attribution":"pinned ApiService.putDeleteCipher PUT /ciphers/{id}/delete; successful trash lifecycle harness; no trace captured","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":[]},
+    {"method":"PUT","path":"/api/ciphers/{id}/restore","classifier_enum":"CipherRestore(id)","routed":true,"typed_request":false,"typed_response":false,"core_models":{"requests":[],"responses":[]},"core_service_implemented":true,"core_service":"VaultService::restore_cipher","server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:383","http_tested":true,"http_positive_tested":false,"http_negative_tested":true,"http_test_names":{"positive":[],"negative":["another user cannot read, edit, trash, restore, or delete the cipher"]},"restart_http_test":null,"cli_command_coverage":["restore-item"],"cli_endpoint_attribution":"pinned ApiService.putRestoreCipher PUT /ciphers/{id}/restore; successful restore harness; no trace captured","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["No positive direct HTTP restore test; PUT is demonstrated by CLI."]},
+    {"method":"POST","path":"/api/ciphers/{id}/restore","classifier_enum":"CipherRestore(id)","routed":true,"typed_request":false,"typed_response":false,"core_models":{"requests":[],"responses":[]},"core_service_implemented":true,"core_service":"VaultService::restore_cipher","server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:383","http_tested":false,"http_positive_tested":false,"http_negative_tested":false,"http_test_names":{"positive":[],"negative":[]},"restart_http_test":null,"cli_command_coverage":[],"cli_endpoint_attribution":"not_established","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":["POST alias has classifier/core implementation but no exact HTTP or CLI exercise."]},
+    {"method":"DELETE","path":"/api/ciphers/{id}","classifier_enum":"CipherDelete(id)","routed":true,"typed_request":false,"typed_response":false,"core_models":{"requests":[],"responses":[]},"core_service_implemented":true,"core_service":"VaultService::delete_cipher","server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:383","http_tested":true,"http_positive_tested":true,"http_negative_tested":true,"http_test_names":{"positive":["decoded field boundaries allow JSON overhead and retain request limits"],"negative":["another user cannot read, edit, trash, restore, or delete the cipher"]},"restart_http_test":null,"cli_command_coverage":["delete-item-permanent"],"cli_endpoint_attribution":"pinned ApiService.deleteCipher DELETE /ciphers/{id}; successful permanent-delete harness; no trace captured","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":[]},
+    {"method":"POST","path":"/api/ciphers/{id}/delete","classifier_enum":"CipherDelete(id)","routed":true,"typed_request":false,"typed_response":false,"core_models":{"requests":[],"responses":[]},"core_service_implemented":true,"core_service":"VaultService::delete_cipher","server_implemented":true,"server_handler":"crates/no-warden-server/src/main.rs:383","http_tested":true,"http_positive_tested":true,"http_negative_tested":false,"http_test_names":{"positive":["POST delete alias permanently removes the cipher"],"negative":[]},"restart_http_test":null,"cli_command_coverage":[],"cli_endpoint_attribution":"not_established","cli_route_trace_tested":false,"full_upstream_parity_verified":false,"implementation_scope":"personal-vault conformance subset","notes":[]}
+  ],
+  "unimplemented_or_shadowed_examples": [
+    {"method":"GET","path":"/api/ciphers/{id}/details","classifier_result":null,"routed":false,"semantic_route_implemented":false,"typed_request":false,"core_service_implemented":false,"server_implemented":false,"http_positive_tested":false,"cli_tested":false,"full_upstream_parity_verified":false,"evidence":"Details alias appears in docs/protocol.md and pinned client ApiService.getCipherDetails, but classifier only recognizes delete/restore sub-actions."},
+    {"method":"POST","path":"/api/ciphers/import","classifier_result":"CipherUpdate(\"import\")","routed":true,"semantic_route_implemented":false,"typed_request":false,"core_service_implemented":false,"server_implemented":false,"http_positive_tested":false,"cli_tested":false,"full_upstream_parity_verified":false,"evidence":"Pinned CLI ImportCommand -> ImportService.handleIndividualImport -> ImportApiService.postImportCiphers sends this path. Generic item update matching is incidental; no import service/model/transaction."},
+    {"method":"POST","path":"/api/ciphers/purge","classifier_result":"CipherUpdate(\"purge\")","routed":true,"semantic_route_implemented":false,"typed_request":false,"core_service_implemented":false,"server_implemented":false,"http_positive_tested":false,"cli_tested":false,"full_upstream_parity_verified":false,"evidence":"Pinned shared ApiService.postPurgeCiphers exists, but no CLI command caller established; not CLI-tested."},
+    {"method":"PUT","path":"/api/ciphers/delete","classifier_result":"CipherUpdate(\"delete\")","routed":true,"semantic_route_implemented":false,"typed_request":false,"core_service_implemented":false,"server_implemented":false,"http_positive_tested":false,"cli_tested":false,"full_upstream_parity_verified":false,"evidence":"Bulk soft-delete is not implemented; generic single-item route is incidental."},
+    {"method":"PUT","path":"/api/ciphers/restore","classifier_result":"CipherUpdate(\"restore\")","routed":true,"semantic_route_implemented":false,"typed_request":false,"core_service_implemented":false,"server_implemented":false,"http_positive_tested":false,"cli_tested":false,"full_upstream_parity_verified":false,"evidence":"Bulk restore is not implemented; generic single-item route is incidental."},
+    {"method":"PUT","path":"/api/ciphers/archive","classifier_result":"CipherUpdate(\"archive\")","routed":true,"semantic_route_implemented":false,"typed_request":false,"core_service_implemented":false,"server_implemented":false,"http_positive_tested":false,"cli_tested":false,"full_upstream_parity_verified":false,"evidence":"Archive metadata preservation does not implement the archive action."},
+    {"method":"PUT","path":"/api/ciphers/unarchive","classifier_result":"CipherUpdate(\"unarchive\")","routed":true,"semantic_route_implemented":false,"typed_request":false,"core_service_implemented":false,"server_implemented":false,"http_positive_tested":false,"cli_tested":false,"full_upstream_parity_verified":false,"evidence":"Unarchive action absent."},
+    {"method":"DELETE","path":"/api/ciphers","classifier_result":null,"routed":false,"semantic_route_implemented":false,"typed_request":false,"core_service_implemented":false,"server_implemented":false,"http_positive_tested":false,"cli_tested":false,"full_upstream_parity_verified":false,"evidence":"Bulk permanent-delete request/service absent."},
+    {"method":"DELETE","path":"/api/folders","classifier_result":null,"routed":false,"semantic_route_implemented":false,"typed_request":false,"core_service_implemented":false,"server_implemented":false,"http_positive_tested":false,"cli_tested":false,"full_upstream_parity_verified":false,"evidence":"Bulk folder delete absent."},
+    {"method":"DELETE","path":"/api/folders/all","classifier_result":"FolderDelete(\"all\")","routed":true,"semantic_route_implemented":false,"typed_request":false,"core_service_implemented":false,"server_implemented":false,"http_positive_tested":false,"cli_tested":false,"full_upstream_parity_verified":false,"evidence":"Delete-all handler absent; generic item-ID route is incidental."},
+    {"method":"PUT","path":"/api/accounts/profile","classifier_result":null,"routed":false,"semantic_route_implemented":false,"typed_request":false,"core_service_implemented":false,"server_implemented":false,"http_positive_tested":false,"cli_tested":false,"full_upstream_parity_verified":false,"evidence":"No account-profile update model, service or handler."},
+    {"method":"POST","path":"/identity/accounts/register/send-verification-email","classifier_result":null,"routed":false,"semantic_route_implemented":false,"typed_request":false,"core_service_implemented":false,"server_implemented":false,"http_positive_tested":false,"cli_tested":false,"full_upstream_parity_verified":false,"evidence":"seed-account.mjs uses this fallback only against upstream; no no-warden handler. A 404 fallback is not parity."},
+    {"method":"POST","path":"/identity/accounts/register/finish","classifier_result":null,"routed":false,"semantic_route_implemented":false,"typed_request":false,"core_service_implemented":false,"server_implemented":false,"http_positive_tested":false,"cli_tested":false,"full_upstream_parity_verified":false,"evidence":"Modern two-step registration finish absent."}
+  ],
+  "http_test_catalog": [
+    {"file":"tools/server-tests.mjs","line":66,"name":"standalone adapter enforces authentication, isolation, and JSON preservation"},
+    {"file":"tools/server-tests.mjs","line":72,"name":"escaped registration names decode and round-trip through the profile"},
+    {"file":"tools/server-tests.mjs","line":78,"name":"unauthenticated requests and forged bearer tokens are rejected"},
+    {"file":"tools/server-tests.mjs","line":86,"name":"incorrect password hash cannot authenticate"},
+    {"file":"tools/server-tests.mjs","line":95,"name":"another user cannot read, edit, trash, restore, or delete the cipher"},
+    {"file":"tools/server-tests.mjs","line":114,"name":"folder ownership is enforced and unknown organization/folder IDs are rejected"},
+    {"file":"tools/server-tests.mjs","line":132,"name":"malformed cipher types and missing encrypted names are rejected"},
+    {"file":"tools/server-tests.mjs","line":142,"name":"unknown future JSON fields survive create, update, and sync"},
+    {"file":"tools/server-tests.mjs","line":156,"name":"persisted user-key IDs reject mismatched encryption metadata before mutation"},
+    {"file":"tools/server-tests.mjs","line":182,"name":"opaque cipher blobs preserve escaped JSON strings through create, get, edit, and sync"},
+    {"file":"tools/server-tests.mjs","line":206,"name":"decoded field boundaries allow JSON overhead and retain request limits"},
+    {"file":"tools/server-tests.mjs","line":230,"name":"encrypted FIDO2 records preserve every stored field through create, update, and sync"},
+    {"file":"tools/server-tests.mjs","line":263,"name":"wrapped clone creation allocates a fresh ID and rejects unsupported ownership"},
+    {"file":"tools/server-tests.mjs","line":296,"name":"legacy POST folder update and delete aliases enforce owner isolation"},
+    {"file":"tools/server-tests.mjs","line":317,"name":"archivedDate survives cipher creation, update, and sync"},
+    {"file":"tools/server-tests.mjs","line":332,"name":"organizationID alias cannot bypass personal-vault ownership validation"},
+    {"file":"tools/server-tests.mjs","line":347,"name":"concurrent edits with the same revision allow only one update"},
+    {"file":"tools/server-tests.mjs","line":362,"name":"POST delete alias permanently removes the cipher"},
+    {"file":"tools/server-tests.mjs","line":372,"name":"SDK user-key migration persists once and cannot overwrite the key ID"},
+    {"file":"tools/server-tests.mjs","line":393,"name":"refresh rotation keeps unexpired access valid and rejects refresh replay"}
+  ],
+  "http_common_fixtures": {
+    "account": {
+      "source": "tools/server-tests.mjs:34",
+      "register": "tools/server-tests.mjs:39",
+      "password_login": "tools/server-tests.mjs:46"
+    },
+    "restart_script": {
+      "source": "tools/persistence.mjs",
+      "test_name": null,
+      "description": "Standalone script starts two server processes over one SQLite file; exact direct HTTP assertions are separate from node:test names."
+    }
+  },
+  "cli_command_catalog": {
+    "version": {
+      "command": ["bw","--version","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "version identification; local CLI operation"
+    },
+    "config": {
+      "command": ["bw","config","server","<trusted-loopback-HTTPS-url>","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "endpoint discovery"
+    },
+    "password-login": {
+      "command": ["bw","login","<email>","--passwordenv","BW_E2E_PASSWORD","--raw","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "wrong password rejection and successful login; PBKDF2 fixture only"
+    },
+    "status": {
+      "command": ["bw","status","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "local authenticated/locked/unlocked state"
+    },
+    "sync": {
+      "command": ["bw","sync","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "download personal vault; also called during authentication"
+    },
+    "list-items": {
+      "command": ["bw","list","items","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "local cache list after sync"
+    },
+    "create-folder": {
+      "command": ["bw","create","folder","<encoded-json>","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "encrypt and create a personal folder"
+    },
+    "get-folder": {
+      "command": ["bw","get","folder","<id>","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "decrypt folder from local cache"
+    },
+    "edit-folder": {
+      "command": ["bw","edit","folder","<id>","<encoded-json>","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "encrypt and update folder name"
+    },
+    "create-login": {
+      "command": ["bw","create","item","<encoded-json>","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "type-1 login with URI/TOTP/notes/custom field/folder"
+    },
+    "get-item": {
+      "command": ["bw","get","item","<id>","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "decrypt login from local cache"
+    },
+    "search-items": {
+      "command": ["bw","list","items","--search","<query>","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "local cache search"
+    },
+    "edit-login": {
+      "command": ["bw","edit","item","<id>","<encoded-json>","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "change encrypted login password/name/notes"
+    },
+    "lock": {
+      "command": ["bw","lock","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "local lock; no endpoint implementation implied"
+    },
+    "unlock": {
+      "command": ["bw","unlock","--passwordenv","BW_E2E_PASSWORD","--raw","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "local user-key unlock; no new password authentication endpoint implied"
+    },
+    "logout": {
+      "command": ["bw","logout","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "CLI local state logout; server-side revocation is not asserted"
+    },
+    "trash-item": {
+      "command": ["bw","delete","item","<id>","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "soft-delete personal item"
+    },
+    "list-trash": {
+      "command": ["bw","list","items","--trash","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "local cache trash visibility"
+    },
+    "restore-item": {
+      "command": ["bw","restore","item","<id>","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "restore personal item"
+    },
+    "delete-item-permanent": {
+      "command": ["bw","delete","item","<id>","--permanent","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "permanently delete item"
+    },
+    "delete-folder": {
+      "command": ["bw","delete","folder","<id>","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "delete personal folder"
+    },
+    "list-folders": {
+      "command": ["bw","list","folders","--nointeraction"],
+      "proof": "tools/e2e.mjs",
+      "verified_behavior": "local cache list; ignore synthetic No Folder entry"
+    }
+  },
+  "cli_evidence_sources": {
+    "harness": "tools/e2e.mjs",
+    "lockfile": "tools/package-lock.json",
+    "package": "@bitwarden/cli@2026.10.0",
+    "baseline_record": "tools/README.md",
+    "compatibility_limits": "docs/compatibility.md",
+    "official_source_revision": "bitwarden/clients b449ac1d255784380d75ef026343198891286be7 (cli-v2026.10.0)",
+    "installed_official_bundle": "tools/node_modules/@bitwarden/cli/build/bw.js",
+    "specific_bundle_refs": {
+      "prelogin_identity_password": "bw.js:62683",
+      "config": "bw.js:69149",
+      "local_get_item": "bw.js:55638",
+      "local_get_folder": "bw.js:55873",
+      "folder_api_methods": "bw.js:77951",
+      "cipher_api_methods": "bw.js:93403",
+      "import_command": "bw.js:59351",
+      "import_service": "bw.js:90531",
+      "import_api": "bw.js:80140",
+      "purge_shared_method_not_cli_command": "bw.js:93479",
+      "organization_export_api": "bw.js:57693"
+    },
+    "important_negative_attribution": ["get item/folder and list/search commands use local cache; they do not prove individual GET/list endpoints.","logout/lock/unlock success does not establish server token revocation or password-management endpoints.","Registration is HTTP fixture setup, not a CLI registration command.","Personal export has no proven missing HTTP endpoint from this audit; shared organization export API is separate."]
+  },
+  "core_unit_test_catalog": {
+    "crates/no-warden/src/route.rs": ["routes_authentication_and_actions"],
+    "crates/no-warden/src/wire.rs": ["borrowed_requests_and_bitwarden_field_names","modern_cipher_key_metadata_round_trips_without_rewriting_identifiers","stored_passkeys_are_bounded_and_lossless","blob_payload_borrows_a_callers_decoded_scratch_buffer"],
+    "crates/no-warden/src/service.rs": ["ownership_and_trash_lifecycle_prevent_unwanted_writes","foreign_folder_and_invalid_payload_do_not_mutate_storage","cipher_encryption_owner_is_checked_before_storage_access","malformed_cipher_keys_are_rejected_before_storage_access","current_key_ids_guard_creates_and_legacy_ids_remain_optional","provider_conflicts_survive_borrowed_storage_without_mutation","personal_clone_discards_source_revision_and_rejects_collections"],
+    "crates/no-warden/src/validation.rs": ["encrypted_values_require_well_formed_envelopes","policies_reject_weak_or_excessive_work_factors","optional_cipher_keys_require_valid_envelopes","opaque_blobs_cose_keys_and_passkey_envelopes_validate_without_decryption","email_and_type_validation"],
+    "crates/no-warden/src/bounded.rs": ["serde_rejects_overflow_and_round_trips"]
+  },
+  "allocation_free_boundary": {
+    "production_crate": {
+      "name": "no-warden",
+      "source": "crates/no-warden/src/lib.rs",
+      "attributes": ["#![no_std]","#![forbid(unsafe_code)]"],
+      "production_dependencies": ["serde(default-features=false,derive)"],
+      "allocator": "none declared; no extern crate alloc",
+      "dev_only_std": ["serde_json","cfg(test) extern crate std"]
+    },
+    "wire_limits": {
+      "uris": 32,
+      "custom_fields": 64,
+      "password_history": 32,
+      "fido2_credentials": 16,
+      "clone_collection_ids": 64,
+      "max_decoded_encrypted_field_bytes": 1048576
+    },
+    "bare_metal_core_check": {
+      "workflow": ".github/workflows/ci.yml",
+      "command": "cargo check -p no-warden --lib --locked --target riscv32imac-unknown-none-elf"
+    },
+    "json_link_consumer": {
+      "manifest": "checks/no-alloc/Cargo.toml",
+      "command": "cargo build --manifest-path checks/no-alloc/Cargo.toml --locked --target riscv32imac-unknown-none-elf",
+      "reachable_exercises": ["borrowed PreloginRequest parsing","PreloginResponse stack-buffer serialization","route classification","CipherRequest opaque-data parse/validate/stack serialization"],
+      "global_allocator": "none"
+    },
+    "business_logic_link_consumer": {
+      "manifest": "checks/embedded-vault/Cargo.toml",
+      "workflow": ".github/workflows/embedded.yml",
+      "command": "cargo build --manifest-path checks/embedded-vault/Cargo.toml --locked --features firmware --target riscv32imac-unknown-none-elf",
+      "storage": "owned arrays; two accounts, two folders, two generic secure-note ciphers; fixed Text buffers",
+      "reachable_exercises": ["registration","folder create/delete","secure-note create/update","ownership rejection","trash/restore","capacity failure without mutation","reuse freed slot"],
+      "limits": "rejects blob payloads, other cipher types, fields/password history/archive/conditional revisions and RSA keypairs",
+      "global_allocator": "none"
+    },
+    "not_proved": ["Firmware is linked, not executed on RISC-V hardware.","A successful no-allocator link does not verify every API or maximal input shape.","HTTP, SQLite, JSON Value, clocks, RNG and cryptography live in std no-warden-server and may allocate.","Escaped borrowed strings require a caller-owned decoder scratch buffer; std adapter uses owned Value before borrowing.","Host workspace test feature unification does not substitute for isolated no_std/no_alloc target checks."],
+    "ci_symbol_scan": "No nm symbol scan is committed; CI links without a global allocator. Earlier local firmware inspection recorded _start and zero undefined/allocator symbols, but this inventory pass did not rerun that inspection."
+  },
+  "recommended_first_parity_chunk": {
+    "name": "Personal-vault bulk import through the real bw import command",
+    "method": "POST",
+    "path": "/api/ciphers/import",
+    "current_failure": "Classifier treats literal import as an item ID and dispatches CipherUpdate(\"import\"). Standard import bodies are then decoded incorrectly as CipherRequest (normally rejected for missing type/name), rather than handled as an import. No typed ImportCiphersRequest, import service, folder-index mapping or atomic bulk transaction exists.",
+    "proven_client_call_chain": ["VaultProgram.importCommand bw import <format> <file>","ImportCommand.import","ImportService.handleIndividualImport encrypts ciphers and folders","ImportApiService.postImportCiphers POST /ciphers/import"],
+    "why_first": "Large missing CLI workflow for moving a real personal vault into the reusable implementation, independent of organization membership/billing/account provisioning.",
+    "minimum_next_chunk_evidence": ["Pin the exact upstream import request/response and folder relationship semantics before modeling it.","Provide caller-owned/bounded import models and atomic storage/business operation without adding alloc to core.","HTTP tests reject cross-owner references and prove partial failures do not commit a partially imported vault.","Run actual bw import with a supported format containing folders and several items; sync/fresh-client read verifies decrypted imported content.","Run the same import scenario against the pinned Vaultwarden baseline and retain behavior differences explicitly."],
+    "follow_ups_not_claimed_by_import": ["attachments and Send","organization vaults/collections/sharing","API-key/client_credentials login","account/profile/password/device management","modern identity registration"]
+  },
+  "counts": {
+    "routed_method_path_patterns": 28,
+    "routes_with_typed_requests": 12,
+    "routes_with_any_typed_response_model": 9,
+    "routes_with_reusable_core_service": 15,
+    "routes_with_direct_positive_or_restart_http_evidence": 17,
+    "routes_with_negative_http_evidence": 18,
+    "routes_with_captured_cli_request_traces": 0,
+    "cli_distinct_command_patterns_in_harness": 22,
+    "named_http_tests_including_parent": 20
+  },
+  "source_sha256": {
+    "checks/embedded-vault/Cargo.toml": "6dbfde28fd96f1773e8386eb2c3f4753de5dbba8251adc25e85eb4aac47809b1",
+    "checks/embedded-vault/src/lib.rs": "7372351d51831e7e26eb21e4f74aee30c619d68651e5531bda94be173bffd236",
+    "checks/embedded-vault/src/main.rs": "947247bd0cf1f73a89275008f15926250706a7c4d5b0f1ef1ea332eaf441e3c7",
+    "checks/no-alloc/Cargo.toml": "b89ad39c83a5a974bac499add13bebf842672bbf01c0b97d72fc8d227690fcf4",
+    "checks/no-alloc/src/main.rs": "65ec86ca07f6fb9cde8ea5e9e4defd4db91ea88a5adc93abbb0162c5f38d9a44",
+    "crates/no-warden/Cargo.toml": "cad9c2b38350726d1b7d931c71d4fdb9bc650433d7527f896f101289825c807f",
+    "crates/no-warden/src/bounded.rs": "36cd5db207f59fcd1aa5330c812e406f75066f65735b82bab37de8c87912379c",
+    "crates/no-warden/src/error.rs": "1c962e011a98be274849be9d92ba4bee91dd11218416900bb124582e3c15ff1f",
+    "crates/no-warden/src/lib.rs": "0c76c941cf1251873fb54b468213623ce3fd62474badff8ad1707aeaa539ce59",
+    "crates/no-warden/src/route.rs": "9ae411b4851b7da73ccc9bc459c796035f739fd8aac80c865c9357386775098b",
+    "crates/no-warden/src/service.rs": "2ec462dc79ea51e705a612b1f6bb098d1d439da216e3e7ec129389a795bca834",
+    "crates/no-warden/src/validation.rs": "2db816e885923b9bfc89a81c544e8678529dcd01ef8254f730f588725fda3b58",
+    "crates/no-warden/src/wire.rs": "9ea9a7e99a7dd389b259b7e7a3c85382dec3ad9eccb083ebbaea4ae45386343f",
+    "crates/no-warden-server/Cargo.toml": "0a42a2302a15043059eed43ef45baaa4e422f61eea93fcf49900a4a3163cfecc",
+    "crates/no-warden-server/src/main.rs": "0a15fdc3a90ea672b48ceaf514a779647218ff7c969ccddb0422d9f0feec8632",
+    "crates/no-warden-server/src/protocol.rs": "5c3b4a6db04a025db512fdcaffe6f11d018b171eb4fbafb8576f8fe83ef0c903",
+    "crates/no-warden-server/src/store.rs": "c056bff8a058bfb0390c0777bea862de0c2852dfde77e171d97949f852004210",
+    "tools/e2e.mjs": "cc034b1609dcde84d7f96f1cd4caf1394b2cc2c9acb023a04b43ac06a40049a4",
+    "tools/persistence.mjs": "462d00e86ff867185dec561b1c21e27456a78113ebe6f8f67f84f61608d18afe",
+    "tools/server-tests.mjs": "8c4ad63915229e9b198553c99980ad3554519055afd16c8b3382f2a478285e06"
+  }
+}
