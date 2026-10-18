@@ -28,8 +28,8 @@ use no_warden::{
     validation::FolderNamePolicy,
     wire::{
         AccountKeys, AvatarUpdateRequest, CipherRequest, ClientCredentialsRequest,
-        FolderRelationship, FolderRequest, FolderWriteRequest, ImportFolderRequest,
-        PasswordOrOtpRequest, ProfileUpdateRequest, RegisterRequest,
+        DevicePushTokenRequest, FolderRelationship, FolderRequest, FolderWriteRequest,
+        ImportFolderRequest, PasswordOrOtpRequest, ProfileUpdateRequest, RegisterRequest,
     },
 };
 use rand::{RngCore, rngs::OsRng};
@@ -253,6 +253,11 @@ async fn dispatch(
     if let Route::AttachmentDownload(cipher_id, attachment_id) = route {
         return attachments::download(&mut store, cipher_id, attachment_id, uri.query());
     }
+    if let Route::DevicePushClear(segment) = route {
+        let identifier = devices::path_identifier(segment)?;
+        VaultService::new(&mut *store).clear_device_push_token(&identifier)?;
+        return Ok(StatusCode::OK.into_response());
+    }
     if route == Route::KnownDevice {
         let headers = devices::known_headers(&headers)?;
         let response = VaultService::new(&mut *store).known_device(&headers.request())?;
@@ -399,6 +404,19 @@ async fn dispatch(
     let owner = owner.ok_or_else(unauthorized)?;
     let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
     match route {
+        Route::DevicePushToken(segment) => {
+            // Rocket's Headers guard resolves the authenticated device before
+            // path and body guards. Never use a request header or path as target.
+            let identifier = devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            devices::path_identifier(segment)?;
+            let input = devices::parse_push_input(&body)?;
+            let request = DevicePushTokenRequest {
+                push_token: &input.push_token,
+            };
+            VaultService::new(&mut *store).set_device_push_token(&owner, &identifier, &request)?;
+            Ok(StatusCode::OK.into_response())
+        }
         Route::Devices => {
             let mut service = VaultService::new(&mut *store);
             let response = service.list_devices(&owner)?;
@@ -951,6 +969,366 @@ fn issue_token_grant_bound(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn device_push_fixture_app() -> App {
+        let app = device_fixture_app();
+        {
+            let mut store = app.store.lock().unwrap();
+            for (owner, identifier) in [
+                ("alice", "Current-Device"),
+                ("alice", "Other-Device"),
+                ("bob", "Current-Device"),
+                ("bob", "Foreign-Device"),
+            ] {
+                VaultService::new(&mut *store)
+                    .register_device(
+                        owner,
+                        &DeviceRegistration {
+                            identifier,
+                            name: "Original",
+                            device_type: 1,
+                        },
+                    )
+                    .unwrap();
+            }
+            devices::bind(&store.db, "alice", "Current-Device", "device-fixture-alice").unwrap();
+            devices::bind(&store.db, "bob", "Current-Device", "device-fixture-bob").unwrap();
+        }
+        app
+    }
+    fn device_push_persisted_state(store: &Store) -> Vec<String> {
+        let mut rows = device_persisted_state(store);
+        rows.extend(store.db.prepare("SELECT 'push:'||owner||':'||identifier||':'||token FROM device_push_tokens ORDER BY owner,identifier").unwrap().query_map([],|row|row.get::<_,String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap());
+        rows
+    }
+    async fn device_push_empty(result: Result<Response, Failure>) {
+        let response = result.unwrap_or_else(|_| panic!("Valid device push request failed."));
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get("content-type").is_none());
+        assert!(
+            axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn device_push_http_uses_session_binding_and_ignores_path_headers_and_extra_fields() {
+        let app = device_push_fixture_app();
+        let account_before = {
+            let store = app.store.lock().unwrap();
+            store.account("id", "alice").unwrap().unwrap()
+        };
+        let original = {
+            let store = app.store.lock().unwrap();
+            devices::load(&store.db, "alice", "Current-Device")
+                .unwrap()
+                .unwrap()
+        };
+        for (method, path, token) in [
+            (
+                Method::POST,
+                "/api/devices/identifier/Other-Device/token",
+                "",
+            ),
+            (
+                Method::PUT,
+                "/api/devices/identifier/Foreign-Device/token",
+                "NUL\0café 雪\r\n",
+            ),
+            (
+                Method::POST,
+                "/api/devices/identifier/Missing-Device/token",
+                "private-device-push-sentinel",
+            ),
+        ] {
+            let mut headers = device_authorization(Some("device-fixture-alice"));
+            headers.insert("x-device-identifier", "Other-Device".parse().unwrap());
+            headers.insert(
+                "x-request-email",
+                URL_SAFE_NO_PAD.encode("bob@example.test").parse().unwrap(),
+            );
+            let body=json!({"pushToken":token,"identifier":"Foreign-Device","userId":"bob","owner":"bob","device":"Other-Device","creationDate":"1900-01-01T00:00:00Z"}).to_string();
+            device_push_empty(device_request(&app, method, path, headers, body.as_bytes()).await)
+                .await;
+            let store = app.store.lock().unwrap();
+            assert!(
+                devices::push_token(&store.db, "alice", "Current-Device")
+                    .unwrap()
+                    .as_deref()
+                    == Some(token)
+            );
+            for (owner, id) in [
+                ("alice", "Other-Device"),
+                ("bob", "Current-Device"),
+                ("bob", "Foreign-Device"),
+            ] {
+                assert!(devices::push_token(&store.db, owner, id).unwrap().is_none());
+            }
+            assert!(store.account("id", "alice").unwrap().unwrap() == account_before);
+            let current = devices::load(&store.db, "alice", "Current-Device")
+                .unwrap()
+                .unwrap();
+            assert!(
+                current.name == original.name
+                    && current.device_type == original.device_type
+                    && current.created == original.created
+            );
+        }
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        for method in [Method::POST, Method::PUT] {
+            device_push_empty(
+                device_request(
+                    &app,
+                    method,
+                    "/api/devices/identifier/%4Dissing-Device/token",
+                    device_authorization(Some("device-fixture-alice")),
+                    br#"["private-device-push-sentinel"]"#,
+                )
+                .await,
+            )
+            .await;
+            assert!(
+                device_push_persisted_state(&app.store.lock().unwrap()) == before,
+                "Repeated push update changed activity or authority."
+            );
+        }
+        for path in ["/api/devices", "/api/devices/identifier/Current-Device"] {
+            let value = device_document(
+                device_request(
+                    &app,
+                    Method::GET,
+                    path,
+                    device_authorization(Some("device-fixture-alice")),
+                    b"",
+                )
+                .await,
+            )
+            .await;
+            assert!(
+                !value.to_string().contains("private-device-push-sentinel"),
+                "Push token leaked through device projection."
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn device_push_http_guard_order_and_disabled_public_clear_preserve_all_state() {
+        let app = device_push_fixture_app();
+        {
+            let mut store = app.store.lock().unwrap();
+            for owner in ["alice", "bob"] {
+                VaultService::new(&mut *store)
+                    .set_device_push_token(
+                        owner,
+                        "Current-Device",
+                        &DevicePushTokenRequest {
+                            push_token: "preserved",
+                        },
+                    )
+                    .unwrap();
+            }
+            store.db.execute("INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES(?1,'legacy-push-refresh','alice',4000000000,4000000000)",[digest("legacy-push-access")]).unwrap();
+        }
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        for method in [Method::POST, Method::PUT] {
+            for bearer in [None, Some("invalid"), Some("legacy-push-access")] {
+                for path in [
+                    "/api/devices/identifier/Missing/token",
+                    "/api/devices/identifier/%5Fbad/token",
+                ] {
+                    let Err(error) = device_request(
+                        &app,
+                        method.clone(),
+                        path,
+                        device_authorization(bearer),
+                        b"{",
+                    )
+                    .await
+                    else {
+                        panic!("Unverified session device accepted for push update.")
+                    };
+                    assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+                }
+            }
+            for (path, body, status) in [
+                (
+                    "/api/devices/identifier/%5Fbad/token",
+                    b"{".as_slice(),
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                ),
+                (
+                    "/api/devices/identifier/Missing/token",
+                    b"{",
+                    StatusCode::BAD_REQUEST,
+                ),
+                (
+                    "/api/devices/identifier/Missing/token",
+                    b"{}",
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                ),
+                (
+                    "/api/devices/identifier/Missing/token",
+                    br#"{"pushToken":null}"#,
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                ),
+                (
+                    "/api/devices/identifier/Missing/token",
+                    br#"{"pushToken":"one","pushToken":"two"}"#,
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                ),
+                (
+                    "/api/devices/identifier/Missing/token",
+                    br#"["one","extra"]"#,
+                    StatusCode::BAD_REQUEST,
+                ),
+            ] {
+                let Err(error) = device_request(
+                    &app,
+                    method.clone(),
+                    path,
+                    device_authorization(Some("device-fixture-alice")),
+                    body,
+                )
+                .await
+                else {
+                    panic!("Invalid push path/body accepted.")
+                };
+                assert_eq!(error.0, status);
+            }
+            for bearer in [
+                None,
+                Some("invalid"),
+                Some("legacy-push-access"),
+                Some("device-fixture-alice"),
+                Some("device-fixture-bob"),
+            ] {
+                for id in ["Current-Device", "Missing", "%43urrent-Device"] {
+                    let path = format!("/api/devices/identifier/{id}/clear-token");
+                    device_push_empty(
+                        device_request(
+                            &app,
+                            method.clone(),
+                            &path,
+                            device_authorization(bearer),
+                            b"malformed ignored body {",
+                        )
+                        .await,
+                    )
+                    .await;
+                }
+                let Err(error) = device_request(
+                    &app,
+                    method.clone(),
+                    "/api/devices/identifier/%5Fbad/clear-token",
+                    device_authorization(bearer),
+                    b"{",
+                )
+                .await
+                else {
+                    panic!("Invalid public clear path accepted.")
+                };
+                assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
+            }
+        }
+        let devices = device_document(
+            device_request(
+                &app,
+                Method::GET,
+                "/api/devices",
+                device_authorization(Some("legacy-push-access")),
+                b"",
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(devices["data"].as_array().unwrap().len(), 2);
+        assert!(
+            device_push_persisted_state(&app.store.lock().unwrap()) == before,
+            "Rejected push updates or disabled clear changed persisted state."
+        );
+    }
+
+    #[tokio::test]
+    async fn device_push_http_refresh_uses_original_binding_and_storage_failure_is_atomic() {
+        let app = device_push_fixture_app();
+        {
+            let mut store = app.store.lock().unwrap();
+            VaultService::new(&mut *store)
+                .set_device_push_token(
+                    "alice",
+                    "Current-Device",
+                    &DevicePushTokenRequest {
+                        push_token: "original",
+                    },
+                )
+                .unwrap();
+        }
+        let body = serde_urlencoded::to_string([
+            ("grant_type", "refresh_token"),
+            ("refresh_token", "device-fixture-refresh-alice"),
+            ("deviceIdentifier", "Other-Device"),
+        ])
+        .unwrap();
+        let refreshed = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                body.as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        assert!(device_claims(&refreshed)["device"] == "Current-Device");
+        device_push_empty(
+            device_request(
+                &app,
+                Method::PUT,
+                "/api/devices/identifier/Other-Device/token",
+                device_authorization(refreshed["access_token"].as_str()),
+                br#"{"pushToken":"updated-after-refresh"}"#,
+            )
+            .await,
+        )
+        .await;
+        {
+            let store = app.store.lock().unwrap();
+            assert!(
+                devices::push_token(&store.db, "alice", "Current-Device")
+                    .unwrap()
+                    .as_deref()
+                    == Some("updated-after-refresh")
+            );
+            assert!(
+                devices::push_token(&store.db, "alice", "Other-Device")
+                    .unwrap()
+                    .is_none()
+            );
+            store.db.execute_batch("CREATE TRIGGER reject_http_push_activity BEFORE UPDATE OF updated ON device_registry BEGIN SELECT RAISE(ABORT,'injected push activity failure'); END;").unwrap();
+        }
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        for method in [Method::POST, Method::PUT] {
+            let Err(error) = device_request(
+                &app,
+                method,
+                "/api/devices/identifier/Missing/token",
+                device_authorization(refreshed["access_token"].as_str()),
+                br#"{"pushToken":"rejected"}"#,
+            )
+            .await
+            else {
+                panic!("Injected push storage failure succeeded.")
+            };
+            assert_eq!(error.0, StatusCode::INTERNAL_SERVER_ERROR);
+            assert!(
+                device_push_persisted_state(&app.store.lock().unwrap()) == before,
+                "Failed push request committed token/activity or changed session authority."
+            );
+        }
+    }
 
     fn device_fixture_app() -> App {
         let store = Store::open(":memory:").unwrap();

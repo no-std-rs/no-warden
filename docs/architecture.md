@@ -324,6 +324,39 @@ atomically touches the registered device, rotates refresh authority, and binds
 the new session to the same owner and identifier. Existing access tokens retain
 their original expiry. Older sessions without binding rows remain usable and
 refresh without inventing a device; no legacy registry backfill is implemented.
-Registry and binding records survive private-database reopen. Push-token
-management, device approval, pending-authentication lifecycle, device removal and
-notification delivery remain separate tracked work.
+Registry and binding records survive private-database reopen. Device approval,
+pending-authentication lifecycle, device removal and notification delivery remain
+separate tracked work.
+
+`DevicePushStorage` is a separate opt-in provider for push-token ordering.
+`DevicePushTokenRequest` borrows its opaque string, decodes/serializes without an
+allocator, and redacts Debug output. The service takes the verified owner and
+session device identifier; it deliberately takes no request-path target. That
+verified identifier remains opaque and may be empty. An exact match with an
+already-present token returns before save or registration hooks.
+A changed token, including an empty string, saves atomically with device activity
+before the registration callback runs. The callback supplies relay policy and
+I/O. Its failure leaves the saved token and activity in place; retrying that same
+token takes the no-op path rather than retrying the relay.
+
+The core clear service first checks the provider's pure push configuration.
+Disabled push returns immediately without storage or relay access. An enabled
+provider instead
+clears tokens for every owner with the supplied identifier and returns the optional
+push ID of its first selected matching record. The core unregisters only that
+record's ID when present; a missing ID on the first record does not select a later
+owner's ID. Unregister failure retains the cleared state. These ordered callback
+contracts have provider-test coverage, not live enabled-relay evidence.
+
+The standalone adapter fixes push configuration to disabled and makes no relay
+requests. Its dedicated `device_push_tokens` table has a composite foreign key to
+`device_registry`; relogin preserves its opaque values and registry removal
+cascades cleanup. Token/activity writes preserve account revisions, initial
+device metadata, keys, credentials, sessions, vault contents and foreign state.
+An owned JSON guard handles escaped values and known duplicate fields before
+borrowing the core request. Writes require a verified session binding before
+path or JSON validation; an older unbound session gets 401 for these writes while
+its other existing routes remain usable. Clear ignores bearer credentials and
+body data, validates the path, and returns an empty 200 with tokens unchanged.
+Local abuse limiting, real relay registration/unregistration and push delivery
+remain open adapter work.

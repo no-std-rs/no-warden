@@ -8,7 +8,7 @@ server have separate platform requirements.
 The host-only `no-warden-conformance` Rust crate runs the default CLI suite,
 including private subprocess capture, encrypted account fixtures, and disposable
 loopback TLS. `tools/e2e.sh` invokes it through Cargo. Rust HTTP groups cover
-folder, account-key, profile/avatar, and equivalent-domain contracts; the existing HTTP,
+folder, account-key, profile/avatar, equivalent-domain, and device contracts; the existing HTTP,
 restart-persistence, and client-inventory checks still use JavaScript; the broader migration remains
 unfinished.
 
@@ -198,12 +198,14 @@ BW_E2E_SERVER=http://127.0.0.1:8001 cargo run --locked \
 ```
 
 By default the binary runs folders, account keys, profile/avatar, equivalent
-domains, then devices: 40 cases. `--suite personal` selects the first four groups;
-`--suite devices` selects only devices. Individual selectors are `folders`,
+domains, devices, then device tokens: 48 cases. `--suite personal` selects the first four groups;
+`--suite devices` selects discovery; `--suite device-tokens` selects token routes.
+Individual selectors are `folders`,
 `account-keys`, `profile`, and `domains`; `--suite all` is the default.
 Invalid arguments return exit code 2 without echoing supplied values.
 `BW_FOLDER_RECEIPT`, `BW_ACCOUNT_KEYS_RECEIPT`, `BW_PROFILE_RECEIPT`,
-`BW_DOMAINS_RECEIPT`, and `BW_DEVICES_RECEIPT` optionally name new private result
+`BW_DOMAINS_RECEIPT`, `BW_DEVICES_RECEIPT`, and `BW_DEVICE_TOKENS_RECEIPT`
+optionally name new private result
 files for their respective groups. Existing paths are
 rejected; files are created with mode 0600 and contain authored case names,
 statuses, request counts, and login counts, without request or response values.
@@ -212,7 +214,7 @@ requests: five login attempts (four successful and one deliberately rejected)
 and one refresh. Run these selections in separate fresh disposable reference
 processes to stay within its unchanged default ten-login limit. Use another
 fresh reference process for the complete CLI comparison. The adapter's CI job
-runs all 40 cases together; do not run that combined selection against one
+runs all 48 cases together; do not run that combined selection against one
 reference process with default limits.
 Other HTTP and persistence groups still use their
 existing JavaScript tools.
@@ -288,14 +290,36 @@ percent-decoded path guards, metadata retention on repeated login, API-key devic
 registration, refresh identity, and failed-login/authentication boundaries.
 The receipt distinguishes successful logins, attempted logins, identity requests,
 and refresh requests. Their combined total with the personal groups is 40 cases
-and 1616 requests, measured in separate reference processes.
+and 1616 requests, measured in separate reference processes. The token group
+adds eight cases and 383 requests with three successful password logins, making
+the full local run 48 cases and 1999 requests. Select `--suite device-tokens` in
+a separate fresh reference process: its 28 valid public clears stay below the
+unchanged unauthenticated burst limit of 50; rejected path guards do not enter
+that handler. The adapter does not yet implement the reference rate controls.
 
 Device identifiers in headers and login forms remain opaque. Authenticated
 lookup paths accept ASCII letters, digits and hyphens after percent-decoding;
 they are not UUID paths. List entries have ten fields and single responses
-seven. Pending-auth requests, trust/key setup, push-token mutation and notification
+seven. Pending-auth requests, trust/key setup, enabled push relay and notification
 lifecycles remain unimplemented by the adapter. The core exposes a borrowed
 pending-auth projection without claiming that lifecycle.
+
+The token group checks POST/PUT update and clear aliases. Update paths have
+normal device syntax guards, but the verified session's device is the mutation
+target. Required `pushToken` values remain opaque, including empty strings;
+unknown fields are ignored, and one-element positional input is accepted.
+Authentication precedes path validation, which precedes JSON validation.
+Clears are public, ignore bearer/body input, and return empty 200 without
+clearing stored tokens when push is disabled. All four success responses have
+empty bodies, not JSON null. Hidden token/activity effects are covered separately
+by SQLite tests rather than inferred from device projections.
+
+The core exposes `DevicePushStorage` with ordered save/relay and clear/unregister
+hooks. A failed relay registration retains the saved token; a repeated identical
+token skips both save and relay. Enabled clear semantics are provider-tested,
+including clearing every owner with the same identifier and unregistering only
+the first device's optional push ID. The adapter uses disabled push and makes no
+outbound relay request. Enabled relay interoperability remains open.
 
 Login requests are included in the request counts; fixture registrations are
 excluded. These receipts do not establish captured CLI route traces or complete

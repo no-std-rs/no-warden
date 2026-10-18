@@ -7,6 +7,7 @@ pub mod account_keys;
 pub mod account_profile;
 pub mod capture;
 pub mod cli;
+pub mod device_tokens;
 pub mod devices;
 pub mod domains;
 pub mod fixture;

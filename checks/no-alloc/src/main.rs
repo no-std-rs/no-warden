@@ -13,8 +13,8 @@ use no_warden::{
     wire::{
         AccountKeys, AccountKeysResponse, ApiKeyResponse, AttachmentRequest, AttachmentResponse,
         AttachmentUploadResponse, AvatarUpdateRequest, CipherIdsRequest, CipherRequest,
-        ClientCredentialsRequest, DeviceListResponse, DeviceResponse, DomainSettingsRequest,
-        DomainSettingsResponse, DomainSettingsUpdateResponse, ImportRequest,
+        ClientCredentialsRequest, DeviceListResponse, DevicePushTokenRequest, DeviceResponse,
+        DomainSettingsRequest, DomainSettingsResponse, DomainSettingsUpdateResponse, ImportRequest,
         InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
         PasswordOrOtpRequest, PreloginRequest, PreloginResponse, ProfileUpdateRequest,
         UserPublicKeyResponse,
@@ -187,6 +187,18 @@ pub extern "C" fn _start() -> ! {
         &mut output,
     ));
     black_box(output);
+    let push = serde_json_core::from_slice::<DevicePushTokenRequest<'_>>(black_box(
+        br#"{"pushToken":"caller-supplied-test-value"}"#,
+    ));
+    if let Ok((push, _)) = push {
+        let mut encoded = [0_u8; 256];
+        let _ = black_box(serde_json_core::to_slice(&push, &mut encoded));
+        black_box(encoded);
+    }
+    black_box(classify(
+        Method::Put,
+        black_box("/api/devices/identifier/device/token"),
+    ));
     black_box(KnownDeviceRequest {
         email: "embedded@example.test",
         identifier: "embedded-device",

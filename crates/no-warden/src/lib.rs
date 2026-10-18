@@ -13,6 +13,7 @@ pub mod account_profile;
 pub mod attachment;
 pub mod bounded;
 pub mod bulk;
+pub mod device_push;
 pub mod devices;
 pub mod domains;
 pub mod error;

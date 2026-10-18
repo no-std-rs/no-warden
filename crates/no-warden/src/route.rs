@@ -42,6 +42,8 @@ pub enum Route<'a> {
     KnownDevice,
     Devices,
     DeviceGet(&'a str),
+    DevicePushToken(&'a str),
+    DevicePushClear(&'a str),
     DomainsGet,
     DomainsUpdate,
     Folders,
@@ -85,6 +87,7 @@ impl Route<'_> {
                 | Self::Register
                 | Self::Token
                 | Self::KnownDevice
+                | Self::DevicePushClear(_)
                 | Self::AttachmentDownload(_, _)
         )
     }
@@ -154,8 +157,17 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
             if let Some(identifier) = path.strip_prefix("/api/devices/identifier/") {
                 // The adapter percent-decodes and applies upstream IdFromParam.
                 // Capture invalid values too so that guard can return 422 rather than 404.
-                return (method == Get && !identifier.is_empty() && !identifier.contains('/'))
-                    .then_some(DeviceGet(identifier));
+                if let Some((identifier, action)) = identifier.split_once('/') {
+                    if identifier.is_empty() {
+                        return None;
+                    }
+                    return match (method, action) {
+                        (Post | Put, "token") => Some(DevicePushToken(identifier)),
+                        (Post | Put, "clear-token") => Some(DevicePushClear(identifier)),
+                        _ => None,
+                    };
+                }
+                return (method == Get && !identifier.is_empty()).then_some(DeviceGet(identifier));
             }
             if let Some(tail) = path.strip_prefix("/api/users/") {
                 let (id, "public-key") = tail.split_once('/')? else {
@@ -248,6 +260,44 @@ fn valid_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn device_push_aliases_keep_session_updates_authenticated_and_public_clears_separate() {
+        for method in [Method::Post, Method::Put] {
+            for (action, expected, authenticated) in [
+                ("token", Route::DevicePushToken("Different-Path"), true),
+                (
+                    "clear-token",
+                    Route::DevicePushClear("Different-Path"),
+                    false,
+                ),
+            ] {
+                let path =
+                    std::format!("/api/devices/identifier/Different-Path/{action}/?ignored=true");
+                assert_eq!(classify(method, &path), Some(expected));
+                assert_eq!(expected.requires_authentication(), authenticated);
+                for wrong in [Method::Get, Method::Delete, Method::Options] {
+                    assert!(classify(wrong, &path).is_none());
+                }
+            }
+            assert_eq!(
+                classify(method, "/api/devices/identifier/invalid%2Fid/token"),
+                Some(Route::DevicePushToken("invalid%2Fid"))
+            );
+            assert_eq!(
+                classify(method, "/api/devices/identifier/invalid_+/clear-token"),
+                Some(Route::DevicePushClear("invalid_+"))
+            );
+            for path in [
+                "/api/devices/identifier//token",
+                "/api/devices/identifier/id/token/extra",
+                "/api/devices/identifier/id/clear-token/extra",
+                "/api/devices/identifier/id/unknown",
+            ] {
+                assert!(classify(method, path).is_none());
+            }
+        }
+    }
+
     #[test]
     fn device_discovery_routes_keep_public_headers_and_authenticated_opaque_paths_distinct() {
         for (path, expected) in [

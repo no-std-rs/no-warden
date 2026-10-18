@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 208 active Rust tests: 98 core, 63 host, and 47 conformance
+The workspace has 227 active Rust tests: 107 core, 71 host, and 49 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -41,15 +41,21 @@ against Vaultwarden `1.37.4`: 199 requests, including five login attempts (four
 successful and one rejected) and one refresh. They verify known-device headers,
 exact owner-only projections, path guards, login metadata retention, API-key
 registration and refresh identity without changing account/vault state.
-The default adapter job runs all 40 cases, totaling 1616 counted requests.
-Reference comparisons use `--suite personal` and `--suite devices` in separate
+The default adapter job runs all 48 cases, totaling 1999 counted requests.
+Eight token cases add 383 requests and three password logins, covering both
+update/clear aliases, opaque strings, positional input, empty success bodies,
+and authentication/path/JSON guard order. The public clears use the reference
+configuration with push disabled; actual relay behavior remains open.
+Reference comparisons use `--suite personal`, `--suite devices`, and
+`--suite device-tokens` in separate
 fresh disposable Vaultwarden processes. The separate reference CLI comparison starts another fresh process, preserving the
 reference's default ten-login limit.
 The required client job reruns the unchanged 120-command CLI flow for the final
 head. Its verified baseline covers both servers; it establishes no domain
 mutation, settings request trace or device-route trace.
 `BW_FOLDER_RECEIPT`, `BW_ACCOUNT_KEYS_RECEIPT`, `BW_PROFILE_RECEIPT`,
-`BW_DOMAINS_RECEIPT`, and `BW_DEVICES_RECEIPT` select optional private per-group
+`BW_DOMAINS_RECEIPT`, `BW_DEVICES_RECEIPT`, and `BW_DEVICE_TOKENS_RECEIPT`
+select optional private per-group
 receipts. The domain
 receipt also records the public catalog count and fingerprint, without account
 settings or response values.
@@ -135,3 +141,10 @@ Ordinary CI tests this verifier with offline fixtures; CI receives no owner
 credential. Settings readback verifies policy without attempting a direct push.
 See GitHub's [ruleset API](https://docs.github.com/en/rest/repos/rules) and
 [PR enforcement rules](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets#require-a-pull-request-before-merging).
+
+The bare-metal consumer also decodes and encodes `DevicePushTokenRequest` without
+an allocator. Core provider tests cover session targeting, exact-repeat no-ops,
+save-before-relay failure ordering, and enabled all-owner clear/unregister
+semantics. SQLite tests cover token/activity rollback, reopen and foreign-key
+cleanup. These provider guarantees are distinct from actual enabled push relay
+interoperability, which remains unverified.

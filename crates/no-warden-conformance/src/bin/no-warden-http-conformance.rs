@@ -9,6 +9,7 @@ enum Suite {
     Profile,
     Domains,
     Devices,
+    DeviceTokens,
 }
 
 impl Suite {
@@ -21,12 +22,19 @@ impl Suite {
             "profile" => Self::Profile,
             "domains" => Self::Domains,
             "devices" => Self::Devices,
+            "device-tokens" => Self::DeviceTokens,
             _ => return None,
         })
     }
 
     fn includes(self, group: Self) -> bool {
-        self == Self::All || self == group || (self == Self::Personal && group != Self::Devices)
+        self == Self::All
+            || self == group
+            || (self == Self::Personal
+                && matches!(
+                    group,
+                    Self::Folders | Self::AccountKeys | Self::Profile | Self::Domains
+                ))
     }
 }
 
@@ -39,7 +47,7 @@ fn check<E: Display>(result: Result<(), E>) {
 
 fn usage() {
     eprintln!(
-        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices]"
+        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens]"
     );
 }
 
@@ -72,5 +80,8 @@ fn main() {
     }
     if suite.includes(Suite::Devices) {
         check(no_warden_conformance::devices::run());
+    }
+    if suite.includes(Suite::DeviceTokens) {
+        check(no_warden_conformance::device_tokens::run());
     }
 }
