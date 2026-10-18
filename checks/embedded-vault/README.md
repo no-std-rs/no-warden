@@ -26,3 +26,8 @@ keypairs, blob-encrypted payloads, missing legacy names, custom fields, password
 history, archive dates, conditional revisions, and other cipher types rather than discarding
 them. Storage accessors are for trusted
 application code; expose authenticated operations through `VaultService`.
+
+Account records retain email, optional name and password hint, KDF settings, and
+the wrapped user key in bounded buffers. Authentication remains the embedding
+application's responsibility: this example does not retain the client-derived
+`masterPasswordHash` or implement password verification.

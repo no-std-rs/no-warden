@@ -68,6 +68,8 @@ fn slot<T>(entries: &[Option<T>], matches: impl Fn(&T) -> bool) -> Result<usize,
 pub struct Account {
     pub id: Text<ID_BYTES>,
     pub email: Text<TEXT_BYTES>,
+    pub name: Option<Text<TEXT_BYTES>>,
+    pub master_password_hint: Option<Text<TEXT_BYTES>>,
     pub kdf: PreloginResponse,
     pub wrapped_user_key: Text<TEXT_BYTES>,
 }
@@ -134,6 +136,8 @@ impl Storage for FixedVault {
         let value = Account {
             id: Text::copy(id)?,
             email: Text::copy(request.email)?,
+            name: optional(request.name)?,
+            master_password_hint: optional(request.master_password_hint)?,
             kdf: request.prelogin(),
             wrapped_user_key: Text::copy(request.key)?,
         };
@@ -379,6 +383,52 @@ pub fn exercise(vault: &mut FixedVault) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_profile_text_round_trips_and_overflow_never_mutates_storage() {
+        let mut vault = FixedVault::default();
+        let name = "Alice \"quoted\" \\ café 🔐";
+        let hint = "A \"hint\" with \\ Unicode: zażółć 🔑";
+        let request = RegisterRequest {
+            name: Some(name),
+            master_password_hint: Some(hint),
+            ..registration("alice@example.test")
+        };
+        VaultService::new(&mut vault)
+            .register("alice", &request)
+            .unwrap();
+        let account = vault.account("alice").unwrap();
+        assert_eq!(account.name.as_ref().map(Text::as_str), Some(name));
+        assert_eq!(
+            account.master_password_hint.as_ref().map(Text::as_str),
+            Some(hint)
+        );
+
+        let before = vault.clone();
+        let oversized = [b'x'; TEXT_BYTES + 1];
+        let oversized = core::str::from_utf8(&oversized).unwrap();
+        let mut request = registration("bob@example.test");
+        request.name = Some(oversized);
+        assert_eq!(
+            vault.insert_account("bob", &request),
+            Err(Error::TextTooLong)
+        );
+        assert_eq!(vault, before);
+        request.name = None;
+        request.master_password_hint = Some(oversized);
+        assert_eq!(
+            vault.insert_account("bob", &request),
+            Err(Error::TextTooLong)
+        );
+        assert_eq!(vault, before);
+
+        request.master_password_hint = None;
+        vault.insert_account("bob", &request).unwrap();
+        let account = vault.account("bob").unwrap();
+        assert!(account.name.is_none());
+        assert!(account.master_password_hint.is_none());
+    }
+
     #[test]
     fn real_service_lifecycle_ownership_and_capacity() {
         exercise(&mut FixedVault::default());
