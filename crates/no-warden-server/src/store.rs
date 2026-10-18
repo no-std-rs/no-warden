@@ -261,7 +261,7 @@ fn save_document(
                 .map(|date| {
                     Some(
                         date.and_utc()
-                            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
                     )
                 }),
             _ => None,
@@ -277,7 +277,7 @@ fn save_document(
                 .and_then(|date| chrono::NaiveDateTime::parse_from_str(date, "%+").ok())
                 .map(|date| {
                     date.and_utc()
-                        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                        .to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
                 });
             db.execute(
                 "INSERT INTO cipher_archives(cipher_id,owner,archived_at) VALUES(?1,?2,?3)
@@ -394,9 +394,16 @@ impl CipherBulkStorage for Store {
                     )?)?;
                 }
                 CipherBulkOperation::Archive | CipherBulkOperation::Unarchive => {
-                    let archived_at = (plan.operation() == CipherBulkOperation::Archive)
-                        .then_some(revision.as_str());
-                    save_archive(&tx, owner, id, archived_at)?;
+                    let archived_at = if plan.operation() == CipherBulkOperation::Archive {
+                        Some(
+                            chrono::DateTime::parse_from_rfc3339(&revision)
+                                .map_err(|_| rusqlite::Error::InvalidQuery)?
+                                .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+                        )
+                    } else {
+                        None
+                    };
+                    save_archive(&tx, owner, id, archived_at.as_deref())?;
                 }
             }
             bump(&tx, owner, &revision)?;
@@ -622,11 +629,11 @@ mod tests {
         assert!(
             store.item("alice", "cipher", "cipher").unwrap().unwrap()["archivedDate"].is_null()
         );
-        store.pending = json!({"type":2,"name":CIPHERTEXT,"secureNote":{"type":0},"archivedDate":"2026-01-01T12:00:00+02:00"});
+        store.pending = json!({"type":2,"name":CIPHERTEXT,"secureNote":{"type":0},"archivedDate":"2026-01-01T12:00:00.123456+02:00"});
         store.save("alice", "cipher", "cipher").unwrap();
         assert_eq!(
             store.item("alice", "cipher", "cipher").unwrap().unwrap()["archivedDate"],
-            "2026-01-01T12:00:00.000Z"
+            "2026-01-01T12:00:00.123456Z"
         );
         // Simulate the pre-annotation schema: valid archive metadata lives only
         // in the document. An invalid update must retain that effective state.
@@ -639,7 +646,7 @@ mod tests {
         store.save("alice", "cipher", "cipher").unwrap();
         assert_eq!(
             store.item("alice", "cipher", "cipher").unwrap().unwrap()["archivedDate"],
-            "2026-01-01T12:00:00.000Z"
+            "2026-01-01T12:00:00.123456Z"
         );
         let revision =
             store.item("alice", "cipher", "cipher").unwrap().unwrap()["revisionDate"].clone();

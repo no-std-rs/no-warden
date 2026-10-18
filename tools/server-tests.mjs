@@ -369,12 +369,12 @@ await test("standalone adapter enforces authentication, isolation, and JSON pres
   });
 
   await t.test("archivedDate survives cipher creation, update, and sync", async () => {
-    const archivedDate = "2026-01-01T00:00:00.000Z";
+    const archivedDate = "2026-01-01T00:00:00.123456Z";
     const item = ok(await request("/api/ciphers", {
       method: "POST", token: aliceToken, body: cipher(alice, { archivedDate }),
     }), "archived cipher create");
     assert.equal(item.archivedDate, archivedDate);
-    const changed = "2026-02-01T00:00:00.000Z";
+    const changed = "2026-02-01T00:00:00.123456Z";
     const updated = ok(await request(`/api/ciphers/${item.id}`, {
       method: "PUT", token: aliceToken, body: { ...item, archivedDate: changed, lastKnownRevisionDate: item.revisionDate },
     }), "archived cipher update");
@@ -777,9 +777,14 @@ await test("cipher archive lifecycle preserves per-owner metadata and encrypted 
       assert.equal(item.revisionDate, items.find(old => old.id === item.id).revisionDate);
       assert(Date.parse(item.archivedDate) > Date.parse(archived.find(old => old.id === item.id).archivedDate));
     }
-    const editBody = { ...repeated[0], encryptedFor: ownerId, favorite: true, lastKnownRevisionDate: repeated[0].revisionDate };
+    const exactDate = "2026-02-01T00:00:00.123456Z";
+    const editBody = {
+      ...repeated[0], encryptedFor: ownerId, favorite: true, archivedDate: exactDate,
+      lastKnownRevisionDate: repeated[0].revisionDate,
+    };
     const edited = ok(await request(`/api/ciphers/${editBody.id}`, { method: "PUT", token, body: editBody }), "ordinary archived-item edit");
-    assert.equal(edited.archivedDate, repeated[0].archivedDate, "An explicit valid date must retain the owner's archive annotation");
+    assert.equal(edited.archivedDate, exactDate, "An explicit valid archive date must retain all six fractional digits");
+    assert.equal((await vaultState(token)).ciphers.find(item => item.id === edited.id).archivedDate, exactDate);
     assert(Date.parse(edited.revisionDate) > Date.parse(repeated[0].revisionDate));
     const invalidDate = ok(await request(`/api/ciphers/${edited.id}`, {
       method: "PUT", token,
