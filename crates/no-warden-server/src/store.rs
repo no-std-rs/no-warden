@@ -4,14 +4,15 @@ use no_warden::{
     account_keys::{AccountKeyState, AccountKeyStorage},
     account_profile::AccountProfileStorage,
     bulk::{CipherBulkOperation, CipherBulkStorage, ValidatedCipherBulk},
+    device_push::{ClearedDevicePush, DevicePushState, DevicePushStorage},
     devices::{DeviceRecord, DeviceRegistration, DeviceStorage},
     domains::{DomainSettingsData, DomainSettingsStorage},
     identity::{ApiKeyDevice, IdentityStorage, ReauthenticationProof, Secret},
     import::{ImportData, ImportStorage, ValidatedImport},
     service::ItemMetadata,
     wire::{
-        AccountKeys, ApiKeyResponse, AvatarUpdateRequest, CipherRequest, FolderRequest,
-        ProfileUpdateRequest, RegisterRequest,
+        AccountKeys, ApiKeyResponse, AvatarUpdateRequest, CipherRequest, DevicePushTokenRequest,
+        FolderRequest, ProfileUpdateRequest, RegisterRequest,
     },
 };
 use rand::{
@@ -36,6 +37,7 @@ pub struct Store {
     domain_settings_cache: crate::domains::Settings,
     device_list_cache: crate::devices::Registry,
     device_cache: Option<crate::devices::Record>,
+    device_push_token_cache: Option<String>,
 }
 
 // Owned query results keep the optional core response borrows tied to this
@@ -183,6 +185,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS attachment_downloads(token TEXT PRIMARY KEY, attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE, expires INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS sessions(access TEXT PRIMARY KEY, refresh TEXT UNIQUE NOT NULL, owner TEXT NOT NULL REFERENCES accounts(id), access_expires INTEGER NOT NULL, refresh_expires INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS device_registry(owner TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, identifier TEXT NOT NULL, name TEXT NOT NULL, device_type INTEGER NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, PRIMARY KEY(owner,identifier));
+            CREATE TABLE IF NOT EXISTS device_push_tokens(owner TEXT NOT NULL, identifier TEXT NOT NULL, token TEXT NOT NULL, PRIMARY KEY(owner,identifier), FOREIGN KEY(owner,identifier) REFERENCES device_registry(owner,identifier) ON DELETE CASCADE);
             CREATE TABLE IF NOT EXISTS session_devices(access TEXT PRIMARY KEY REFERENCES sessions(access) ON DELETE CASCADE, owner TEXT NOT NULL, identifier TEXT NOT NULL, FOREIGN KEY(owner,identifier) REFERENCES device_registry(owner,identifier) ON DELETE CASCADE);")?;
         // SQLite inherits the private database mode for new sidecars. Also
         // narrow sidecars left behind by an earlier permissive installation.
@@ -203,6 +206,7 @@ impl Store {
             domain_settings_cache: crate::domains::Settings::default(),
             device_list_cache: crate::devices::Registry::default(),
             device_cache: None,
+            device_push_token_cache: None,
         })
     }
 
@@ -609,6 +613,54 @@ impl CipherBulkStorage for Store {
     }
 }
 
+impl DevicePushStorage for Store {
+    type PushId = String;
+
+    fn push_enabled(&self) -> bool {
+        false
+    }
+    fn device_push_state(
+        &mut self,
+        owner: &str,
+        session_identifier: &str,
+    ) -> rusqlite::Result<Option<DevicePushState<'_>>> {
+        self.device_cache = crate::devices::load(&self.db, owner, session_identifier)?;
+        self.device_push_token_cache =
+            crate::devices::push_token(&self.db, owner, session_identifier)?;
+        Ok(self.device_cache.as_ref().map(|record| DevicePushState {
+            owner_id: &record.owner,
+            identifier: &record.identifier,
+            push_token: self.device_push_token_cache.as_deref(),
+        }))
+    }
+    fn save_device_push_token(
+        &mut self,
+        owner: &str,
+        session_identifier: &str,
+        request: &DevicePushTokenRequest<'_>,
+    ) -> rusqlite::Result<()> {
+        crate::devices::save_push_token(&mut self.db, owner, session_identifier, request.push_token)
+    }
+    fn register_device_push(
+        &mut self,
+        _owner: &str,
+        _session_identifier: &str,
+    ) -> rusqlite::Result<()> {
+        // Standalone push configuration is disabled: no relay or outbound HTTP.
+        Ok(())
+    }
+    fn clear_device_push_tokens(
+        &mut self,
+        _identifier: &str,
+    ) -> rusqlite::Result<ClearedDevicePush<Self::PushId>> {
+        // Disabled clear must return before this storage hook is invoked.
+        Err(rusqlite::Error::InvalidQuery)
+    }
+    fn unregister_device_push(&mut self, _push_id: &str) -> rusqlite::Result<()> {
+        Err(rusqlite::Error::InvalidQuery)
+    }
+}
+
 impl DeviceStorage for Store {
     type Devices<'a> = &'a crate::devices::Registry;
 
@@ -918,6 +970,270 @@ mod tests {
     use serde::Deserialize;
 
     const CIPHERTEXT: &str = "2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+    fn device_push_rows(store: &Store) -> Vec<String> {
+        store.db.prepare("SELECT owner||':'||identifier||':'||token FROM device_push_tokens ORDER BY owner,identifier").unwrap().query_map([],|row|row.get(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
+    }
+    fn set_fixture_push(
+        store: &mut Store,
+        owner: &str,
+        identifier: &str,
+        token: &str,
+    ) -> Result<(), no_warden::ApiError> {
+        VaultService::new(store).set_device_push_token(
+            owner,
+            identifier,
+            &DevicePushTokenRequest { push_token: token },
+        )
+    }
+    #[test]
+    fn device_push_changes_only_token_and_activity_and_exact_repeat_performs_no_write() {
+        let mut store = profile_fixture();
+        for (owner, identifier) in [
+            ("alice", "Shared-Device"),
+            ("bob", "Shared-Device"),
+            ("alice", "Other-Device"),
+        ] {
+            VaultService::new(&mut store)
+                .register_device(
+                    owner,
+                    &DeviceRegistration {
+                        identifier,
+                        name: "Original",
+                        device_type: 1,
+                    },
+                )
+                .unwrap();
+        }
+        let before = snapshot(&store);
+        let authority = account_authority_snapshot(&store);
+        let initial = crate::devices::load(&store.db, "alice", "Shared-Device")
+            .unwrap()
+            .unwrap();
+        let foreign = device_rows(&store)
+            .into_iter()
+            .filter(|row| !row.starts_with("alice:Shared-Device:"))
+            .collect::<Vec<_>>();
+        for token in ["", "opaque-raw-device-push-secret", "NUL\0café 雪\r\n"] {
+            store.db.execute("UPDATE device_registry SET updated='2000-01-01T00:00:00.000000Z' WHERE owner='alice' AND identifier='Shared-Device'",[]).unwrap();
+            set_fixture_push(&mut store, "alice", "Shared-Device", token).unwrap();
+            assert!(
+                crate::devices::push_token(&store.db, "alice", "Shared-Device")
+                    .unwrap()
+                    .as_deref()
+                    == Some(token)
+            );
+            let state = device_rows(&store);
+            let rows = device_push_rows(&store);
+            let changes = store.db.total_changes();
+            store.db.execute_batch("CREATE TRIGGER reject_repeated_push_insert BEFORE INSERT ON device_push_tokens BEGIN SELECT RAISE(ABORT,'repeated push insert'); END; CREATE TRIGGER reject_repeated_push_update BEFORE UPDATE ON device_push_tokens BEGIN SELECT RAISE(ABORT,'repeated push update'); END; CREATE TRIGGER reject_repeated_device_update BEFORE UPDATE ON device_registry BEGIN SELECT RAISE(ABORT,'repeated device activity'); END;").unwrap();
+            set_fixture_push(&mut store, "alice", "Shared-Device", token).unwrap();
+            assert_eq!(store.db.total_changes(), changes);
+            assert!(device_rows(&store) == state && device_push_rows(&store) == rows);
+            store.db.execute_batch("DROP TRIGGER reject_repeated_push_insert; DROP TRIGGER reject_repeated_push_update; DROP TRIGGER reject_repeated_device_update;").unwrap();
+            let updated:String=store.db.query_row("SELECT updated FROM device_registry WHERE owner='alice' AND identifier='Shared-Device'",[],|row|row.get(0)).unwrap();
+            assert!(updated != "2000-01-01T00:00:00.000000Z");
+            let record = crate::devices::load(&store.db, "alice", "Shared-Device")
+                .unwrap()
+                .unwrap();
+            assert!(
+                record.name == initial.name
+                    && record.device_type == initial.device_type
+                    && record.created == initial.created
+            );
+            assert!(
+                snapshot(&store) == before && account_authority_snapshot(&store) == authority,
+                "Push token update changed account authority, revision or vault data."
+            );
+            assert!(
+                device_rows(&store)
+                    .into_iter()
+                    .filter(|row| !row.starts_with("alice:Shared-Device:"))
+                    .collect::<Vec<_>>()
+                    == foreign
+            );
+        }
+        let list =
+            serde_json::to_value(VaultService::new(&mut store).list_devices("alice").unwrap())
+                .unwrap();
+        let single = serde_json::to_value(
+            VaultService::new(&mut store)
+                .get_device("alice", "Shared-Device")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(list["data"][0].as_object().unwrap().len(), 10);
+        assert_eq!(single.as_object().unwrap().len(), 7);
+        assert!(
+            !list.to_string().contains("raw-device-push-secret")
+                && !single.to_string().contains("raw-device-push-secret")
+        );
+        let rows = device_push_rows(&store);
+        assert!(set_fixture_push(&mut store, "bob", "Other-Device", "untrusted").is_err());
+        assert!(set_fixture_push(&mut store, "missing", "Shared-Device", "untrusted").is_err());
+        assert!(device_push_rows(&store) == rows);
+    }
+
+    #[test]
+    fn device_push_storage_failures_roll_back_token_activity_and_unrelated_state() {
+        for existing in [false, true] {
+            for failure in ["token", "activity", "commit"] {
+                let mut store = profile_fixture();
+                VaultService::new(&mut store)
+                    .register_device(
+                        "alice",
+                        &DeviceRegistration {
+                            identifier: "Atomic-Device",
+                            name: "Original",
+                            device_type: 1,
+                        },
+                    )
+                    .unwrap();
+                if existing {
+                    set_fixture_push(&mut store, "alice", "Atomic-Device", "original").unwrap();
+                }
+                let before = snapshot(&store);
+                let authority = account_authority_snapshot(&store);
+                let devices = device_rows(&store);
+                let tokens = device_push_rows(&store);
+                let trigger = match failure {
+                    "token" => {
+                        "CREATE TRIGGER reject_push_insert BEFORE INSERT ON device_push_tokens BEGIN SELECT RAISE(ABORT,'injected token write'); END;"
+                    }
+                    "activity" => {
+                        "CREATE TRIGGER reject_push_activity BEFORE UPDATE OF updated ON device_registry BEGIN SELECT RAISE(ABORT,'injected activity write'); END;"
+                    }
+                    "commit" => {
+                        "CREATE TABLE failed_push_commit(owner TEXT REFERENCES accounts(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER reject_push_commit AFTER UPDATE OF updated ON device_registry BEGIN INSERT INTO failed_push_commit(owner) VALUES('missing'); END;"
+                    }
+                    _ => unreachable!(),
+                };
+                store.db.execute_batch(trigger).unwrap();
+                assert!(
+                    set_fixture_push(&mut store, "alice", "Atomic-Device", "replacement").is_err()
+                );
+                assert!(
+                    snapshot(&store) == before
+                        && account_authority_snapshot(&store) == authority
+                        && device_rows(&store) == devices
+                        && device_push_rows(&store) == tokens,
+                    "Failed push token save changed persisted state."
+                );
+                assert!(store.db.is_autocommit());
+            }
+        }
+    }
+
+    #[test]
+    fn device_push_disabled_clear_skips_lookup_storage_and_relay_for_all_identifiers() {
+        let mut store = setup();
+        for owner in ["alice", "bob"] {
+            VaultService::new(&mut store)
+                .register_device(
+                    owner,
+                    &DeviceRegistration {
+                        identifier: "Shared-Clear",
+                        name: "Original",
+                        device_type: 1,
+                    },
+                )
+                .unwrap();
+            set_fixture_push(&mut store, owner, "Shared-Clear", "preserved").unwrap();
+        }
+        let before = snapshot(&store);
+        let devices = device_rows(&store);
+        let tokens = device_push_rows(&store);
+        let changes = store.db.total_changes();
+        assert!(!DevicePushStorage::push_enabled(&store));
+        for identifier in ["Shared-Clear", "Missing", "", "opaque-雪"] {
+            VaultService::new(&mut store)
+                .clear_device_push_token(identifier)
+                .unwrap();
+        }
+        assert_eq!(store.db.total_changes(), changes);
+        assert!(
+            snapshot(&store) == before
+                && device_rows(&store) == devices
+                && device_push_rows(&store) == tokens
+        );
+    }
+
+    #[test]
+    fn device_push_tokens_survive_relogin_reopen_and_follow_composite_foreign_key_cleanup() {
+        let directory =
+            std::env::temp_dir().join(format!("no-warden-push-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("vault.db");
+        let mut store = Store::open(path.to_str().unwrap()).unwrap();
+        for owner in ["alice", "bob"] {
+            store.db.execute("INSERT INTO accounts(id,email,document,password,revision) VALUES(?1,?2,'{}','preserved-verifier',?3)",params![owner,format!("{owner}@example.test"),now()]).unwrap();
+            VaultService::new(&mut store)
+                .register_device(
+                    owner,
+                    &DeviceRegistration {
+                        identifier: "Restart-Device",
+                        name: "Original",
+                        device_type: 1,
+                    },
+                )
+                .unwrap();
+            set_fixture_push(
+                &mut store,
+                owner,
+                "Restart-Device",
+                if owner == "alice" {
+                    "NUL\0persisted-雪"
+                } else {
+                    "foreign"
+                },
+            )
+            .unwrap();
+        }
+        let before = device_push_rows(&store);
+        let authority = snapshot(&store);
+        drop(store);
+        let mut reopened = Store::open(path.to_str().unwrap()).unwrap();
+        assert!(device_push_rows(&reopened) == before && snapshot(&reopened) == authority);
+        VaultService::new(&mut reopened)
+            .register_device(
+                "alice",
+                &DeviceRegistration {
+                    identifier: "Restart-Device",
+                    name: "Replacement",
+                    device_type: 99,
+                },
+            )
+            .unwrap();
+        assert!(device_push_rows(&reopened) == before);
+        assert!(
+            crate::devices::load(&reopened.db, "alice", "Restart-Device")
+                .unwrap()
+                .unwrap()
+                .name
+                == "Original"
+        );
+        reopened
+            .db
+            .execute(
+                "DELETE FROM device_registry WHERE owner='alice' AND identifier='Restart-Device'",
+                [],
+            )
+            .unwrap();
+        assert!(
+            crate::devices::push_token(&reopened.db, "alice", "Restart-Device")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            crate::devices::push_token(&reopened.db, "bob", "Restart-Device")
+                .unwrap()
+                .as_deref()
+                == Some("foreign")
+        );
+        assert!(snapshot(&reopened) == authority);
+        drop(reopened);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     fn device_rows(store: &Store) -> Vec<String> {
         store.db.prepare("SELECT owner||':'||identifier||':'||name||':'||device_type||':'||created||':'||updated FROM device_registry ORDER BY owner,identifier").unwrap().query_map([], |row| row.get(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()

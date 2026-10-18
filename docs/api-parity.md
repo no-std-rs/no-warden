@@ -39,11 +39,11 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 66 routed patterns, 37 with typed requests, 54 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 70 routed patterns, 39 with typed requests, 58 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 63 partial and 231 unimplemented. Query/rank/configuration
+status: 67 partial and 227 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
@@ -54,8 +54,8 @@ responses, and attachment responses. Bulk cipher lists use the generic `ListResp
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 58 patterns, negative
-HTTP evidence for 57, 101 named HTTP cases, and 31 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 62 patterns, negative
+HTTP evidence for 61, 109 named HTTP cases, and 31 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -503,3 +503,45 @@ attempts (four successful and one rejected) and one refresh. The existing
 both selections within the unchanged default login limit. The default adapter
 entry point runs all 40 cases. No CLI device-route trace or full-parity flag is
 claimed, and the full API delivery goal remains open.
+
+
+## Device push-token contracts
+
+| Method and route | Scoped behavior |
+| --- | --- |
+| `POST`/`PUT /api/devices/identifier/<id>/token` | Validate the path, then update the verified session's device; empty 200 |
+| `POST`/`PUT /api/devices/identifier/<id>/clear-token` | Public guarded path; disabled push returns empty 200 without clearing |
+
+The [pinned handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1576-L1641)
+intentionally use the authenticated device rather than the update path's identifier.
+A valid missing or foreign path identifier can therefore succeed. Authentication
+precedes path validation, which precedes JSON validation. Public clear ignores
+authorization and body input. Missing or malformed update fields return the tested
+400/422 statuses; all successful responses have empty bodies rather than JSON null.
+
+`DevicePushTokenRequest` contains one required borrowed opaque string. Empty
+strings are values; unknown fields are ignored, one-element positional input is
+accepted, and duplicate known fields are rejected. `DevicePushStorage` provides
+verified owner/device lookup, atomic token/activity writes and ordered relay
+callbacks. An exact repeat skips saving and registration. Changed tokens persist
+before relay registration, so a callback failure retains the mutation and an
+identical retry takes the shortcut, following the pinned source.
+
+Enabled clear providers clear every owner with the exact path identifier and
+return the first device's optional push ID for subsequent unregistration. The
+owned associated handle can use stack storage without a core allocation. Provider
+tests verify that order and failure effects. The standalone adapter uses disabled
+push, so clear returns before registry access or relay work. Enabled relay
+interoperability, notifications and reference rate controls remain open; adding
+these routes does not establish that broader behavior.
+
+Eight selected Rust HTTP cases pass against the adapter and actual Vaultwarden
+`1.37.4`: 383 requests and three successful password logins each. The full local
+selection passes 48 cases with 1999 requests. Separate fresh reference processes
+preserve its unchanged login and unauthenticated clear limits. Public projections
+do not expose token contents; a separate private Rust/read-only SQLite probe
+passes 13 state checks on both servers, covering session targeting, preserved
+activity on exact repeats, disabled clears, owner isolation and refresh identity.
+Its 16 requests include three logins and one refresh; no secret values are emitted.
+The host's stronger zero-write shortcut proof uses abort triggers in unit tests.
+No CLI token-route trace, real relay delivery or full-parity status is claimed.

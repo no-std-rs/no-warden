@@ -262,10 +262,62 @@ regardless of device metadata supplied in the refresh form.
 The allocation-free core exposes `DeviceStorage`, borrowed header input, and
 explicit boolean/list/single response projections. The standalone adapter owns
 the persistent registry, session binding and `device` JWT claim. Legacy sessions
-without bindings remain valid and are not backfilled. Push tokens, approval,
-authentication requests, device removal, notification behavior and broader device
-management remain unimplemented. The direct HTTP comparison establishes only
+without bindings remain valid and are not backfilled. Approval, authentication
+requests, device removal, notification behavior and broader device management
+remain unimplemented. The direct HTTP comparison establishes only
 this discovery/login-binding contract, with no CLI device-route trace claim.
+
+## Device push tokens
+
+The [pinned token handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1577-L1641)
+provide four aliases, all returning a genuinely empty 200 response, not JSON null:
+
+| Method and route | Target and authentication |
+| --- | --- |
+| `POST` / `PUT /api/devices/identifier/<id>/token` | Verified session's device; bearer and JSON body required |
+| `POST` / `PUT /api/devices/identifier/<id>/clear-token` | Public path identifier; disabled push returns without clearing |
+
+The write path ID must pass `IdFromParam` syntax but does not select the target.
+The verified [request guard](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth.rs#L637-L710)
+resolves the device from its authenticated session. A syntactically valid path
+can name a missing device or any other device; its value does not redirect or
+reject the write. Request device headers and owner fields have no authority. Guard order is
+session/device authentication, path validation, then JSON decoding; anonymous or
+unbound sessions return 401 before malformed paths or bodies are parsed.
+
+The required `pushToken` field is an opaque string: empty, control and Unicode
+values are accepted without normalization. Positional `["value"]` is also valid.
+Missing, null, wrong-typed or duplicate known fields return 422. Malformed JSON
+and surplus positional elements return 400. Unknown fields are ignored.
+An identical present token returns before persistence, activity or relay hooks.
+A changed token saves with device activity before
+[registration](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/push.rs#L87-L151).
+Registration failure leaves that save in place; repeating the same token does
+not retry registration. Account revision, original device metadata and vault data
+remain unchanged.
+
+Clear applies its path guard even without a valid bearer and ignores body data.
+With push disabled it returns an empty 200 without clearing or looking up devices.
+With push enabled the provider clears every owner's token for that exact
+identifier, then unregisters only the first selected matching record's push ID
+when present. A first record without a push ID does not use another owner's ID.
+Unregister failure retains the cleared state. The core exposes this ordering
+through `DevicePushStorage`; enabled-provider tests establish those hooks, not
+interoperability with a real relay.
+
+The standalone adapter has push disabled. Its token writes and no-op clears do
+not send network requests. Its legacy unbound access sessions remain valid for
+existing routes but cannot choose a push-write target. Upstream clear has an
+unauthenticated rate limiter; the local adapter does not implement it. Real relay
+registration, unregistration, push delivery, abuse controls and notification APIs
+remain open. All eight focused HTTP cases pass against the adapter and official
+Vaultwarden `1.37.4`: 383 counted requests and three password logins per server.
+A separate private Rust/read-only SQLite probe also passes against both servers:
+16 HTTP requests and 13 read-only checks per server, using three password logins
+and one refresh. It confirms target selection, retained activity on an identical
+token, disabled-clear retention and refresh binding. Literal zero SQL writes is
+a stronger property covered by host trigger tests. No CLI device-token route
+attribution or live enabled-relay behavior is claimed.
 
 ## Profile, account keys, and synchronization
 

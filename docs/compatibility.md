@@ -47,6 +47,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | `PUT`/`POST /api/accounts/profile`, `PUT /api/accounts/avatar` | Exact profile names and nullable avatar colors with UTF-8 byte limits | Core/provider contracts, host rollback tests, and eight matching Rust HTTP cases on both servers; no CLI mutation claim |
 | `GET`/`POST`/`PUT /api/settings/domains`, sync domains | Opaque ordered custom groups, signed exclusions, full flagged catalog for GET and filtered catalog for sync | Reusable borrowed views and typed projections, host rollback/isolation tests, eight matching Rust HTTP cases; no CLI domain mutation or settings request trace claim |
 | `GET /api/devices/knowndevice`, `GET /api/devices`, `GET /api/devices/identifier/<id>` | Public exact header lookup, authenticated owner-only device projections, verified-login registry and refresh binding | Eight matching Rust HTTP cases against both servers; core/provider and host rollback/reopen tests; no CLI device-route trace claim |
+| `POST`/`PUT /api/devices/identifier/<id>/token` and `/clear-token` | Bound-session token writes and disabled-relay public no-op clears, with empty 200 responses | Core/provider and host rollback/reopen tests; eight matching Rust HTTP cases and a separate private read-only stored-state probe on both servers; no CLI route attribution |
 | Folder CRUD and POST aliases | Opaque names, four-field responses, owner isolation, clear references without changing cipher revisions | CLI baseline; core/host tests and the focused HTTP comparison described below |
 | Cipher CRUD | Opaque ciphertext and unknown JSON fields | CLI, HTTP, storage tests |
 | Personal v2 attachment reservation and multipart upload | Opaque encrypted metadata and bytes; declared/measured size checks | Core, real CLI on both servers, matching HTTP |
@@ -68,13 +69,13 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Provider conflict errors | `Storage::map_error` can preserve an HTTP 409 conflict | Core provider tests |
 
 The allocation-free core's models include login, secure note, card, identity,
-and SSH-key items, plus optional opaque blob data. Its 98 unit tests cover the
+and SSH-key items, plus optional opaque blob data. Its 107 unit tests cover the
 typed fields, bounded collections and import decoding, validation, ownership,
 lifecycle rules, folder mapping, the atomic import and bulk provider contracts,
 API-key proof selection and authorization, and attachment lifecycle and provider
 rules, account-key initialization, profile/avatar byte validation, and equivalent-domain
 views, serialization, schema and atomic provider boundaries, plus device
-discovery, owner checks and explicit projections. A compile-fail
+discovery, owner checks, explicit projections and push-provider ordering. A compile-fail
 doctest verifies that `Secret` cannot be serialized through the general Serde interface.
 Real-client import evidence covers the types listed above; broader operations
 for those types and blob encryption need their own client fixtures. Keeping
@@ -90,9 +91,9 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 63 Rust host tests pass and cover storage and transport rules. The host-only
-Rust conformance crate adds 47 unit tests, bringing the workspace count to 208
-unit tests plus the core doctest.
+All 71 Rust host tests pass and cover storage and transport rules. The host-only
+Rust conformance crate adds 49 unit tests. All 227 workspace unit tests and the
+core doctest pass.
 These establish wire preservation and authorization for the new shapes,
 aliases, and personal imports independently of the CLI evidence.
 They do not prove that a real client can decrypt a blob or use stored passkey
@@ -135,7 +136,7 @@ and domain checks: all 32 cases pass against each server, with 1417 counted
 requests and nine password logins, excluding fixture registrations. Its full
 91-entry catalog matches the ordered public reference fingerprint. The verified
 120-command CLI baseline remains separate client evidence; required CI reruns it
-for the device changes. No CLI domain mutation or direct settings request is
+for the push-token changes. No CLI domain mutation or direct settings request is
 attributed to that result.
 
 The selected `--suite devices` run passes all eight cases against the adapter and
@@ -144,14 +145,15 @@ six identity requests. Those comprise five login attempts (four successful and
 one rejected password) and one refresh. The reference `personal` and `devices`
 runs use separate fresh processes with unchanged upstream login rate limits;
 their combined login attempts would exceed the reference's ten-request login
-burst. Default `--suite all` selects all 40 cases for local adapter regression.
-It is not a claimed combined 40-case reference run. Fixture registration requests
-are outside the counted suite requests.
+burst. Default `--suite all` passes all 48 cases against the local adapter with
+1999 counted HTTP requests, including the eight push-token cases. Reference
+comparisons select `personal`, `devices`, and `device-tokens` in separate fresh
+processes; no combined 48-case reference run is claimed. Fixture registration
+requests are outside the counted suite requests.
 
 The device comparison verifies public known-device headers, trailing-padding
 removal, strict base64url and UTF-8 handling, email lowercasing without trimming,
-exact
-opaque identifiers, owner isolation, and authentication/path-guard ordering.
+exact opaque identifiers, owner isolation, and authentication/path-guard ordering.
 Authenticated lookup uses percent-decoded ASCII alphanumeric/hyphen identifiers
 without a UUID requirement. Invalid paths return 422 after authentication;
 valid missing/foreign identifiers return 400. Single responses contain exactly
@@ -171,10 +173,58 @@ revisions, credentials, keys, vault and foreign state; inject provider, session,
 binding and deferred-commit failures; and reopen the private database. Refresh
 failure also preserves its original authority and device activity. New JWTs
 carry the bound `device`; existing unbound sessions remain valid, with legacy
-backfill still open. Push-token endpoints, device removal/approval, authentication
-requests and notifications remain pending. Required CI reruns the unchanged
+backfill still open. Device removal/approval, authentication requests and
+notifications remain pending. Required CI reruns the unchanged
 120-command real CLI suite for this chunk; the device HTTP proof does not add a
 CLI command or broader client claim.
+
+The push-token chunk adds authenticated POST/PUT token aliases and public
+POST/PUT clear aliases. All eight selected `--suite device-tokens` HTTP cases pass
+against the adapter and official Vaultwarden `1.37.4`: 383 counted HTTP requests
+per server, including three successful password logins and no refresh. Hidden
+token targeting and activity changes cannot be inferred from the public
+seven/ten-field device projections, so wire-only success is not treated as proof
+of those properties. A separate private Rust/read-only SQLite probe passes
+against both actual servers: 16 HTTP requests and 13 read-only checks per server,
+using three password logins and one refresh. It verifies the authenticated target
+despite a different path, unchanged other/foreign tokens, unchanged activity on
+an identical token, retained empty tokens, disabled public clear retaining both
+owners, schema-rejection nonmutation, refresh identity, and unchanged profiles
+and account revisions. The SQL observations establish unchanged activity;
+literal zero SQL writes is the stronger host-test result checked with abort
+triggers. Reference runs preserve their default login and public-clear rate
+limits.
+The unchanged 120-command CLI baseline requires its CI rerun; this chunk adds no
+CLI device-token route claim or full-parity flag.
+
+The write target is the verified session-bound device, regardless of a valid
+path identifier or request device/owner fields. The path remains syntax-guarded.
+Opaque tokens include empty, control and Unicode strings. An exact repeat skips
+all SQL writes, activity and relay registration; a changed token atomically saves
+with activity while preserving account revision, original device metadata,
+credentials, sessions and vault/foreign state. The core then invokes registration.
+A registration error retains the save, and a retry with the same value skips the
+callback. This ordering is covered by provider tests; the standalone relay is
+disabled and makes no outbound requests.
+
+Clear is public, ignores bearer/body data, and returns an empty 200 with push
+disabled while retaining every token. Invalid paths still return 422. No JSON
+null success body is emitted. Enabled-provider tests cover clearing all owners
+with an identifier before unregistering the first selected record's push ID,
+only when that first ID exists; an absent first ID does not select a later owner's
+ID. Unregister failure retains cleared state. These tests do not establish actual
+enabled relay registration, deletion or delivery.
+
+`DevicePushTokenRequest` is borrowed, allocation-free and redacted in Debug.
+The owned host guard preserves escaped strings, duplicate-field schema errors,
+and positional input behavior. Host tests verify bound-session targeting,
+refresh binding, exact-repeat zero changes, empty responses, provider/write/
+activity/commit rollback, relogin retention, private-database reopen and composite
+foreign-key cleanup. Legacy unbound sessions return 401 for push writes while
+existing routes remain valid. Local unauthenticated abuse limiting is not
+implemented; the reference's default rate limits remain unchanged in comparisons.
+Real relay configuration, registration/unregistration, push delivery, notification
+APIs and wider device management remain open.
 
 `GET /api/settings/domains` includes every global catalog group with its computed
 exclusion flag. Sync includes custom groups and only unexcluded catalog groups,

@@ -1,6 +1,6 @@
-//! Adapter-owned discovery registry for the pinned Vaultwarden device contract.
+//! Adapter-owned discovery registry and disabled-relay push-token storage.
 //! Source: vaultwarden 58a980f850464f7d9cdc99a765df36f0a3308b91,
-//! accounts.rs:1504-1580, device.rs:23-130, identity.rs:776-797 and
+//! accounts.rs:1504-1641, push.rs:87-151, device.rs:23-130, identity.rs:776-797 and
 //! macros/src/lib.rs:40-58. Device IDs are opaque in headers/login forms;
 //! authenticated path IDs use the upstream ASCII alphanumeric/hyphen guard.
 
@@ -12,7 +12,19 @@ use no_warden::{
     wire::KnownDeviceRequest,
 };
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::Deserialize;
 use std::collections::BTreeMap;
+
+// Decode strings before borrowing the core request. Parsing the original body
+// preserves known duplicate-field errors and Serde's positional struct schema.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushInput {
+    pub push_token: String,
+}
+pub fn parse_push_input(body: &[u8]) -> Result<PushInput, Failure> {
+    serde_json::from_slice(body).map_err(crate::json_guard_error)
+}
 
 pub struct KnownHeaders {
     email: String,
@@ -191,10 +203,92 @@ pub fn refresh_binding(
     db.query_row("SELECT d.identifier FROM session_devices d JOIN sessions s ON s.access=d.access AND s.owner=d.owner WHERE s.refresh=?1 AND s.owner=?2", params![refresh_digest,owner], |row| row.get(0)).optional()
 }
 
+// This lookup accepts only the session whose access digest was authenticated by
+// dispatch. Request headers, a path ID and decoded-but-unverified JWT claims
+// cannot select the target device.
+pub fn access_binding(
+    db: &Connection,
+    access_digest: &str,
+    owner: &str,
+) -> rusqlite::Result<Option<String>> {
+    db.query_row("SELECT d.identifier FROM session_devices d JOIN sessions s ON s.access=d.access AND s.owner=d.owner JOIN device_registry r ON r.owner=d.owner AND r.identifier=d.identifier WHERE s.access=?1 AND s.owner=?2", params![access_digest,owner], |row| row.get(0)).optional()
+}
+pub fn push_token(
+    db: &Connection,
+    owner: &str,
+    identifier: &str,
+) -> rusqlite::Result<Option<String>> {
+    db.query_row(
+        "SELECT token FROM device_push_tokens WHERE owner=?1 AND identifier=?2",
+        params![owner, identifier],
+        |row| row.get(0),
+    )
+    .optional()
+}
+pub fn save_push_token(
+    db: &mut Connection,
+    owner: &str,
+    identifier: &str,
+    token: &str,
+) -> rusqlite::Result<()> {
+    let tx = db.savepoint()?;
+    if push_token(&tx, owner, identifier)?.as_deref() != Some(token) {
+        tx.execute("INSERT INTO device_push_tokens(owner,identifier,token) VALUES(?1,?2,?3) ON CONFLICT(owner,identifier) DO UPDATE SET token=excluded.token", params![owner,identifier,token])?;
+        touch(&tx, owner, identifier)?;
+    }
+    tx.commit()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
+
+    #[test]
+    fn push_input_matches_required_string_schema_sequence_and_error_categories() {
+        for body in [
+            br#"{"pushToken":""}"#.as_slice(),
+            br#"{"pushToken":"NUL\u0000caf\u00e9\u96ea","untrusted":{"id":"foreign"}}"#,
+            br#"["opaque"]"#,
+            br#"{"pushToken":"first","unknown":1,"unknown":2}"#,
+        ] {
+            assert!(parse_push_input(body).is_ok());
+        }
+        let parsed = parse_push_input(br#"{"pushToken":"NUL\u0000caf\u00e9"}"#)
+            .unwrap_or_else(|_| panic!("Valid opaque push token rejected."));
+        assert!(parsed.push_token == "NUL\0café");
+        for body in [
+            b"{}".as_slice(),
+            b"null",
+            b"false",
+            b"17",
+            br#"{"pushToken":null}"#,
+            br#"{"pushToken":true}"#,
+            br#"{"pushToken":4}"#,
+            br#"{"pushToken":[]}"#,
+            br#"{"pushToken":{}}"#,
+            br#"{"pushToken":"one","pushToken":"two"}"#,
+            b"[]",
+            b"[null]",
+        ] {
+            let Err(error) = parse_push_input(body) else {
+                panic!("Invalid push token schema accepted.")
+            };
+            assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
+        }
+        for body in [
+            b"".as_slice(),
+            b"{",
+            br#"{"pushToken":"truncated""#,
+            br#"["first","extra"]"#,
+            br#"{"pushToken":"one"} {}"#,
+        ] {
+            let Err(error) = parse_push_input(body) else {
+                panic!("Invalid push token syntax accepted.")
+            };
+            assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        }
+    }
 
     #[test]
     fn known_header_guard_preserves_utf8_opaque_ids_and_strict_email_decoding() {

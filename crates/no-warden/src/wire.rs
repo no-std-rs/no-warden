@@ -5,6 +5,20 @@
 use crate::{bounded::BoundedList, identity::Secret};
 use serde::{Deserialize, Serialize};
 
+/// Required opaque push token. Empty strings are values, not absence or a clear operation.
+/// Borrow escaped JSON strings from caller-owned decoded scratch storage when needed.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DevicePushTokenRequest<'a> {
+    pub push_token: &'a str,
+}
+impl core::fmt::Debug for DevicePushTokenRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DevicePushTokenRequest")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Public known-device input after adapter base64url/UTF-8 header decoding.
 /// There is no JSON body and this type deliberately does not serialize account metadata.
 #[derive(Clone, Copy)]
@@ -982,6 +996,43 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn push_token_requests_require_one_opaque_string_and_redact_debug() {
+        for (input, expected) in [
+            (r#"{"pushToken":""}"#, ""),
+            (
+                r#"{"pushToken":"opaque雪","ignored":{"value":true}}"#,
+                "opaque雪",
+            ),
+            (r#"["positional"]"#, "positional"),
+        ] {
+            let request: DevicePushTokenRequest<'_> = serde_json::from_str(input).unwrap();
+            assert_eq!(request.push_token, expected);
+            assert_eq!(
+                serde_json::to_value(request).unwrap(),
+                serde_json::json!({"pushToken":expected})
+            );
+        }
+        for input in [
+            "{}",
+            "[]",
+            "null",
+            r#"{"pushToken":null}"#,
+            r#"{"pushToken":4}"#,
+            r#"{"pushToken":false}"#,
+            r#"{"PushToken":"ignored"}"#,
+            r#"{"pushToken":"a","pushToken":"b"}"#,
+            r#"["a",null]"#,
+            "{",
+        ] {
+            assert!(serde_json::from_str::<DevicePushTokenRequest<'_>>(input).is_err());
+        }
+        let token = "hidden-token\0\"雪";
+        let request = DevicePushTokenRequest { push_token: token };
+        assert_eq!(serde_json::to_value(request).unwrap()["pushToken"], token);
+        assert!(!std::format!("{request:?}").contains("hidden"));
+    }
 
     #[test]
     fn device_wire_projections_keep_exact_nulls_fields_and_redacted_debug() {
