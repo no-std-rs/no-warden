@@ -381,6 +381,7 @@
 "POST /api/ciphers/{id}/restore"
 ],
 "upstream_comparison_catalog": {},
+"cli_trace_catalog": {},
 "source_sha256": {
   "Cargo.lock": "3b720d1f280b8442cdb304cf260ed9c448fd3f506ebede85341c5bb9c02f3d85",
   "Cargo.toml": "089c8da45b2e76e35ebda00fa5bb3bcedace32065d3481b06b60b48740ca6c03",
@@ -403,8 +404,8 @@
   "crates/no-warden/src/service.rs": "2ec462dc79ea51e705a612b1f6bb098d1d439da216e3e7ec129389a795bca834",
   "crates/no-warden/src/validation.rs": "2db816e885923b9bfc89a81c544e8678529dcd01ef8254f730f588725fda3b58",
   "crates/no-warden/src/wire.rs": "9ea9a7e99a7dd389b259b7e7a3c85382dec3ad9eccb083ebbaea4ae45386343f",
-  "tools/api-coverage.test.mjs": "b1ebf7e6c3109fadc0948fe04ac76927910ec9e67e2a34c413cdaf3889ec672d",
-  "tools/check-api-coverage.mjs": "5c3df345fe7a360fcb4703348a90f3337b99783e969579b170584ae4e225ba57",
+  "tools/api-coverage.test.mjs": "d52a52ea4ce399a53cdcaa14ea59f543025ec2deec6a189f28e140d4d29974f1",
+  "tools/check-api-coverage.mjs": "00c694c2e314c747f4ae90a57ef2234d40fc28492095036c85d87582e1b28283",
   "tools/check-cli-inventory.mjs": "ee9101b057e862acffca44accc23295ea4ed95e6119e8f0c4b85e8d78834a031",
   "tools/cli-inventory.test.mjs": "6282eb84ca5a5989c029c2b0902fb3b6eb0c79a300e27198e151a07330ffbb1e",
   "tools/cli-process.mjs": "70502fc98c5dff3540ae4a5df089694bef3c0fc9e2b8a44521ecef08b1185628",

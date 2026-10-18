@@ -120,3 +120,8 @@ plus a successful runtime receipt matching all current source/dependency hashes.
 There are no such receipts in this baseline; case names or an empty list of
 remaining variants cannot establish parity. Comparison runners can supply receipts
 through `API_COMPARISON_RECEIPTS` as they are implemented and verified.
+Full local parity also requires every linked upstream handler status to be
+verified. The CLI trace catalog is likewise empty: captured-route claims require
+an audited command, the locked client version, and a current-source runtime
+receipt supplied through `API_CLI_TRACE_RECEIPTS`. Successful cache commands or
+unresolved trace names do not satisfy that requirement.

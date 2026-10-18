@@ -33,7 +33,7 @@ export function sourceHashes(root = repositoryRoot) {
   ]));
 }
 
-export function validateCoverage(coverage, hashes = sourceHashes(), readSource = path => readFileSync(join(repositoryRoot, path), "utf8"), comparisonReceipts = process.env.API_COMPARISON_RECEIPTS ? JSON.parse(readFileSync(process.env.API_COMPARISON_RECEIPTS, "utf8")) : {}) {
+export function validateCoverage(coverage, hashes = sourceHashes(), readSource = path => readFileSync(join(repositoryRoot, path), "utf8"), comparisonReceipts = process.env.API_COMPARISON_RECEIPTS ? JSON.parse(readFileSync(process.env.API_COMPARISON_RECEIPTS, "utf8")) : {}, cliTraceReceipts = process.env.API_CLI_TRACE_RECEIPTS ? JSON.parse(readFileSync(process.env.API_CLI_TRACE_RECEIPTS, "utf8")) : {}) {
   assert.equal(coverage.schema_version, 1);
   assert.match(coverage.snapshot_commit, /^[a-f0-9]{40}$/);
   assert.deepEqual(coverage.source_sha256, hashes, "Implementation or test sources changed: audit and update the coverage snapshot");
@@ -68,6 +68,16 @@ export function validateCoverage(coverage, hashes = sourceHashes(), readSource =
     assert(rows.has(entry.route), `Unknown comparison route: ${id}`);
     assert.equal(entry.upstream_commit, coverage.upstream_pin, `Wrong comparison upstream: ${id}`);
     assert(tests.has(entry.test_name), `Unknown audited comparison test: ${id}`);
+  }
+  const traces = coverage.cli_trace_catalog;
+  assert(traces && typeof traces === "object" && !Array.isArray(traces), "CLI trace catalog must be explicit");
+  const clientVersion = JSON.parse(readSource("tools/package-lock.json")).packages["node_modules/@bitwarden/cli"].version;
+  for (const [id, entry] of Object.entries(traces)) {
+    assert(rows.has(entry.route), `Unknown CLI trace route: ${id}`);
+    assert(Object.hasOwn(coverage.cli_command_catalog, entry.command), `Unknown CLI trace command: ${id}`);
+    assert.equal(entry.client_version, clientVersion, `Wrong CLI trace version: ${id}`);
+    assert.equal(entry.test_source, coverage.cli_command_catalog[entry.command].proof, `Wrong CLI trace source: ${id}`);
+    assert(Object.hasOwn(hashes, entry.test_source), `Unaudited CLI trace source: ${id}`);
   }
   for (const route of coverage.routes) {
     assert(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"].includes(route.method));
@@ -115,6 +125,13 @@ export function validateCoverage(coverage, hashes = sourceHashes(), readSource =
     for (const command of route.cli_command_coverage) assert(Object.hasOwn(coverage.cli_command_catalog, command), `${key}: unknown CLI command ${command}`);
     if (route.cli_route_trace_tested) {
       assert(Array.isArray(route.cli_trace_evidence) && route.cli_trace_evidence.length > 0, `${key}: CLI commands alone do not prove a captured route trace`);
+      for (const id of route.cli_trace_evidence) {
+        assert(Object.hasOwn(traces, id), `${key}: unknown CLI trace case ${id}`);
+        assert.equal(traces[id].route, key, `${key}: CLI trace must target this route`);
+        const receipt = cliTraceReceipts[id];
+        assert(receipt?.passed === true && receipt.route === key && receipt.client_version === clientVersion, `${key}: missing successful current CLI trace receipt`);
+        assert.deepEqual(receipt.source_sha256, hashes, `${key}: CLI trace receipt must match current audited sources`);
+      }
     }
     if (route.full_upstream_parity_verified) {
       assert(route.routed && route.server_implemented && route.http_positive_tested, `${key}: parity requires behavior and HTTP evidence`);
@@ -153,6 +170,11 @@ export function validateCoverage(coverage, hashes = sourceHashes(), readSource =
     if (entry.status === "verified") assert(local.full_upstream_parity_verified, "Verified handler requires full-parity evidence");
   }
   assert.deepEqual([...recorded].sort(), [...handlers.keys()].sort(), "Every pinned upstream handler needs a coverage record");
+  for (const [key, row] of rows) {
+    if (!row.full_upstream_parity_verified) continue;
+    const entries = coverage.upstream_routes.filter(entry => entry.coverage_record === key);
+    assert(entries.length > 0 && entries.every(entry => entry.status === "verified"), `${key}: full parity requires every linked upstream handler to be verified`);
+  }
   for (const key of coverage.local_extensions) {
     assert(rows.has(key), `Missing local extension coverage: ${key}`);
     assert(!linked.has(key), `Upstream-linked route is not a local extension: ${key}`);

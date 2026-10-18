@@ -126,3 +126,41 @@ test("comparison receipts must match the current audited dependency and source h
   const receipts = { "invented comparison": { passed: true, route: key, upstream_commit: data.upstream_pin, source_sha256: {} } };
   assert.throws(() => validateCoverage(data, undefined, undefined, receipts), /comparison receipt must match current audited sources/);
 });
+
+test("full parity and every linked upstream status must agree", () => {
+  const { data, route, key } = fullParityAttempt();
+  data.upstream_comparison_catalog["invented comparison"] = { route: key, upstream_commit: data.upstream_pin, test_name: route.http_test_names.positive[0] };
+  const receipts = { "invented comparison": { passed: true, route: key, upstream_commit: data.upstream_pin, source_sha256: sourceHashes() } };
+  assert.throws(() => validateCoverage(data, undefined, undefined, receipts), /every linked upstream handler to be verified/);
+});
+
+function traceAttempt() {
+  const data = structuredClone(snapshot), route = data.routes[0];
+  const key = `${route.method} ${route.path}`;
+  route.cli_route_trace_tested = true;
+  route.cli_trace_evidence = ["invented trace"];
+  data.counts.routes_with_captured_cli_request_traces++;
+  const version = JSON.parse(readFileSync(new URL("./package-lock.json", import.meta.url))).packages["node_modules/@bitwarden/cli"].version;
+  return { data, key, version };
+}
+
+test("invented CLI trace IDs cannot establish client route coverage", () => {
+  const { data } = traceAttempt();
+  assert.throws(() => validateCoverage(data), /unknown CLI trace case/);
+});
+
+test("a trace catalog entry still needs a successful actual-client receipt", () => {
+  const { data, key, version } = traceAttempt();
+  data.cli_trace_catalog["invented trace"] = { route: key, command: "config", test_source: data.cli_command_catalog.config.proof, client_version: version };
+  assert.throws(() => validateCoverage(data, undefined, undefined, {}, {}), /missing successful current CLI trace receipt/);
+});
+
+for (const field of ["client_version", "source_sha256"]) {
+  test(`CLI trace receipts must bind the actual ${field}`, () => {
+    const { data, key, version } = traceAttempt();
+    data.cli_trace_catalog["invented trace"] = { route: key, command: "config", test_source: data.cli_command_catalog.config.proof, client_version: version };
+    const receipt = { passed: true, route: key, client_version: version, source_sha256: sourceHashes() };
+    receipt[field] = field === "client_version" ? "0.0.0" : {};
+    assert.throws(() => validateCoverage(data, undefined, undefined, {}, { "invented trace": receipt }), /CLI trace receipt/);
+  });
+}
