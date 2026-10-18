@@ -216,7 +216,16 @@ async fn dispatch(
                     .account("id", &owner.ok_or_else(invalid_grant)?)?
                     .ok_or_else(invalid_grant)?;
                 let tx = store.db.transaction()?;
-                tx.execute("DELETE FROM sessions WHERE refresh=?1", [digest(refresh)])?;
+                // Consume only refresh authority. Clients may still have requests
+                // in flight with the old bearer; it remains valid until its
+                // original access_expires deadline, as in Vaultwarden.
+                let consumed = tx.execute(
+                    "UPDATE sessions SET refresh_expires=0 WHERE refresh=?1 AND refresh_expires>?2",
+                    params![digest(refresh), chrono::Utc::now().timestamp()],
+                )?;
+                if consumed != 1 {
+                    return Err(invalid_grant());
+                }
                 let tokens = issue_tokens(&app, &tx, &account)?;
                 tx.commit()?;
                 return Ok(json_response(tokens));

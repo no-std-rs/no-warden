@@ -390,13 +390,20 @@ await test("standalone adapter enforces authentication, isolation, and JSON pres
     assert.equal(relogin.UserDecryptionOptions.UserKeyId, userKeyId);
   });
 
-  await t.test("refresh tokens rotate and an already-used refresh token is rejected", async () => {
+  await t.test("refresh rotation keeps unexpired access valid and rejects refresh replay", async () => {
     const form = { grant_type: "refresh_token", refresh_token: bob.token.refresh_token, client_id: "cli" };
     const refreshed = ok(await request("/identity/connect/token", { method: "POST", form }), "refresh token");
     assert.equal(typeof refreshed.access_token, "string");
     assert.equal(typeof refreshed.refresh_token, "string");
     assert.notEqual(refreshed.refresh_token, bob.token.refresh_token);
     denied(await request("/identity/connect/token", { method: "POST", form }), "replay refresh token", [400, 401]);
+    ok(await request("/api/sync", { token: bobToken }), "original unexpired access token after refresh");
     ok(await request("/api/sync", { token: refreshed.access_token }), "refreshed access token");
+    const nextForm = { grant_type: "refresh_token", refresh_token: refreshed.refresh_token, client_id: "cli" };
+    const concurrent = await Promise.all([0, 1].map(() => request("/identity/connect/token", { method: "POST", form: nextForm })));
+    assert.deepEqual(concurrent.map(result => result.status).sort(), [200, 400]);
+    ok(await request("/api/sync", { token: bobToken }), "original access after concurrent refresh");
+    ok(await request("/api/sync", { token: refreshed.access_token }), "previous access after concurrent refresh");
+    ok(await request("/api/sync", { token: concurrent.find(result => result.status === 200).data.access_token }), "latest access token");
   });
 });
