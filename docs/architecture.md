@@ -294,8 +294,8 @@ responses, and decodes settings requests without a global allocator.
 Device discovery uses the opt-in `DeviceStorage` provider. Its stable borrowed
 `DeviceListData` view and `DeviceRecord` let the core stream exact list and
 single-device projections without an allocator. `DeviceRegistration` comes only
-from a verified password or personal API-key login. The provider resolves an
-exact owner/identifier pair, retains its initial name, type and creation time,
+from a verified password, auth-request access-code or personal API-key login. The
+provider resolves an exact owner/identifier pair, retains its initial name, type and creation time,
 and may update activity without advancing the account revision. Headers, email
 lowercasing, percent decoding, clocks and token issuance stay in adapters.
 `KnownDeviceRequest` is already-decoded borrowed header input, with no JSON
@@ -307,7 +307,7 @@ projection: pending authentication metadata and two null encrypted-key fields.
 `PendingDeviceAuthRequest` models only its ID and creation date. The standalone
 provider projects the latest pending request for the exact owner and requesting
 device, or null when none exists. The two encrypted-key fields remain null.
-Approval decisions update this pending view; auth-request login remains separate.
+Approval decisions update this pending view; login uses the separate provider below.
 
 The standalone adapter keeps the registry in its own SQLite table keyed by
 `(owner, identifier)`. Account-document extensions and registration extras do not
@@ -318,16 +318,15 @@ login does not change account keys, credentials, revisions or vault contents.
 Repeated login retains the original metadata even when a client submits a new
 name or type. A separate binding table associates each new access session with
 its authenticated owner and device; the JWT includes that exact identifier in
-`device`.
+`device`; `devicetype` uses the retained registry type label.
 
 Refresh uses the stored binding and ignores submitted device metadata. It
 atomically touches the registered device, rotates refresh authority, and binds
 the new session to the same owner and identifier. Existing access tokens retain
 their original expiry. Older sessions without binding rows remain usable and
 refresh without inventing a device; no legacy registry backfill is implemented.
-Registry and binding records survive private-database reopen. Auth-request login
-and expiry cleanup, device removal and notification delivery remain separate
-tracked work.
+Registry and binding records survive private-database reopen. Expiry cleanup,
+device removal and notification delivery remain separate tracked work.
 
 `DevicePushStorage` is a separate opt-in provider for push-token ordering.
 `DevicePushTokenRequest` borrows its opaque string, decodes/serializes without an
@@ -395,8 +394,8 @@ proxies, including local peers under its defaults. That forwarded-IP policy is
 not implemented here. The canonical origin derived from the configured URL,
 without its path, does match upstream. Authenticated auth-request reads require
 a verified session-device binding before UUID path validation; existing unbound
-sessions keep their older API behavior. Auth-request login, notifications/events, expiry jobs, proxy policy
-and public abuse controls remain open.
+sessions keep their older API behavior. Notifications/events, expiry jobs, proxy
+policy and public abuse controls remain open.
 
 `AuthRequestResponseStorage` extends `AuthRequestStorage` with decisions and
 code-verified reads, without adding crypto or persistence to the core. The
@@ -430,7 +429,60 @@ root, including scalar dotted/bracketed suffixes; form decoding converts `+` to
 space and `%2B` to plus exactly once. The operation neither grants a session nor
 consumes a request for login. Eight focused HTTP cases pass against the adapter
 and Vaultwarden `1.37.4`: 322 requests and four successful logins per server.
-The combined local HTTP run passes all 64 cases and 2594 requests. Current
-client regression status is recorded in [verified compatibility](compatibility.md).
-Login, notifications/events, expiry jobs, proxy parity and public rate controls
-remain open.
+The preceding combined local HTTP milestone passes 64 cases and 2594 requests.
+Current client and login-comparison results are recorded in
+[verified compatibility](compatibility.md). Notifications/events, expiry jobs,
+proxy parity and public rate controls remain open.
+
+Approved-request login uses the separate opt-in `AuthRequestLoginStorage`, which
+extends `AuthRequestStorage` without adding crypto, clocks, token issuance or
+allocation to the core. `AuthRequestLoginRequest` borrows required form inputs;
+its proof is a redacted `Secret`. The provider returns private, redacted state
+only after owner-scoped constant-time code verification. The service trims the
+username before provider email lowercasing, requires exact password scope,
+approval, unused state, the same peer IP, an enabled account and a deadline
+strictly later than the supplied time. Creation and current timestamps use
+full-width `i128` Unix nanoseconds, preserving the exact five-minute boundary.
+
+An owner/ID-scoped approved-and-unused compare-and-set consumes the request
+before producing `AuthorizedAuthRequestGrant`. This unforgeable grant owns the
+provider's account handle and lends client/device inputs, so storage borrows end
+before host issuance. The code is the creation access code, never the encrypted
+response `masterPasswordHash`. A new or different login device/type is allowed;
+the requesting device's type still governs public polling. No login device/type
+comparison is added. The request ID in this form is opaque, with no UUID path
+guard. Rocket-style dotted/bracketed scalar names select the compact
+case-insensitive `authRequest` root too; a present empty or unknown ID cannot
+select ordinary password proof. Other form-field root parsing and the inherited
+ambiguity rejection policy remain separate gaps.
+
+The host verifies codes with the existing fixed-size HMAC verifier and reads
+enabled state from private `account_auth_policy`, defaulting to enabled for
+accounts without a row. Registration/profile document extras cannot supply that
+authority; no administration API is implemented. A savepoint encloses consumption,
+device registration/activity, expired-session cleanup, session insertion and
+binding, including deferred commit checks. Any failure restores the entire
+operation. This rollback boundary is stronger than the pinned upstream's
+separate consumption and issuance steps. Provider tests also cover standalone
+consumption failures, two-connection compare-and-set races and durable used state
+after reopen. Successful login preserves approval/key/hash/response fields,
+account revisions, credentials and vault state. Polling is neither consumed nor
+implicitly expired by login.
+
+Shared password-method issuance now uses the upstream two-hour access lifetime,
+the supplied client ID, or `undefined` when absent. Refresh reads its own optional
+client ID, retains the verified device binding and projects the stored type label
+as `devicetype`; submitted replacement metadata does not overwrite it. Personal
+API-key authority retains its existing separate policy. Legacy unbound sessions
+remain refreshable without inventing device claims. The host's strict rotating
+refresh policy and thirty-day refresh lifetime still differ from upstream's
+replay behavior and ninety-day mobile lifetime. Two-factor/mail/SSO policy,
+administrative account management, notification delivery, expiry cleanup,
+trusted-proxy IP handling and rate controls remain outside this adapter slice.
+The eight focused login HTTP cases pass against both the adapter and actual
+Vaultwarden `1.37.4`: 444 counted requests and 43 identity requests per server,
+including two ordinary logins, seven successful auth-request logins and two
+refreshes. Twelve creations and twelve public polls include a real 301-second
+expiry fixture: login expires while polling remains readable. Required CI reruns
+the unchanged verified 120-command CLI baseline; this adds no CLI auth-request
+route claim.

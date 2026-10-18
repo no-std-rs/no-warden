@@ -3,6 +3,7 @@ use no_warden::{
     Storage,
     account_keys::{AccountKeyState, AccountKeyStorage},
     account_profile::AccountProfileStorage,
+    auth_login::{AuthRequestLoginRecord, AuthRequestLoginStorage},
     auth_requests::{AuthRequestContext, AuthRequestRecord, AuthRequestStorage},
     auth_responses::AuthRequestResponseStorage,
     bulk::{CipherBulkOperation, CipherBulkStorage, ValidatedCipherBulk},
@@ -42,6 +43,7 @@ pub struct Store {
     device_cache: Option<crate::devices::Record>,
     device_push_token_cache: Option<String>,
     auth_request_cache: Option<crate::auth_requests::Record>,
+    auth_login_cache: Option<crate::auth_requests::LoginRecord>,
     auth_requests_cache: crate::auth_requests::Requests,
 }
 
@@ -185,6 +187,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS cipher_archives(cipher_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE, owner TEXT NOT NULL REFERENCES accounts(id), archived_at TEXT, PRIMARY KEY(cipher_id,owner));
             CREATE TABLE IF NOT EXISTS api_keys(owner TEXT PRIMARY KEY REFERENCES accounts(id), secret TEXT NOT NULL, verifier TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS account_domains(owner TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, excluded_globals TEXT NOT NULL, equivalent_domains TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS account_auth_policy(owner TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)));
             CREATE TABLE IF NOT EXISTS attachments(id TEXT PRIMARY KEY, cipher_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE, file_name TEXT NOT NULL, key TEXT, size INTEGER NOT NULL CHECK(size>=0), data BLOB);
             CREATE INDEX IF NOT EXISTS attachments_cipher ON attachments(cipher_id);
             CREATE TABLE IF NOT EXISTS attachment_downloads(token TEXT PRIMARY KEY, attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE, expires INTEGER NOT NULL);
@@ -215,6 +218,7 @@ impl Store {
             device_cache: None,
             device_push_token_cache: None,
             auth_request_cache: None,
+            auth_login_cache: None,
             auth_requests_cache: crate::auth_requests::Requests::default(),
         })
     }
@@ -619,6 +623,29 @@ impl CipherBulkStorage for Store {
             bump(&tx, owner, &revision)?;
         }
         tx.commit()
+    }
+}
+
+impl AuthRequestLoginStorage for Store {
+    fn auth_request_login(
+        &mut self,
+        owner: &str,
+        id: &str,
+        code: &Secret<'_>,
+    ) -> rusqlite::Result<Option<AuthRequestLoginRecord<'_>>> {
+        self.auth_login_cache = crate::auth_requests::login_record(&self.db, owner, id, code)?;
+        Ok(self
+            .auth_login_cache
+            .as_ref()
+            .map(crate::auth_requests::LoginRecord::view))
+    }
+    fn consume_auth_request_login(
+        &mut self,
+        owner: &str,
+        id: &str,
+        now_unix_nanos: i128,
+    ) -> rusqlite::Result<bool> {
+        crate::auth_requests::consume_login(&mut self.db, owner, id, now_unix_nanos)
     }
 }
 
@@ -1046,6 +1073,333 @@ impl Storage for Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn auth_login_request<'a>(
+        id: &'a str,
+        code: &'a str,
+    ) -> no_warden::wire::AuthRequestLoginRequest<'a> {
+        no_warden::wire::AuthRequestLoginRequest {
+            grant_type: Some("password"),
+            password: Some(Secret::new(code)),
+            auth_request: Some(id),
+            client_id: Some("opaque-client"),
+            scope: Some("api offline_access"),
+            username: Some(" ALICE@EXAMPLE.TEST "),
+            device_identifier: Some("different-login-device"),
+            device_name: Some(""),
+            device_type: Some("-7"),
+        }
+    }
+    fn approved_auth_login(store: &mut Store) -> String {
+        let created =
+            create_fixture_auth_request(store, "alice@example.test", "Request-Device", 8).unwrap();
+        let id = created["id"].as_str().unwrap().to_owned();
+        respond_fixture_auth(
+            store,
+            &id,
+            "Request-Device",
+            "opaque-key",
+            Some("not-the-code"),
+            true,
+        )
+        .unwrap();
+        id
+    }
+    #[test]
+    fn auth_login_exact_nanosecond_deadline_and_private_policy_are_authoritative() {
+        use no_warden::auth_login::{AUTH_REQUEST_LOGIN_LIFETIME_NANOS, AuthRequestLoginContext};
+        for offset in [-1_i128, 0, 1] {
+            let mut store = auth_request_fixture();
+            let id = approved_auth_login(&mut store);
+            // Beyond i64 timestamp_nanos, with a sub-microsecond deadline.
+            let date =
+                chrono::DateTime::parse_from_rfc3339("2300-01-01T00:00:00.123456789Z").unwrap();
+            store
+                .db
+                .execute(
+                    "UPDATE auth_requests SET creation_date=?1 WHERE id=?2",
+                    params![date.to_rfc3339(), id],
+                )
+                .unwrap();
+            let creation = crate::auth_requests::unix_nanos(date.with_timezone(&chrono::Utc));
+            let before = snapshot(&store);
+            let authority = account_authority_snapshot(&store);
+            let devices = device_rows(&store);
+            let result = no_warden::VaultService::new(&mut store).authenticate_auth_request(
+                &auth_login_request(&id, "NUL\0private-access-sentinel"),
+                &AuthRequestLoginContext {
+                    request_ip: "203.0.113.27",
+                    now_unix_nanos: creation + AUTH_REQUEST_LOGIN_LIFETIME_NANOS + offset,
+                },
+            );
+            assert!(
+                result.is_ok() == (offset < 0),
+                "Exact expiry boundary differed."
+            );
+            drop(result);
+            let used: bool = store
+                .db
+                .query_row(
+                    "SELECT authentication_date IS NOT NULL FROM auth_requests WHERE id=?1",
+                    [&id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(used == (offset < 0));
+            assert!(
+                snapshot(&store) == before
+                    && account_authority_snapshot(&store) == authority
+                    && device_rows(&store) == devices
+            );
+        }
+        let mut store = auth_request_fixture();
+        let id = approved_auth_login(&mut store);
+        store.db.execute("UPDATE accounts SET document=json_set(document,'$.enabled',1,'$.disabled',0) WHERE id='alice'",[]).unwrap();
+        store
+            .db
+            .execute(
+                "INSERT INTO account_auth_policy(owner,enabled) VALUES('alice',0)",
+                [],
+            )
+            .unwrap();
+        let before = auth_request_rows(&store);
+        let request = auth_login_request(&id, "NUL\0private-access-sentinel");
+        let context = AuthRequestLoginContext {
+            request_ip: "203.0.113.27",
+            now_unix_nanos: crate::auth_requests::unix_nanos(chrono::Utc::now()),
+        };
+        assert!(
+            no_warden::VaultService::new(&mut store)
+                .authenticate_auth_request(&request, &context)
+                .is_err()
+        );
+        assert!(auth_request_rows(&store) == before);
+        store
+            .db
+            .execute("DELETE FROM account_auth_policy WHERE owner='alice'", [])
+            .unwrap();
+        store.db.execute("UPDATE accounts SET document=json_set(document,'$.enabled',0,'$.disabled',1) WHERE id='alice'",[]).unwrap();
+        assert!(
+            no_warden::VaultService::new(&mut store)
+                .authenticate_auth_request(&request, &context)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn auth_login_bad_proofs_owner_ip_pending_used_and_cas_do_not_mutate() {
+        use no_warden::auth_login::AuthRequestLoginContext;
+        let mut store = auth_request_fixture();
+        let id = approved_auth_login(&mut store);
+        let context = AuthRequestLoginContext {
+            request_ip: "203.0.113.27",
+            now_unix_nanos: crate::auth_requests::unix_nanos(chrono::Utc::now()),
+        };
+        for case in 0..7 {
+            let mut request = auth_login_request(&id, "NUL\0private-access-sentinel");
+            let mut current = context;
+            match case {
+                0 => request.password = Some(Secret::new("not-the-code")),
+                1 => request.username = Some("bob@example.test"),
+                2 => current.request_ip = "203.0.113.28",
+                3 => {
+                    store
+                        .db
+                        .execute("UPDATE auth_requests SET approved=NULL WHERE id=?1", [&id])
+                        .unwrap();
+                }
+                4 => {
+                    store
+                        .db
+                        .execute("UPDATE auth_requests SET approved=0 WHERE id=?1", [&id])
+                        .unwrap();
+                }
+                5 => {
+                    store
+                        .db
+                        .execute(
+                            "UPDATE auth_requests SET authentication_date='used' WHERE id=?1",
+                            [&id],
+                        )
+                        .unwrap();
+                }
+                _ => request.auth_request = Some("opaque-missing-ID"),
+            }
+            let before = auth_request_rows(&store);
+            let changes = store.db.total_changes();
+            assert!(
+                no_warden::VaultService::new(&mut store)
+                    .authenticate_auth_request(&request, &current)
+                    .is_err()
+            );
+            assert!(auth_request_rows(&store) == before && store.db.total_changes() == changes);
+            store
+                .db
+                .execute(
+                    "UPDATE auth_requests SET approved=1,authentication_date=NULL WHERE id=?1",
+                    [&id],
+                )
+                .unwrap();
+        }
+        assert!(
+            !store
+                .consume_auth_request_login("bob", &id, context.now_unix_nanos)
+                .unwrap()
+        );
+        store
+            .db
+            .execute("UPDATE auth_requests SET approved=NULL WHERE id=?1", [&id])
+            .unwrap();
+        assert!(
+            !store
+                .consume_auth_request_login("alice", &id, context.now_unix_nanos)
+                .unwrap()
+        );
+        store
+            .db
+            .execute(
+                "UPDATE auth_requests SET approved=1,access_code='' WHERE id=?1",
+                [&id],
+            )
+            .unwrap();
+        let before = crate::auth_requests::load(&store.db, "alice", &id)
+            .unwrap()
+            .unwrap();
+        assert!(
+            no_warden::VaultService::new(&mut store)
+                .authenticate_auth_request(&auth_login_request(&id, ""), &context)
+                .is_ok()
+        );
+        let after = crate::auth_requests::load(&store.db, "alice", &id)
+            .unwrap()
+            .unwrap();
+        assert!(
+            serde_json::to_value(no_warden::wire::AuthRequestResponse::stored(
+                before.view(),
+                "https://origin.example.test"
+            ))
+            .unwrap()
+                == serde_json::to_value(no_warden::wire::AuthRequestResponse::stored(
+                    after.view(),
+                    "https://origin.example.test"
+                ))
+                .unwrap(),
+            "Consumption changed public approval fields."
+        );
+        assert!(
+            !store
+                .consume_auth_request_login("alice", &id, context.now_unix_nanos)
+                .unwrap()
+        );
+        assert!(
+            crate::auth_requests::by_code(&store.db, &id, &Secret::new(""))
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn auth_login_consume_provider_rolls_back_statement_and_deferred_commit_failures() {
+        for deferred in [false, true] {
+            let mut store = auth_request_fixture();
+            let id = approved_auth_login(&mut store);
+            let before = auth_request_rows(&store);
+            let authority = account_authority_snapshot(&store);
+            store.db.execute_batch(if deferred {
+                "CREATE TABLE failed_consume_commit(owner TEXT REFERENCES accounts(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER reject_consume AFTER UPDATE OF authentication_date ON auth_requests BEGIN INSERT INTO failed_consume_commit(owner) VALUES('missing'); END;"
+            } else {
+                "CREATE TRIGGER reject_consume AFTER UPDATE OF authentication_date ON auth_requests BEGIN SELECT RAISE(FAIL,'fixture'); END;"
+            }).unwrap();
+            assert!(
+                store
+                    .consume_auth_request_login(
+                        "alice",
+                        &id,
+                        crate::auth_requests::unix_nanos(chrono::Utc::now())
+                    )
+                    .is_err()
+            );
+            assert!(
+                auth_request_rows(&store) == before
+                    && account_authority_snapshot(&store) == authority,
+                "Provider failure leaked consumption."
+            );
+            store
+                .db
+                .execute_batch("DROP TRIGGER reject_consume")
+                .unwrap();
+            assert!(
+                store
+                    .consume_auth_request_login(
+                        "alice",
+                        &id,
+                        crate::auth_requests::unix_nanos(chrono::Utc::now())
+                    )
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn auth_login_consumption_reopens_and_concurrent_cas_has_one_winner() {
+        let directory =
+            std::env::temp_dir().join(format!("no-warden-auth-login-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("vault.sqlite");
+        let mut store = auth_request_fixture();
+        let id = approved_auth_login(&mut store);
+        store
+            .db
+            .execute("VACUUM INTO ?1", [path.to_str().unwrap()])
+            .unwrap();
+        drop(store);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let path = path.clone();
+                let id = id.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let mut store = Store::open(path.to_str().unwrap()).unwrap();
+                    store
+                        .db
+                        .busy_timeout(std::time::Duration::from_secs(5))
+                        .unwrap();
+                    barrier.wait();
+                    store
+                        .consume_auth_request_login(
+                            "alice",
+                            &id,
+                            crate::auth_requests::unix_nanos(chrono::Utc::now()),
+                        )
+                        .unwrap()
+                })
+            })
+            .collect();
+        let winners = handles
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .filter(|won| *won)
+            .count();
+        assert_eq!(winners, 1);
+        let mut reopened = Store::open(path.to_str().unwrap()).unwrap();
+        let record = reopened
+            .auth_request_login("alice", &id, &Secret::new("NUL\0private-access-sentinel"))
+            .unwrap()
+            .unwrap();
+        assert!(record.used && record.approved == Some(true));
+        assert!(
+            !reopened
+                .consume_auth_request_login(
+                    "alice",
+                    &id,
+                    crate::auth_requests::unix_nanos(chrono::Utc::now())
+                )
+                .unwrap()
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
     use no_warden::{ErrorKind, VaultService, devices::DeviceListData};
     use serde::Deserialize;
 

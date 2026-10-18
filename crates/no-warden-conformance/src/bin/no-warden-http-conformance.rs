@@ -12,6 +12,7 @@ enum Suite {
     DeviceTokens,
     AuthRequests,
     AuthResponses,
+    AuthLogin,
 }
 
 impl Suite {
@@ -27,6 +28,7 @@ impl Suite {
             "device-tokens" => Self::DeviceTokens,
             "auth-requests" => Self::AuthRequests,
             "auth-responses" => Self::AuthResponses,
+            "auth-login" => Self::AuthLogin,
             _ => return None,
         })
     }
@@ -51,7 +53,7 @@ fn check<E: Display>(result: Result<(), E>) {
 
 fn usage() {
     eprintln!(
-        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses]"
+        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login]"
     );
 }
 
@@ -93,5 +95,8 @@ fn main() {
     }
     if suite.includes(Suite::AuthResponses) {
         check(no_warden_conformance::auth_responses::run());
+    }
+    if suite.includes(Suite::AuthLogin) {
+        check(no_warden_conformance::auth_login::run());
     }
 }

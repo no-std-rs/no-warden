@@ -5,6 +5,7 @@
 
 use core::{hint::black_box, panic::PanicInfo};
 use no_warden::{
+    auth_login::{AuthRequestLoginContext, AuthRequestLoginDevice, AuthRequestLoginRecord},
     auth_requests::{AuthRequestContext, AuthRequestRecord},
     devices::{DeviceRecord, PendingDeviceAuthRequest},
     domains::{DomainProjection, DomainSettingsView, GlobalDomain},
@@ -14,12 +15,13 @@ use no_warden::{
     wire::{
         AccountKeys, AccountKeysResponse, ApiKeyResponse, AttachmentRequest, AttachmentResponse,
         AttachmentUploadResponse, AuthRequestCreateRequest, AuthRequestListResponse,
-        AuthRequestResponse, AuthRequestUpdateRequest, AvatarUpdateRequest, CipherIdsRequest,
-        CipherRequest, ClientCredentialsRequest, DeviceListResponse, DevicePushTokenRequest,
-        DeviceResponse, DomainSettingsRequest, DomainSettingsResponse,
-        DomainSettingsUpdateResponse, ImportRequest, InitializedAccountKeysResponse,
-        KnownDeviceRequest, KnownDeviceResponse, PasswordOrOtpRequest, PreloginRequest,
-        PreloginResponse, ProfileUpdateRequest, UserPublicKeyResponse,
+        AuthRequestLoginRequest, AuthRequestResponse, AuthRequestUpdateRequest,
+        AvatarUpdateRequest, CipherIdsRequest, CipherRequest, ClientCredentialsRequest,
+        DeviceListResponse, DevicePushTokenRequest, DeviceResponse, DomainSettingsRequest,
+        DomainSettingsResponse, DomainSettingsUpdateResponse, ImportRequest,
+        InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
+        PasswordOrOtpRequest, PreloginRequest, PreloginResponse, ProfileUpdateRequest,
+        UserPublicKeyResponse,
     },
 };
 
@@ -212,6 +214,28 @@ pub extern "C" fn _start() -> ! {
         Method::Get,
         black_box("/api/auth-requests/request-id/response?code=caller-supplied-test-code"),
     ));
+    let request_login = serde_json_core::from_slice::<AuthRequestLoginRequest<'_>>(black_box(
+        br#"{"grant_type":"password","username":"bare-metal@example.com","password":"caller-supplied-test-code","authRequest":"authentication-request","scope":"api offline_access","client_id":"embedded","deviceIdentifier":"new-device","deviceName":"caller-name","deviceType":"25"}"#,
+    ));
+    black_box(request_login);
+    black_box(AuthRequestLoginContext {
+        request_ip: "127.0.0.1",
+        now_unix_nanos: 1_800_000_000_000_000_000,
+    });
+    black_box(AuthRequestLoginRecord {
+        id: "authentication-request",
+        owner_id: "private-owner",
+        request_ip: "127.0.0.1",
+        approved: Some(true),
+        used: false,
+        created_at_unix_nanos: 1_800_000_000_000_000_000,
+        account_enabled: true,
+    });
+    black_box(AuthRequestLoginDevice {
+        identifier: "new-device",
+        name: "caller-name",
+        device_type: "25",
+    });
     let auth_context = AuthRequestContext {
         device_type: 25,
         request_ip: "127.0.0.1",

@@ -39,6 +39,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | `POST /api/accounts/register` | Registration with encrypted keys | Cryptographic fixture |
 | Prelogin legacy and identity aliases | PBKDF2/Argon2 parameters | Latest CLI and HTTP |
 | `POST /identity/connect/token` | Password grant, expiring sessions, rotating refresh | CLI and HTTP |
+| Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
 | `GET /api/accounts/keys`, `POST /api/accounts/keys`, `GET /api/users/<id>/public-key` | Owner-only private retrieval, initialization of an absent pair, authenticated cross-user public lookup | Borrowed core/provider contracts; Rust HTTP comparison group and SQLite rollback/reopen tests |
 | `POST /api/accounts/api-key`, `POST /api/accounts/rotate-api-key` | Password-reauthenticated personal key retrieval, lazy creation, rotation | Core, HTTP comparison with upstream, rollback and restart tests; keys used by real CLI |
 | Personal `client_credentials` at `POST /identity/connect/token` | `user.<id>`, exact `api` scope, access token without refresh token | Real CLI API login, password unlock and decryption; core and HTTP comparison with upstream |
@@ -71,14 +72,15 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Provider conflict errors | `Storage::map_error` can preserve an HTTP 409 conflict | Core provider tests |
 
 The allocation-free core's models include login, secure note, card, identity,
-and SSH-key items, plus optional opaque blob data. Its 126 unit tests cover the
+and SSH-key items, plus optional opaque blob data. Its 136 unit tests cover the
 typed fields, bounded collections and import decoding, validation, ownership,
 lifecycle rules, folder mapping, the atomic import and bulk provider contracts,
 API-key proof selection and authorization, and attachment lifecycle and provider
 rules, account-key initialization, profile/avatar byte validation, and equivalent-domain
 views, serialization, schema and atomic provider boundaries, plus device
 discovery, owner checks, explicit projections, push-provider ordering and
-auth-request creation/discovery. A compile-fail
+auth-request creation/discovery, decisions, code-protected reads and one-use
+approved-request login. A compile-fail
 doctest verifies that `Secret` cannot be serialized through the general Serde interface.
 Real-client import evidence covers the types listed above; broader operations
 for those types and blob encryption need their own client fixtures. Keeping
@@ -94,12 +96,13 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 92 Rust host tests pass and cover storage and transport rules. The current
-workspace passes 274 active unit tests: 126 core, 92 host and 56 support tests;
-one additional test is ignored. Its core doctest, formatting, Clippy with warnings
-denied, minimum-Rust-version, no-allocator, bare-metal and embedded-consumer
-checks pass. The 61 JavaScript HTTP checks and restart-persistence regression
-also pass against the updated adapter.
+All 104 Rust host tests pass and cover storage and transport rules, including
+the new login variant. The expanded workspace contains 299 active unit tests:
+136 core, 104 host and 59 support tests, with one additional ignored test.
+Required CI checks the workspace, its core
+doctest, formatting, Clippy with warnings denied, minimum Rust versions,
+no-allocator, bare-metal and embedded consumers. The verified 61 JavaScript HTTP
+checks and restart-persistence regression remain required final-head checks.
 These establish wire preservation and authorization for the new shapes,
 aliases, and personal imports independently of the CLI evidence.
 They do not prove that a real client can decrypt a blob or use stored passkey
@@ -151,8 +154,8 @@ one rejected password) and one refresh. The reference `personal` and `devices`
 runs use separate fresh processes with unchanged upstream login rate limits;
 their combined login attempts would exceed the reference's ten-request login
 burst. The prior local `--suite all` subtotal passed 56 cases and 2272 counted
-HTTP requests. The expanded local run now passes all 64 cases and 2594 counted
-requests. Reference comparisons select `personal`, `devices`, `device-tokens`,
+HTTP requests. The subsequent local milestone passes 64 cases and 2594 counted
+requests before the login extension. Reference comparisons select `personal`, `devices`, `device-tokens`,
 `auth-requests` and `auth-responses` in separate fresh processes; no combined
 64-case reference run is claimed. Fixture registration requests are outside the counted suite requests.
 
@@ -173,14 +176,14 @@ results do not establish CLI device-route traces or full device-management parit
 boolean/list/single serializers. `KnownDeviceRequest` is borrowed header input,
 without JSON serialization/deserialization traits. The two-field pending model
 now projects the latest pending request from the separate auth-request provider;
-approval decisions change that view, while auth-request login remains open. Dedicated registry and per-session binding
+approval decisions change that view; login uses the dedicated provider described
+below. Registry and per-session binding
 tables ignore account-document device extras. Host tests preserve account
 revisions, credentials, keys, vault and foreign state; inject provider, session,
 binding and deferred-commit failures; and reopen the private database. Refresh
 failure also preserves its original authority and device activity. New JWTs
 carry the bound `device`; existing unbound sessions remain valid, with legacy
-backfill still open. Device removal, auth-request login and notifications remain
-pending. The device HTTP proof does not add a CLI command or broader client
+backfill still open. Device removal and notifications remain pending. The device HTTP proof does not add a CLI command or broader client
 claim.
 
 The push-token chunk adds authenticated POST/PUT token aliases and public
@@ -265,8 +268,8 @@ excluding the path, does match upstream.
 
 Authenticated reads require a verified session binding before path parsing;
 legacy unbound sessions keep their older routes but receive 401 here. Public
-creation requires no bearer. Auth-request login, notifications/events, expiry
-jobs, trusted proxy policy and local rate controls remain open. Complete auth-request lifecycle and upstream API parity
+creation requires no bearer. Notifications/events, expiry jobs, trusted proxy
+policy and local rate controls remain open. Complete auth-request lifecycle and upstream API parity
 remain delivery goals.
 
 The approval/response chunk passes all eight selected `--suite auth-responses`
@@ -274,8 +277,8 @@ cases against the actual adapter and official Vaultwarden `1.37.4`: 322 counted
 HTTP requests and four successful logins per server. Its eleven creates and 33
 guard-valid polls use 44 admitted public attempts; six additional query/path
 guard rejections do not reach the handler's limiter. The reference retains its
-public burst limit of 50. This is separate approval/polling evidence; no
-notification or auth-request login interoperability is established.
+public burst limit of 50. This is approval/polling evidence; login has a separate
+comparison and adds no notification evidence.
 The required client job reruns the unchanged 120-command CLI regression for
 the final head. Its verified baseline passes against both servers; it does not
 exercise authentication-request login.
@@ -305,8 +308,67 @@ The actual HTTP comparison verifies the focused wire contract; hidden rollback
 and durable state guarantees come from host/provider tests. The direct socket
 peer policy still ignores forwarding headers and does
 not implement upstream trusted-proxy IP behavior. Notifications/events,
-auth-request login, expiry cleanup, proxy policy and public abuse controls remain
+expiry cleanup, proxy policy and public abuse controls remain
 open, along with the full upstream API parity goal.
+
+The approved-request login chunk implements the password-grant variant from
+the [pinned identity handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L370-L498).
+Its proof is the original access code; the encrypted response hash is never a
+substitute. The compact `authRequest` form root is case-insensitive, including dotted
+and bracketed scalar names; `auth_request` stays unknown. A regression uses a
+valid ordinary password with nested missing-request selectors to prove that
+none can bypass the selected access-code proof. Other form-root behavior and
+the inherited duplicate/ambiguous-field rejection policy remain partial gaps. The ID is opaque, with no UUID guard. A present
+empty/missing-record ID cannot fall back to an ordinary password. Required
+password-grant fields must be present and the scope must be exactly
+`api offline_access`. Username is trimmed before lowercase account lookup.
+Blank opaque code/client/device values are accepted when the proof matches.
+
+`AuthRequestLoginStorage` extends the no-allocation provider with owner-scoped
+constant-time lookup and approved/unused compare-and-set consumption. Its
+borrowed request, private record/context and unforgeable account grant redact
+Debug output. The service checks approval, unused state, account enablement,
+exact peer IP and `now < creation + five minutes` before consumption. It does
+not require the login device or type to match the original request; a different
+device may register. Approval/key/hash/response fields remain intact. Public
+polling stays readable after successful login and has no implicit five-minute
+expiry. All eight selected login HTTP cases pass against both the actual
+adapter and official Vaultwarden `1.37.4`: 444 counted requests per server,
+including 43 identity requests, twelve creations and twelve public polls. The
+identity requests include two ordinary logins, seven successful auth-request
+logins and two refreshes. The real 301-second fixture verifies expired login
+with readable polling. Host unit tests separately check the exact nanosecond
+boundary, including dates
+beyond a signed 64-bit nanosecond timestamp.
+
+The adapter's private enabled-account policy defaults to enabled when no row
+exists. Registration/profile extras do not set it, and no administrative API is
+provided. Its outer savepoint covers request consumption, device creation or
+activity, expired-session cleanup, session issuance and binding. Six late-failure
+phases, including deferred commit, restore all state and leave the proof usable;
+standalone provider failure tests cover the consumption step too. This boundary
+is stronger than upstream's separately persisted consumption and issuance.
+Two-connection compare-and-set and replay tests permit one winner, and private
+reopen preserves the used state. Those hidden guarantees come from provider/host
+tests rather than response projections.
+
+Shared password/refresh issuance now uses 7200-second access authority. It
+preserves the supplied client ID, including empty, and uses `undefined` when
+absent. Refresh takes its client ID from the current request. Bound JWTs include
+the retained registry type label as `devicetype`, alongside the exact `device`;
+changed login/refresh metadata does not overwrite the initial name/type. The
+personal API-key policy remains unchanged, and existing unbound sessions remain
+refreshable without fabricated device claims. The stricter local refresh replay
+rule, upstream mobile refresh lifetime and broader JWT/refresh equivalence remain
+separate gaps.
+
+Required CI reruns the focused login HTTP comparison and the verified unchanged
+120-command CLI baseline. That CLI regression does
+not log in through an auth request or establish new route traces. Two-factor,
+mail/SSO and administrative policy, notifications/events, expiry cleanup, local
+rate controls and trusted-proxy forwarding remain open. The adapter compares
+its direct socket peer and ignores forwarding headers. This chunk does not set
+a full-parity flag or complete the authentication lifecycle goal.
 
 `GET /api/settings/domains` includes every global catalog group with its computed
 exclusion flag. Sync includes custom groups and only unexcluded catalog groups,

@@ -100,8 +100,9 @@ with the user key as an EncString. Supplying a real pair avoids client key
 generation and migration paths. These are disposable test account secrets,
 never a template for production credentials.
 
-The token login password is `authentication_hash`; it is not the plaintext
-master password. Servers should hash that authentication secret again for
+For ordinary password login, the token password is `authentication_hash`; it is
+not the plaintext master password. The approved-auth-request variant below uses
+its access code instead. Servers should hash that authentication secret again for
 storage using an appropriate password verifier.
 
 Sources: [CLI authentication hash](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/key-management/master-password/services/master-password.service.ts),
@@ -198,7 +199,7 @@ For a personal PBKDF2 account, the unlock part is:
 
 The access token must be a JWT because the CLI reads its payload. Relevant claims
 are string `sub` (user UUID), `email`, `name`, boolean `email_verified`, `premium`,
-numeric `exp`, `nbf`, and server-side `sstamp`, `device`, `client_id`, `scope`,
+numeric `exp`, `nbf`, and server-side `sstamp`, `device`, `devicetype`, `client_id`, `scope`,
 and `amr`. NumericDate claims use seconds. Vaultwarden uses a two-hour access
 lifetime and issuer `<server origin>|login`. The server must validate its own
 tokens; a client decoding a JWT is not a substitute for signature validation.
@@ -263,8 +264,8 @@ regardless of device metadata supplied in the refresh form.
 The allocation-free core exposes `DeviceStorage`, borrowed header input, and
 explicit boolean/list/single response projections. The standalone adapter owns
 the persistent registry, session binding and `device` JWT claim. Legacy sessions
-without bindings remain valid and are not backfilled. Auth-request login, device
-removal, notification behavior and broader device management remain unimplemented. The direct HTTP comparison establishes only
+without bindings remain valid and are not backfilled. Device removal,
+notification behavior and broader device management remain unimplemented. The direct HTTP comparison establishes only
 this discovery/login-binding contract, with no CLI device-route trace claim.
 
 ## Device push tokens
@@ -379,14 +380,14 @@ decoded creation attempts below the unchanged upstream public burst of 50. The
 suite includes a NUL/Unicode/non-UUID device identifier. Host tests separately
 verify hidden activity/state preservation, rollback, durable private storage and
 peer metadata; response projections alone do not establish those properties.
-Auth-request login, notifications/events, expiry cleanup, trusted proxy policy
+Notifications/events, expiry cleanup, trusted proxy policy
 and local rate controls remain open. No
 CLI auth-request route claim or complete authentication parity is established.
 
 ## Auth-request approval and response polling
 
 The [pinned decision and polling handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1745-L1861)
-add two routes without granting an auth-request login:
+add two routes; neither route itself grants a login:
 
 | Method and route | Contract |
 | --- | --- |
@@ -430,10 +431,78 @@ official Vaultwarden `1.37.4`: 322 counted requests and four successful logins
 per server. Eleven creates and 33 guard-valid polls produce 44 admitted public
 attempts; six additional query/path guard rejections do not reach the handler
 rate limiter. The reference retains its public burst of 50. The combined local
-HTTP run passes all 64 cases and 2594 requests. Current client regression status
-is recorded in [verified compatibility](compatibility.md). Notifications/events,
-auth-request login, expiry cleanup, trusted proxy policy and local rate controls
-remain open; this is not full auth parity.
+HTTP milestone passes 64 cases and 2594 requests. Current client and login
+comparison results are recorded in [verified compatibility](compatibility.md).
+Notifications/events, expiry cleanup, trusted proxy policy and local rate controls
+remain open; this is not full authentication parity.
+
+## Login with an approved authentication request
+
+The [pinned password handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L370-L498)
+selects an access-code proof when the password grant includes `authRequest`.
+The [form declaration](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L1108-L1157)
+accepts this compact root case-insensitively, including `authRequest.x`,
+`authRequest[root]`, `[authRequest]` and `.authRequest` scalar names;
+`auth_request` is an ignored unknown field. The value is an opaque string, rather than a UUID-guarded path parameter.
+A present empty, unknown or foreign ID selects this variant and fails proof;
+it cannot fall back to ordinary password verification.
+
+`grant_type=password` requires present client ID, password, scope, username,
+device identifier, name and type. The scope is exactly `api offline_access`.
+Missing required `grant_type` is a form-guard 422; absent optional grant fields
+are handler errors with status 400. Present empty strings reach validation;
+an empty code works when it is the stored code, and blank device type falls back
+to 14. The password field contains the original creation access code, never the
+encrypted `masterPasswordHash` supplied by approval. Username is trimmed before
+Unicode-lowercase account lookup. Compact/underscore client and device aliases
+follow the existing case-insensitive form adapter.
+
+Login requires the exact owner, constant-time code verification, `approved=true`,
+no prior authentication timestamp, an enabled account, the same IP and
+`now < creation + five minutes`. Expiry starts at creation, not approval, and
+equality with the deadline rejects. Neither the requested login device ID nor
+its raw type must equal the request's original device. A successful login can
+create a different registered device. The adapter uses the direct socket peer
+and ignores forwarding headers; upstream trusted-proxy handling remains open.
+
+The [upstream consumption model](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/auth_request.rs)
+records an authentication timestamp. The adapter adds an owner-scoped
+approved/unused compare-and-set and wraps it together with device activity,
+session issuance and binding in a savepoint. Late failures, including deferred
+commit errors, restore all of them. Replay cannot issue another session.
+Approval/key/hash/response fields remain unchanged, and public polling can still
+read an approved request after login or beyond the login deadline. No polling
+consumption or implicit polling expiry is added. All eight focused login HTTP
+cases pass against both the adapter and actual Vaultwarden `1.37.4`: 444 counted
+requests, including 43 identity requests, twelve creations and twelve public
+polls per server. Identity requests include two ordinary logins, seven successful
+auth-request logins and two refreshes. The real 301-second fixture confirms
+expired login with readable polling, separately from unit-clock boundary tests.
+
+`AuthRequestLoginStorage` and borrowed `AuthRequestLoginRequest` keep proof
+verification and clocks outside the no-allocation core. Its private record and
+unforgeable owned-account grant redact Debug output and cannot serialize secrets.
+The host parses creation dates into full-width nanoseconds, reuses fixed-size
+HMAC verification, and reads enabled state from a private account-policy table.
+Missing policy rows mean enabled; registration or profile extras cannot override
+that state. This table does not provide an administrative account API.
+
+The [password-method token source](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth.rs#L239-L313)
+uses a two-hour access lifetime. The adapter now uses 7200 seconds for ordinary
+and auth-request password grants and refresh, retaining refresh capability and
+the existing encrypted account-decryption fields. JWT `client_id` is the supplied
+value, including empty, or `undefined` when absent. Refresh uses the optional
+client ID on the refresh request. Bound tokens project `device` and the retained
+registry type label as `devicetype`; repeated login/refresh does not replace the
+stored name/type. Personal API-key authority is unchanged, and unbound legacy
+sessions remain refreshable without invented device claims.
+
+The strict local refresh replay rule still differs from upstream. Mobile
+refresh lifetimes, full JWT/refresh-token equivalence, two-factor/mail/SSO policy,
+administrative controls, notifications, expiry cleanup, rate controls and proxy
+policy remain open. Required CI reruns the HTTP comparison and the verified
+unchanged 120-command CLI baseline. That client regression does not
+exercise auth-request login or establish broader authentication parity.
 
 ## Profile, account keys, and synchronization
 
@@ -638,7 +707,7 @@ refresh expiry, cross-account IDs, stale revisions, oversized input, and
 persistence without plaintext vault data remain ongoing regression requirements.
 
 Browser/mobile clients, organizations, attachments, Send, two-factor login,
-auth-request login/device trust, SSO, passkey authentication, key rotation, push notifications,
+broader auth-request client/device-trust flows, SSO, passkey authentication, key rotation, push notifications,
 and recovery need separate implementation and actual-client evidence. A passing personal
 CLI test must not be described as complete Bitwarden or Vaultwarden parity.
 
