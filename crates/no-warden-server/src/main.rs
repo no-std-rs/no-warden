@@ -16,6 +16,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use no_warden::{
     ApiError, VaultService,
+    bulk::CipherBulkOperation,
     import::ImportView,
     route::{self, Route},
     wire::{
@@ -253,6 +254,13 @@ async fn dispatch(
     let owner = owner.ok_or_else(unauthorized)?;
     let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
     match route {
+        Route::CipherBulkTrash => cipher_bulk(route, &owner, &body, &mut store),
+        Route::CipherBulkRestore => cipher_bulk(route, &owner, &body, &mut store),
+        Route::CipherBulkDelete => cipher_bulk(route, &owner, &body, &mut store),
+        Route::CipherBulkArchive => cipher_bulk(route, &owner, &body, &mut store),
+        Route::CipherBulkUnarchive => cipher_bulk(route, &owner, &body, &mut store),
+        Route::CipherArchive(_) => cipher_bulk(route, &owner, &body, &mut store),
+        Route::CipherUnarchive(_) => cipher_bulk(route, &owner, &body, &mut store),
         Route::CipherImport => {
             let document: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
             let folders: Vec<ImportFolderRequest<'_>> = document
@@ -434,6 +442,61 @@ async fn dispatch(
             }
         }
         _ => Err(missing()),
+    }
+}
+
+fn cipher_bulk(
+    route: Route<'_>,
+    owner: &str,
+    body: &[u8],
+    store: &mut Store,
+) -> Result<Response, Failure> {
+    let operation = match route {
+        Route::CipherBulkTrash => CipherBulkOperation::Trash,
+        Route::CipherBulkRestore => CipherBulkOperation::Restore,
+        Route::CipherBulkDelete => CipherBulkOperation::Delete,
+        Route::CipherArchive(_) | Route::CipherBulkArchive => CipherBulkOperation::Archive,
+        Route::CipherUnarchive(_) | Route::CipherBulkUnarchive => CipherBulkOperation::Unarchive,
+        _ => return Err(missing()),
+    };
+    let single = match route {
+        Route::CipherArchive(id) | Route::CipherUnarchive(id) => Some(id),
+        _ => None,
+    };
+    let document: Value = if single.is_some() {
+        Value::Null
+    } else {
+        serde_json::from_slice(body).map_err(|_| invalid())?
+    };
+    let ids: Vec<&str> = if let Some(id) = single {
+        vec![id]
+    } else {
+        document
+            .get("ids")
+            .and_then(Value::as_array)
+            .ok_or_else(invalid)?
+            .iter()
+            .map(|id| id.as_str().ok_or_else(invalid))
+            .collect::<Result<_, _>>()?
+    };
+    let mut scratch = vec![""; ids.len()];
+    let count = VaultService::new(&mut *store).bulk_ciphers(owner, operation, ids, &mut scratch)?;
+    if matches!(
+        operation,
+        CipherBulkOperation::Trash | CipherBulkOperation::Delete
+    ) {
+        return Ok(StatusCode::OK.into_response());
+    }
+    let data = scratch[..count]
+        .iter()
+        .map(|id| store.item(owner, id, "cipher")?.ok_or_else(missing))
+        .collect::<Result<Vec<_>, Failure>>()?;
+    if single.is_some() {
+        Ok(json_response(data.into_iter().next().ok_or_else(missing)?))
+    } else {
+        Ok(json_response(
+            json!({"object":"list","data":data,"continuationToken":null}),
+        ))
     }
 }
 

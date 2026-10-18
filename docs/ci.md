@@ -5,11 +5,13 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The core has 27 unit tests; the host has nine storage tests, one session-expiry
+The core has 36 unit tests; the host has eleven storage tests, one session-expiry
 test, and one compiled route-coverage test on Unix. The expanded HTTP suite passes
-27 tests, including import validation and atomic batch rejection. The 51-command
-CLI suite covers JSON/CSV import and fresh-cache decryption, and restart
-persistence checks include imported items and folder links. The core's minimum Rust version is 1.85; the standalone
+38 tests, including import validation, all twelve bulk lifecycle/archive route
+patterns, and atomic batch rejection. The CLI suite includes JSON/CSV import,
+archive/unarchive, and fresh-cache decryption. Restart persistence checks cover
+imported items and folder links, bulk lifecycle state, and per-owner archive
+annotations. The core's minimum Rust version is 1.85; the standalone
 server is also checked with its minimum version, 1.89. Bare-metal compilation
 and the allocator-free consumer link pass independently of the host suites.
 

@@ -41,11 +41,18 @@ pub enum Route<'a> {
     CipherCreate,
     CipherCreateWrapped,
     CipherImport,
+    CipherBulkTrash,
+    CipherBulkRestore,
+    CipherBulkDelete,
+    CipherBulkArchive,
+    CipherBulkUnarchive,
     CipherGet(&'a str),
     CipherUpdate(&'a str),
     CipherSoftDelete(&'a str),
     CipherRestore(&'a str),
     CipherDelete(&'a str),
+    CipherArchive(&'a str),
+    CipherUnarchive(&'a str),
 }
 
 impl Route<'_> {
@@ -86,6 +93,22 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (_, "/api/ciphers/create") => None,
         (Post, "/api/ciphers/import") => Some(CipherImport),
         (_, "/api/ciphers/import") => None,
+        (Delete, "/api/ciphers" | "/api/ciphers/admin") => Some(CipherBulkDelete),
+        (Post, "/api/ciphers/delete" | "/api/ciphers/delete-admin") => Some(CipherBulkDelete),
+        (Put, "/api/ciphers/delete" | "/api/ciphers/delete-admin") => Some(CipherBulkTrash),
+        (Put, "/api/ciphers/restore" | "/api/ciphers/restore-admin") => Some(CipherBulkRestore),
+        (Put, "/api/ciphers/archive") => Some(CipherBulkArchive),
+        (Put, "/api/ciphers/unarchive") => Some(CipherBulkUnarchive),
+        (
+            _,
+            "/api/ciphers/admin"
+            | "/api/ciphers/delete"
+            | "/api/ciphers/delete-admin"
+            | "/api/ciphers/restore"
+            | "/api/ciphers/restore-admin"
+            | "/api/ciphers/archive"
+            | "/api/ciphers/unarchive",
+        ) => None,
         _ => {
             if let Some(tail) = path.strip_prefix("/api/folders/") {
                 if let Some((id, "delete")) = tail.split_once('/') {
@@ -113,6 +136,8 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                     (Put, "delete") => Some(CipherSoftDelete(id)),
                     (Post, "delete") => Some(CipherDelete(id)),
                     (Put | Post, "restore") => Some(CipherRestore(id)),
+                    (Put, "archive") => Some(CipherArchive(id)),
+                    (Put, "unarchive") => Some(CipherUnarchive(id)),
                     _ => None,
                 };
             }
@@ -141,6 +166,49 @@ fn valid_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn selected_lifecycle_and_archive_routes_require_authentication_without_admin_bypass() {
+        use Method::*;
+        use Route::*;
+        let cases = [
+            (Delete, "/api/ciphers", CipherBulkDelete),
+            (Post, "/api/ciphers/delete", CipherBulkDelete),
+            (Put, "/api/ciphers/delete", CipherBulkTrash),
+            (Delete, "/api/ciphers/admin", CipherBulkDelete),
+            (Post, "/api/ciphers/delete-admin", CipherBulkDelete),
+            (Put, "/api/ciphers/delete-admin", CipherBulkTrash),
+            (Put, "/api/ciphers/restore", CipherBulkRestore),
+            (Put, "/api/ciphers/restore-admin", CipherBulkRestore),
+            (Put, "/api/ciphers/archive", CipherBulkArchive),
+            (Put, "/api/ciphers/unarchive", CipherBulkUnarchive),
+            (Put, "/api/ciphers/item/archive", CipherArchive("item")),
+            (Put, "/api/ciphers/item/unarchive", CipherUnarchive("item")),
+        ];
+        for (method, path, expected) in cases {
+            assert_eq!(classify(method, path), Some(expected));
+            assert!(expected.requires_authentication());
+        }
+        for path in [
+            "/api/ciphers/admin",
+            "/api/ciphers/delete",
+            "/api/ciphers/delete-admin",
+            "/api/ciphers/restore",
+            "/api/ciphers/restore-admin",
+            "/api/ciphers/archive",
+            "/api/ciphers/unarchive",
+            "/api/ciphers/item/archive",
+            "/api/ciphers/item/unarchive",
+        ] {
+            for method in [Get, Post, Put, Delete, Options] {
+                if !cases
+                    .iter()
+                    .any(|(allowed, known, _)| *allowed == method && *known == path)
+                {
+                    assert_eq!(classify(method, path), None);
+                }
+            }
+        }
+    }
     #[test]
     fn routes_authentication_and_actions() {
         assert_eq!(

@@ -3,12 +3,13 @@
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { registration } from "./seed-account.mjs";
 
 const server = (process.env.BW_E2E_SERVER ?? "http://127.0.0.1:8000").replace(/\/$/, "");
 
 async function request(path, { method = "GET", token, body, form } = {}) {
-  const headers = {};
+  const headers = { accept: "application/json" };
   if (token) headers.authorization = `Bearer ${token}`;
   if (body !== undefined) headers["content-type"] = "application/json";
   if (form) headers["content-type"] = "application/x-www-form-urlencoded";
@@ -19,7 +20,7 @@ async function request(path, { method = "GET", token, body, form } = {}) {
   const text = await response.text();
   let data;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-  return { status: response.status, data };
+  return { status: response.status, data, bodyBytes: Buffer.byteLength(text) };
 }
 
 function ok(response, context) {
@@ -36,7 +37,18 @@ async function account(name = "no-warden HTTP tests") {
   const password = randomBytes(32).toString("base64url");
   const registrationBody = registration(email, password);
   registrationBody.name = name;
-  ok(await request("/api/accounts/register", { method: "POST", body: registrationBody }), "registration");
+  let response = await request("/api/accounts/register", { method: "POST", body: registrationBody });
+  if (response.status === 404) {
+    // The portable lifecycle checks also run against disposable upstream servers.
+    const verification = ok(await request("/identity/accounts/register/send-verification-email", {
+      method: "POST", body: { email, name },
+    }), "registration verification");
+    assert.equal(typeof verification, "string", "Upstream comparison requires SMTP-disabled registration");
+    response = await request("/identity/accounts/register/finish", {
+      method: "POST", body: { ...registrationBody, emailVerificationToken: verification },
+    });
+  }
+  ok(response, "registration");
   const token = ok(await passwordLogin(registrationBody), "password login");
   assert.equal(typeof token.access_token, "string");
   assert.equal(typeof token.refresh_token, "string");
@@ -61,6 +73,48 @@ function cipher(user, overrides = {}) {
     login: { username: user.registration.key, password: user.registration.key, uris: [] },
     fields: [], ...overrides,
   };
+}
+
+const bulkActions = [
+  ["DELETE", "/api/ciphers", "hard"], ["POST", "/api/ciphers/delete", "hard"],
+  ["DELETE", "/api/ciphers/admin", "hard"], ["POST", "/api/ciphers/delete-admin", "hard"],
+  ["PUT", "/api/ciphers/delete", "soft"], ["PUT", "/api/ciphers/delete-admin", "soft"],
+  ["PUT", "/api/ciphers/restore", "restore"], ["PUT", "/api/ciphers/restore-admin", "restore"],
+].map(([method, path, kind]) => ({ method, path, kind }));
+const archiveActions = [
+  { method: "PUT", path: "/api/ciphers/archive", kind: "archive" },
+  { method: "PUT", path: "/api/ciphers/unarchive", kind: "unarchive" },
+];
+async function vaultState(token) {
+  const sync = ok(await request("/api/sync", { token }), "lifecycle sync");
+  const sorted = values => [...values].sort((a, b) => a.id.localeCompare(b.id));
+  return {
+    ciphers: sorted(sync.ciphers), folders: sorted(sync.folders),
+    revision: ok(await request("/api/accounts/revision-date", { token }), "lifecycle account revision"),
+  };
+}
+function unchanged(actual, expected, context) {
+  // Failure messages must not serialize encrypted vault contents.
+  assert(JSON.stringify(actual) === JSON.stringify(expected), context);
+}
+function lifecycleList(response, ids, context) {
+  assert.equal(response.status, 200, context);
+  assert.equal(response.data.object, "list", context);
+  assert.equal(response.data.continuationToken, null, context);
+  assert.deepEqual(response.data.data.map(item => item.id).sort(), [...new Set(ids)].sort(), context);
+  return response.data.data;
+}
+function emptyLifecycle(response, context) {
+  assert.equal(response.status, 200, context);
+  assert.equal(response.bodyBytes, 0, `${context}: response must be empty`);
+}
+async function lifecycleFixture(user, overrides = {}) {
+  const token = user.token.access_token;
+  const profile = ok(await request("/api/accounts/profile", { token }), "lifecycle owner profile");
+  return ok(await request("/api/ciphers", {
+    method: "POST", token,
+    body: cipher(user, { encryptedFor: profile.id, notes: user.registration.key, ...overrides }),
+  }), "lifecycle fixture create");
 }
 
 await test("standalone adapter enforces authentication, isolation, and JSON preservation", async (t) => {
@@ -552,4 +606,251 @@ await test("personal cipher imports preserve relationships and isolate atomic ba
       assert.deepEqual(await state(), before, "A rejected local batch must preserve items, folders, and revision");
     }
   });
+});
+
+await test("bulk cipher lifecycle matches the pinned delete and restore contracts", async (t) => {
+  const owner = await account("Bulk owner");
+  const other = await account("Bulk foreign owner");
+  const token = owner.token.access_token;
+  const otherToken = other.token.access_token;
+  const folder = ok(await request("/api/folders", { method: "POST", token, body: { name: owner.registration.key } }), "bulk owner folder");
+  const foreign = await lifecycleFixture(other);
+  const foreignBefore = await vaultState(otherToken);
+
+  await t.test("all eight aliases accept empty sets without changing the account revision", async () => {
+    const before = await vaultState(token);
+    for (const action of bulkActions) {
+      const response = await request(action.path, { method: action.method, token, body: { ids: [] } });
+      if (action.kind === "restore") lifecycleList(response, [], action.path);
+      else emptyLifecycle(response, action.path);
+      unchanged(await vaultState(token), before, "An empty bulk set must not change vault data or revision");
+    }
+  });
+
+  await t.test("both soft-delete and restore aliases deduplicate IDs and refresh repeated state transitions", async () => {
+    const soft = bulkActions.filter(action => action.kind === "soft");
+    const restore = bulkActions.filter(action => action.kind === "restore");
+    for (let index = 0; index < soft.length; index += 1) {
+      const items = [await lifecycleFixture(owner, { folderId: folder.id }), await lifecycleFixture(owner, { folderId: folder.id })];
+      const ids = [items[1].id, items[0].id, items[1].id];
+      const apply = action => request(action.path, { method: action.method, token, body: { ids } });
+      let revision = (await vaultState(token)).revision;
+      await delay(5);
+      emptyLifecycle(await apply(soft[index]), "bulk soft delete");
+      let state = await vaultState(token);
+      assert(state.revision > revision, "Bulk trash must advance account revision");
+      revision = state.revision;
+      const trashed = state.ciphers.filter(item => ids.includes(item.id));
+      assert.equal(trashed.length, 2);
+      assert(trashed.every(item => typeof item.deletedDate === "string"));
+      await delay(5);
+      emptyLifecycle(await apply(soft[index]), "repeat bulk soft delete");
+      state = await vaultState(token);
+      assert(state.revision > revision, "Repeated bulk trash must advance account revision");
+      revision = state.revision;
+      const repeated = state.ciphers.filter(item => ids.includes(item.id));
+      for (const item of repeated) {
+        const previous = trashed.find(candidate => candidate.id === item.id);
+        assert(Date.parse(item.deletedDate) > Date.parse(previous.deletedDate), "Repeated bulk trash must refresh deletion time");
+        assert(Date.parse(item.revisionDate) > Date.parse(previous.revisionDate), "Repeated bulk trash must advance cipher revision");
+      }
+      await delay(5);
+      const restored = lifecycleList(await apply(restore[index]), ids, "bulk restore");
+      state = await vaultState(token);
+      assert(state.revision > revision, "Bulk restore must advance account revision");
+      revision = state.revision;
+      assert(restored.every(item => (item.deletedDate ?? null) === null));
+      for (const item of restored) {
+        const original = items.find(candidate => candidate.id === item.id);
+        for (const field of ["name", "notes", "login", "fields", "folderId"]) {
+          unchanged(item[field], original[field], "Bulk transitions must preserve encrypted fields and folder links");
+        }
+      }
+      await delay(5);
+      const activeAgain = lifecycleList(await apply(restore[index]), ids, "repeat bulk restore");
+      assert((await vaultState(token)).revision > revision, "Repeated bulk restore must advance account revision");
+      for (const item of activeAgain) {
+        assert(Date.parse(item.revisionDate) > Date.parse(restored.find(old => old.id === item.id).revisionDate),
+          "Restoring an already active item must still advance its cipher revision");
+      }
+    }
+  });
+
+  await t.test("all four permanent-delete aliases remove active and trashed items with duplicate IDs", async () => {
+    for (const action of bulkActions.filter(action => action.kind === "hard")) {
+      const active = await lifecycleFixture(owner);
+      const trash = await lifecycleFixture(owner);
+      ok(await request(`/api/ciphers/${trash.id}/delete`, { method: "PUT", token }), "prepare trash");
+      const beforeRevision = (await vaultState(token)).revision;
+      await delay(5);
+      emptyLifecycle(await request(action.path, {
+        method: action.method, token, body: { ids: [trash.id, active.id, trash.id] },
+      }), "bulk permanent delete");
+      const after = await vaultState(token);
+      assert(after.revision > beforeRevision, "Permanent bulk deletion must advance account revision");
+      assert(!after.ciphers.some(item => [active.id, trash.id].includes(item.id)));
+      for (const id of [active.id, trash.id]) {
+        denied(await request(`/api/ciphers/${id}`, { token }), "permanently deleted item", [400, 404]);
+        assert.equal((await request("/api/ciphers/restore", { method: "PUT", token, body: { ids: [id] } })).status, 400);
+      }
+    }
+  });
+
+  await t.test("all aliases reject anonymous, foreign, unknown, case-altered, and malformed selections", async () => {
+    const own = await lifecycleFixture(owner);
+    const before = await vaultState(token);
+    for (const action of bulkActions) {
+      for (const bearer of [undefined, "forged-bulk-bearer"]) {
+        denied(await request(action.path, { method: action.method, token: bearer, body: { ids: [own.id] } }),
+          "bulk authentication", [401, 403]);
+      }
+      const changedCase = own.id.toUpperCase();
+      for (const id of [foreign.id, randomUUID(), "not-a-uuid", ...(changedCase === own.id ? [] : [changedCase])]) {
+        assert.equal((await request(action.path, { method: action.method, token, body: { ids: [id] } })).status, 400,
+          "Missing and foreign bulk IDs must return HTTP 400");
+      }
+      for (const body of [{}, [], { ids: null }, { ids: "not-an-array" }, { ids: [null] }, { ids: [1] }, { ids: [{}] }]) {
+        denied(await request(action.path, { method: action.method, token, body }), "malformed bulk selection", [400, 422]);
+      }
+    }
+    unchanged(await vaultState(token), before, "Rejected selections must preserve owned data and revision");
+    unchanged(await vaultState(otherToken), foreignBefore, "Bulk aliases must never modify another account");
+  });
+});
+
+await test("cipher archive lifecycle preserves per-owner metadata and encrypted content", async (t) => {
+  const owner = await account("Archive owner");
+  const other = await account("Archive foreign owner");
+  const token = owner.token.access_token;
+  const otherToken = other.token.access_token;
+  const ownerId = ok(await request("/api/accounts/profile", { token }), "archive owner profile").id;
+  const folder = ok(await request("/api/folders", { method: "POST", token, body: { name: owner.registration.key } }), "archive owner folder");
+  const foreign = await lifecycleFixture(other);
+  const foreignBefore = await vaultState(otherToken);
+
+  await t.test("empty bulk archive and unarchive return empty lists without changing account revision", async () => {
+    const before = await vaultState(token);
+    for (const action of archiveActions) {
+      lifecycleList(await request(action.path, { method: "PUT", token, body: { ids: [] } }), [], action.path);
+      unchanged(await vaultState(token), before, "Empty archive selections must preserve data and revision");
+    }
+  });
+
+  await t.test("single archive and unarchive retain cipher revision, trash state, and encrypted fields", async () => {
+    const item = await lifecycleFixture(owner, { folderId: folder.id });
+    ok(await request(`/api/ciphers/${item.id}/delete`, { method: "PUT", token }), "trash before archive");
+    const trashed = ok(await request(`/api/ciphers/${item.id}`, { token }), "trashed archive fixture");
+    for (const action of ["archive", "unarchive", "unarchive"]) {
+      const before = await vaultState(token);
+      await delay(5);
+      const response = await request(`/api/ciphers/${item.id}/${action}`, { method: "PUT", token });
+      assert.equal(response.status, 200, `single ${action}`);
+      assert.equal(response.data.id, item.id);
+      const archived = action === "archive";
+      assert.equal(typeof response.data.archivedDate === "string", archived);
+      if (!archived) assert.equal(response.data.archivedDate ?? null, null);
+      assert.equal(response.data.revisionDate, trashed.revisionDate, "Archive metadata must not change cipher revision");
+      assert.equal(response.data.deletedDate, trashed.deletedDate, "Archive must preserve trash state");
+      for (const field of ["name", "notes", "login", "fields", "folderId"]) {
+        unchanged(response.data[field], trashed[field], "Archive actions must preserve encrypted fields");
+      }
+      assert((await vaultState(token)).revision > before.revision, "Archive actions must advance account revision");
+    }
+  });
+
+  await t.test("bulk archive deduplicates IDs, refreshes archive time, and follows ordinary-edit archive metadata rules", async () => {
+    const items = [await lifecycleFixture(owner, { folderId: folder.id }), await lifecycleFixture(owner, { folderId: folder.id })];
+    const ids = [items[1].id, items[0].id, items[1].id];
+    const apply = action => request(`/api/ciphers/${action}`, { method: "PUT", token, body: { ids } });
+    let revision = (await vaultState(token)).revision;
+    await delay(5);
+    const archived = lifecycleList(await apply("archive"), ids, "bulk archive");
+    assert(archived.every(item => typeof item.archivedDate === "string"));
+    let state = await vaultState(token);
+    assert(state.revision > revision, "Bulk archive must advance account revision");
+    revision = state.revision;
+    await delay(5);
+    const repeated = lifecycleList(await apply("archive"), ids, "repeat bulk archive");
+    state = await vaultState(token);
+    assert(state.revision > revision, "Repeated bulk archive must advance account revision");
+    for (const item of repeated) {
+      assert.equal(item.revisionDate, items.find(old => old.id === item.id).revisionDate);
+      assert(Date.parse(item.archivedDate) > Date.parse(archived.find(old => old.id === item.id).archivedDate));
+    }
+    const editBody = { ...repeated[0], encryptedFor: ownerId, favorite: true, lastKnownRevisionDate: repeated[0].revisionDate };
+    const edited = ok(await request(`/api/ciphers/${editBody.id}`, { method: "PUT", token, body: editBody }), "ordinary archived-item edit");
+    assert.equal(edited.archivedDate, repeated[0].archivedDate, "An explicit valid date must retain the owner's archive annotation");
+    assert(Date.parse(edited.revisionDate) > Date.parse(repeated[0].revisionDate));
+    const invalidDate = ok(await request(`/api/ciphers/${edited.id}`, {
+      method: "PUT", token,
+      body: { ...edited, encryptedFor: ownerId, archivedDate: "not-a-date", lastKnownRevisionDate: edited.revisionDate },
+    }), "invalid archive-date edit");
+    assert.equal(invalidDate.archivedDate, edited.archivedDate, "Invalid archive dates must leave the prior annotation intact");
+    const omittedBody = { ...invalidDate, encryptedFor: ownerId, lastKnownRevisionDate: invalidDate.revisionDate };
+    delete omittedBody.archivedDate;
+    const omitted = ok(await request(`/api/ciphers/${edited.id}`, { method: "PUT", token, body: omittedBody }), "omitted archive-date edit");
+    assert.equal(omitted.archivedDate ?? null, null, "An omitted archive date must remove the owner's archive annotation");
+    assert(Date.parse(omitted.revisionDate) > Date.parse(edited.revisionDate));
+    assert.equal((await vaultState(token)).ciphers.find(item => item.id === edited.id).archivedDate ?? null, null);
+    const explicitNull = ok(await request(`/api/ciphers/${repeated[1].id}`, {
+      method: "PUT", token,
+      body: { ...repeated[1], encryptedFor: ownerId, archivedDate: null, lastKnownRevisionDate: repeated[1].revisionDate },
+    }), "null archive-date edit");
+    assert.equal(explicitNull.archivedDate ?? null, null, "An explicit null date must remove the owner's archive annotation");
+    revision = (await vaultState(token)).revision;
+    await delay(5);
+    const unarchived = lifecycleList(await apply("unarchive"), ids, "bulk unarchive");
+    assert(unarchived.every(item => (item.archivedDate ?? null) === null));
+    assert((await vaultState(token)).revision > revision, "Bulk unarchive must advance account revision");
+    for (const item of unarchived) {
+      assert.equal(item.revisionDate, item.id === edited.id ? omitted.revisionDate : explicitNull.revisionDate);
+    }
+  });
+
+  await t.test("single and bulk archive aliases enforce authentication and owner isolation", async () => {
+    const item = await lifecycleFixture(owner);
+    const before = await vaultState(token);
+    for (const action of ["archive", "unarchive"]) {
+      for (const path of [`/api/ciphers/${action}`, `/api/ciphers/${item.id}/${action}`]) {
+        denied(await request(path, { method: "PUT", body: { ids: [item.id] } }), "anonymous archive", [401, 403]);
+      }
+      for (const id of [foreign.id, randomUUID()]) {
+        assert.equal((await request(`/api/ciphers/${action}`, { method: "PUT", token, body: { ids: [id] } })).status, 400);
+        assert.equal((await request(`/api/ciphers/${id}/${action}`, { method: "PUT", token })).status, 400);
+      }
+      for (const body of [{}, { ids: null }, { ids: [1] }]) {
+        denied(await request(`/api/ciphers/${action}`, { method: "PUT", token, body }), "malformed archive selection", [400, 422]);
+      }
+    }
+    unchanged(await vaultState(token), before, "Rejected archive actions must preserve owned data and revision");
+    unchanged(await vaultState(otherToken), foreignBefore, "Archive actions must preserve foreign data and revision");
+  });
+});
+
+await test("standalone bulk transactions preserve opaque JSON and roll back mixed invalid selections (local provider guarantee)", async () => {
+  const owner = await account("Atomic bulk owner");
+  const other = await account("Atomic bulk foreign owner");
+  const token = owner.token.access_token;
+  const otherToken = other.token.access_token;
+  const extension = { opaque: '{"quoted":"\\\\ café 🔐","nested":[true,null,7]}', sealed: owner.registration.key };
+  const own = await lifecycleFixture(owner, { futureProtocolExtension: extension });
+  const foreign = await lifecycleFixture(other);
+  for (const path of ["delete", "restore", "archive", "unarchive"]) {
+    ok(await request(`/api/ciphers/${path}`, { method: "PUT", token, body: { ids: [own.id, own.id] } }), "opaque bulk transition");
+    const fetched = ok(await request(`/api/ciphers/${own.id}`, { token }), "opaque bulk read");
+    unchanged(fetched.futureProtocolExtension, extension, "Bulk actions must preserve the adapter's opaque JSON contract");
+    unchanged((await vaultState(token)).ciphers.find(item => item.id === own.id).futureProtocolExtension, extension,
+      "Sync must retain opaque JSON after a bulk action");
+  }
+  const before = await vaultState(token);
+  const foreignBefore = await vaultState(otherToken);
+  for (const action of [...bulkActions, ...archiveActions]) {
+    for (const invalid of [foreign.id, randomUUID()]) {
+      for (const ids of [[own.id, invalid], [invalid, own.id]]) {
+        assert.equal((await request(action.path, { method: action.method, token, body: { ids } })).status, 400);
+        unchanged(await vaultState(token), before, "A rejected local bulk transaction must leave every owned cipher and revision unchanged");
+        unchanged(await vaultState(otherToken), foreignBefore, "A rejected local bulk transaction must preserve foreign data");
+      }
+    }
+  }
 });

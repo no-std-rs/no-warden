@@ -39,14 +39,18 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 29 routed patterns, 13 with typed requests, 16 with reusable core service behavior; each carries its narrower limits |
-| Runtime CLI comparison | Official CLI `2026.10.0`: 51 commands pass against the adapter and official Vaultwarden `1.37.4`, including personal JSON/CSV import. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 41 routed patterns, 23 with typed requests, 28 with reusable core service behavior; each carries its narrower limits |
+| Runtime CLI comparison | Official CLI `2026.10.0`: 66 commands pass against the adapter and official Vaultwarden `1.37.4`, including personal JSON/CSV import and archive/unarchive. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
 unimplemented status or a partial local coverage record. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
+
+Thirteen local patterns have some typed response representation. Bulk cipher
+lists use the generic `ListResponse` wrapper; a complete borrowed cipher response
+model is still absent, and single archive responses remain host-built JSON.
 
 The client catalog is an overapproximation of shipped code, not a proof that all
 those operations are reachable from CLI commands. Its 34 open obligations retain
@@ -77,6 +81,42 @@ while enforcing stronger ownership/current-key validation and rollback guarantee
 The upstream source saves sequentially, so local atomicity is recorded as an
 adapter guarantee rather than upstream behavioral equivalence. See
 [verified compatibility](compatibility.md) for the exercised types and limits.
+
+The current cipher lifecycle chunk adds the following personal-vault contracts.
+All admin-named aliases keep the same ownership checks; organization permissions
+remain outside this subset.
+
+| Action | Method and `/api` route | Request and success response |
+| --- | --- | --- |
+| Permanent bulk deletion | `DELETE /ciphers`, `POST /ciphers/delete`, `DELETE /ciphers/admin`, `POST /ciphers/delete-admin` | `{"ids":[...]}`; empty 200 |
+| Bulk trash | `PUT /ciphers/delete`, `PUT /ciphers/delete-admin` | `{"ids":[...]}`; empty 200 |
+| Bulk restore | `PUT /ciphers/restore`, `PUT /ciphers/restore-admin` | `{"ids":[...]}`; cipher list |
+| Archive/unarchive | `PUT /ciphers/<id>/archive`, `PUT /ciphers/<id>/unarchive` | No body; cipher response |
+| Bulk archive/unarchive | `PUT /ciphers/archive`, `PUT /ciphers/unarchive` | `{"ids":[...]}`; cipher list |
+
+The [pinned server helpers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L1876-L1972)
+deduplicate IDs without prescribing order. The adapter preserves that success
+behavior and the bulk missing/inaccessible-member status of 400 while providing
+atomic persistence; upstream errors may occur after partial writes. Existing
+single-item lifecycle handlers retain their earlier 404 policy. Archive/unarchive
+changes the acting user's archive metadata and account revision while leaving
+the cipher revision intact, as the
+[pinned archive model](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/archive.rs#L35-L83)
+shows. These contracts do not establish full organization, notification,
+attachment-cleanup, or error-semantics parity.
+
+The shipped
+[archive service](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/vault/services/default-cipher-archive.service.ts#L64-L89)
+constructs bulk archive/unarchive requests for individual CLI archive/restore
+commands. Shared delete/trash/restore methods choose TypeScript or SDK
+construction using `pm-27632-cipher-crud-operations-to-sdk`; their presence is
+not proof of a CLI command that selects multiple items. All 66 CLI commands pass
+against both servers, including archive/unarchive after discarding the local
+cache. The same 10 portable HTTP tests pass against the upstream release and
+cover all 12 new route patterns. The complete standalone HTTP suite passes 38
+tests, and bulk changes and archive state survive two graceful restarts.
+Full-parity statuses and the formal comparison/trace receipt requirements remain
+unchanged.
 
 ## Reproduce and maintain the inventory
 

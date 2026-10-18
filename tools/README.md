@@ -61,7 +61,7 @@ isolation, owner references, malformed input, refresh token rotation, and
 preservation of unknown JSON extensions. It also verifies stored key-ID
 enforcement, escaped opaque cipher blobs, encrypted FIDO2 records, clone
 wrappers, legacy folder aliases, organization alias rejection, and preservation
-of archived dates.
+of valid request-supplied archive dates.
 
 The original 37 CLI lifecycle commands remain intact. The suite then imports
 unencrypted Bitwarden JSON and CSV fixtures through the official CLI, which
@@ -72,6 +72,12 @@ discarding the CLI cache and logging in afresh. Fixture files live in the privat
 temporary directory and are removed in `finally`. CSV folder checks include the
 client's backslash normalization and automatic ancestor-folder creation.
 
+All 51 lifecycle and import commands remain intact. Another 15 commands archive
+an imported login, verify its absence from the active vault, discard the client
+cache, decrypt its archived password and notes after login, and restore it from
+the archive. The complete suite now executes 66 official CLI commands. The CLI
+uses bulk archive and unarchive API requests even for this single-item workflow.
+
 The personal-import HTTP checks follow the pinned relationship semantics:
 existing owned folder IDs are reused, foreign or unknown IDs create fresh owned
 folders, duplicate relationship keys use the last value, unknown folder indexes
@@ -81,12 +87,28 @@ atomic transaction contract. This rollback requirement is a local guarantee;
 the examined Vaultwarden handler saves entries sequentially without an enclosing
 import transaction.
 
-The persistence test starts its own standalone server twice on a free loopback
+The lifecycle HTTP checks cover all eight bulk delete/restore aliases and all
+four single/bulk archive/unarchive routes. They check exact response shapes,
+empty sets, duplicate IDs, repeated transitions, malformed selections, and
+authentication and ownership boundaries. Restore and archive lists are compared
+without assuming result order. Archive actions change the account revision and
+the owner's archive annotation while preserving the cipher revision, encrypted
+fields, and trash state. Ordinary cipher edits retain an explicitly supplied
+valid archive date, clear it when omitted or null, and retain the previous
+annotation when the supplied date is invalid.
+
+Mixed invalid selections also verify the standalone provider's atomic rollback.
+This is a local guarantee: upstream iterates a deduplicated, unordered set and
+can retain earlier writes when a later selection fails. These tests do not
+assert upstream rollback or which selected item would be processed first.
+
+The persistence test starts its own standalone server three times on a free loopback
 port, using one temporary SQLite database. It verifies graceful shutdown,
 encrypted account and owner data, folders, active and trashed ciphers, revisions,
 and authentication sessions across restart. It also imports encrypted login and
 secure-note fixtures and verifies their exact stored content and folder links
-after restart. Build `no-warden-server` first, or
+after restart. Bulk trash, restore, permanent deletion, archive annotations, and
+removal of those annotations must survive restarts too. Build `no-warden-server` first, or
 set `NO_WARDEN_BIN` to its binary path. The test stops its child processes and
 removes the temporary database on success or failure.
 
@@ -106,9 +128,20 @@ DATA_FOLDER="$(mktemp -d)" ROCKET_ADDRESS=127.0.0.1 ROCKET_PORT=8001 \
   WEB_VAULT_ENABLED=false SIGNUPS_ALLOWED=true vaultwarden
 ```
 
-The HTTP suite includes no-warden-specific validation and token-rotation
-requirements; it is intended for the standalone adapter. The CLI lifecycle is
-the portable upstream comparison.
+The complete HTTP suite includes no-warden-specific validation, token-rotation,
+and transaction requirements. Its source-backed lifecycle groups can also run
+unchanged against the disposable upstream instance:
+
+```sh
+BW_E2E_SERVER=http://127.0.0.1:8001 node --test \
+  --test-name-pattern='bulk cipher lifecycle|cipher archive lifecycle' tools/server-tests.mjs
+```
+
+These groups use the upstream registration flow when necessary. They cover
+personal ownership; organization-specific access and notification behavior
+remain outside this test fixture. Run the comparisons in separate disposable
+server processes: their test logins share the loopback IP's upstream login-rate
+limit. No harness command retries authentication.
 
 The initial compatibility baseline passed on 2026-10-18: the same 37 official
 CLI `2026.10.0` commands passed against both no-warden and upstream Vaultwarden
@@ -125,6 +158,13 @@ commands passed against no-warden and the actual Vaultwarden `1.37.4` binary
 above, including JSON/CSV imports and decryption after discarding the client
 cache. The expanded standalone HTTP suite passed all 27 tests, and imported
 encrypted items and folder links survived the standalone restart check.
+
+The bulk/archive follow-up passed on 2026-10-18: all 66 official CLI commands
+passed against both no-warden and the same actual Vaultwarden `1.37.4` binary.
+The identical portable HTTP groups passed all 10 tests against upstream, covering
+the 12 lifecycle route patterns. The complete standalone HTTP suite passed all
+38 tests, and its bulk changes and archive annotation removal survived two
+graceful restarts.
 
 `seed-account.mjs` can also register a single explicit test account. Supply
 `BW_E2E_EMAIL`, `BW_E2E_PASSWORD`, and optionally `BW_E2E_SERVER` in the environment.

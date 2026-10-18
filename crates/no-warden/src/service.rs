@@ -9,6 +9,7 @@ use crate::{
     wire::{CipherCreateRequest, CipherRequest, FolderRequest, RegisterRequest},
 };
 
+pub use crate::bulk::{CipherAccess, CipherBulkOperation, CipherBulkStorage, ValidatedCipherBulk};
 pub use crate::import::{ImportData, ImportPolicy, ImportStorage, ImportView, ValidatedImport};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

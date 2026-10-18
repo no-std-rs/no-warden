@@ -151,6 +151,21 @@ try {
   assert.equal(imported.find(item => item.type === 1).folderId, importedFolder.id);
   assert.equal(imported.find(item => item.type === 2).folderId, folder.id);
   assert.equal(postImport.folders.find(candidate => candidate.id === folder.id).name, folder.name);
+  const createBulk = () => request("/api/ciphers", { method: "POST", token, body });
+  const bulkTrash = await createBulk();
+  const bulkRestored = await createBulk();
+  const bulkDeleted = await createBulk();
+  const bulkArchived = await createBulk();
+  const bulkUnarchived = await createBulk();
+  await request("/api/ciphers/delete", {
+    method: "PUT", token, body: { ids: [bulkTrash.id, bulkRestored.id, bulkRestored.id] },
+  });
+  await request("/api/ciphers/restore", { method: "PUT", token, body: { ids: [bulkRestored.id, bulkRestored.id] } });
+  await request("/api/ciphers", { method: "DELETE", token, body: { ids: [bulkDeleted.id, bulkDeleted.id] } });
+  await request("/api/ciphers/archive", {
+    method: "PUT", token, body: { ids: [bulkArchived.id, bulkUnarchived.id, bulkArchived.id] },
+  });
+  await request("/api/ciphers/unarchive", { method: "PUT", token, body: { ids: [bulkUnarchived.id] } });
   const userKeyId = randomBytes(32).toString("base64");
   await request("/api/accounts/key-management/user-key-id", { method: "POST", token, body: { userKeyId } });
   const before = await request("/api/sync", { token });
@@ -158,6 +173,12 @@ try {
   assert.equal(before.profile.name, account.name);
   assert.equal(before.profile.key, account.key);
   assert.equal(before.userDecryption.userKeyId, userKeyId);
+  assert.equal(typeof before.ciphers.find(item => item.id === bulkTrash.id).deletedDate, "string");
+  assert.equal(before.ciphers.find(item => item.id === bulkRestored.id).deletedDate ?? null, null);
+  assert(!before.ciphers.some(item => item.id === bulkDeleted.id));
+  assert.equal(typeof before.ciphers.find(item => item.id === bulkArchived.id).archivedDate, "string");
+  assert.equal(before.ciphers.find(item => item.id === bulkArchived.id).revisionDate, bulkArchived.revisionDate);
+  assert.equal(before.ciphers.find(item => item.id === bulkUnarchived.id).archivedDate ?? null, null);
 
   await stopServer(child);
   child = await startServer(port);
@@ -185,8 +206,18 @@ try {
   assert.equal(refreshed.Key, account.key);
   assert.equal(refreshed.UserDecryptionOptions.UserKeyId, userKeyId);
   assert.deepEqual((await request("/api/sync", { token: refreshed.access_token })).profile, before.profile);
+  const unarchived = await request(`/api/ciphers/${bulkArchived.id}/unarchive`, { method: "PUT", token });
+  assert.equal(unarchived.archivedDate ?? null, null);
+  assert.equal(unarchived.revisionDate, bulkArchived.revisionDate);
+  const clearedRevision = await request("/api/accounts/revision-date", { token });
   await stopServer(child);
-  console.log("PASS: graceful restart preserves SQLite keys, escaped names, owner data, imported items/folder links, active/trash ciphers, revisions, bearer sessions, and refresh tokens.");
+  child = await startServer(port);
+  const cleared = await request(`/api/ciphers/${bulkArchived.id}`, { token: refreshed.access_token });
+  assert.equal(cleared.archivedDate ?? null, null, "Removing an archive annotation must survive a second restart");
+  assert.equal(cleared.revisionDate, bulkArchived.revisionDate);
+  assert.equal(await request("/api/accounts/revision-date", { token }), clearedRevision);
+  await stopServer(child);
+  console.log("PASS: graceful restarts preserve SQLite keys, owner data, imported folder links, bulk trash/restore/deletion, archive annotations and their removal, revisions, and authentication sessions.");
 } finally {
   await Promise.allSettled([...children].map(record => stopServer(record, false)));
   rmSync(directory, { recursive: true, force: true });

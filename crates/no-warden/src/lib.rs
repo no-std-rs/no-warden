@@ -9,6 +9,7 @@
 #![deny(missing_debug_implementations)]
 
 pub mod bounded;
+pub mod bulk;
 pub mod error;
 pub mod import;
 pub mod route;

@@ -1,5 +1,6 @@
 use no_warden::{
     Storage,
+    bulk::{CipherBulkOperation, CipherBulkStorage, ValidatedCipherBulk},
     import::{ImportData, ImportStorage, ValidatedImport},
     service::ItemMetadata,
     wire::{CipherRequest, FolderRequest, RegisterRequest},
@@ -60,14 +61,25 @@ fn require_change(changed: usize) -> rusqlite::Result<()> {
 }
 
 fn item(db: &Connection, owner: &str, id: &str, kind: &str) -> rusqlite::Result<Option<Value>> {
-    let document: Option<String> = db
-        .query_row(
-            "SELECT document FROM items WHERE owner=?1 AND id=?2 AND kind=?3",
-            params![owner, id, kind],
-            |r| r.get(0),
-        )
-        .optional()?;
-    Ok(document.map(|s| serde_json::from_str(&s).expect("stored item JSON")))
+    db.query_row(
+        "SELECT i.document,a.cipher_id IS NOT NULL,a.archived_at FROM items i
+             LEFT JOIN cipher_archives a ON a.cipher_id=i.id AND a.owner=i.owner
+             WHERE i.owner=?1 AND i.id=?2 AND i.kind=?3",
+        params![owner, id, kind],
+        stored_document,
+    )
+    .optional()
+}
+
+fn stored_document(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    let document: String = row.get(0)?;
+    let mut document: Value = serde_json::from_str(&document).expect("stored item JSON");
+    if row.get::<_, bool>(1)? {
+        // A null annotation records an explicit unarchive, overriding raw request
+        // metadata too. Cipher writes synchronize this annotation from archivedDate.
+        document["archivedDate"] = json!(row.get::<_, Option<String>>(2)?);
+    }
+    Ok(document)
 }
 
 #[cfg(unix)]
@@ -122,6 +134,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS accounts(id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL COLLATE NOCASE, document TEXT NOT NULL, password TEXT NOT NULL, revision TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS items(id TEXT PRIMARY KEY, owner TEXT NOT NULL REFERENCES accounts(id), kind TEXT NOT NULL, document TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, revision TEXT NOT NULL, created TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS items_owner ON items(owner,kind);
+            CREATE TABLE IF NOT EXISTS cipher_archives(cipher_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE, owner TEXT NOT NULL REFERENCES accounts(id), archived_at TEXT, PRIMARY KEY(cipher_id,owner));
             CREATE TABLE IF NOT EXISTS sessions(access TEXT PRIMARY KEY, refresh TEXT UNIQUE NOT NULL, owner TEXT NOT NULL REFERENCES accounts(id), access_expires INTEGER NOT NULL, refresh_expires INTEGER NOT NULL);")?;
         // SQLite inherits the private database mode for new sidecars. Also
         // narrow sidecars left behind by an earlier permissive installation.
@@ -151,12 +164,13 @@ impl Store {
     }
 
     pub fn items(&self, owner: &str, kind: &str) -> rusqlite::Result<Vec<Value>> {
-        let mut statement = self
-            .db
-            .prepare("SELECT document FROM items WHERE owner=?1 AND kind=?2 ORDER BY rowid")?;
+        let mut statement = self.db.prepare(
+            "SELECT i.document,a.cipher_id IS NOT NULL,a.archived_at FROM items i
+             LEFT JOIN cipher_archives a ON a.cipher_id=i.id AND a.owner=i.owner
+             WHERE i.owner=?1 AND i.kind=?2 ORDER BY i.rowid",
+        )?;
         statement
-            .query_map(params![owner, kind], |r| r.get::<_, String>(0))?
-            .map(|row| row.map(|s| serde_json::from_str(&s).expect("stored item JSON")))
+            .query_map(params![owner, kind], stored_document)?
             .collect()
     }
 
@@ -239,7 +253,54 @@ fn save_document(
     let deleted = doc.get("deletedDate").is_some_and(|v| !v.is_null());
     require_change(db.execute(if allow_update { "INSERT INTO items(id,owner,kind,document,deleted,revision,created) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET document=excluded.document,revision=excluded.revision,deleted=excluded.deleted WHERE items.owner=excluded.owner AND items.kind=excluded.kind" } else { "INSERT INTO items(id,owner,kind,document,deleted,revision,created) VALUES(?1,?2,?3,?4,?5,?6,?7)" },
             params![id,owner,kind,doc.to_string(),deleted,revision,revision])?)?;
+    if kind == "cipher" {
+        let archived_at = match doc.get("archivedDate") {
+            None | Some(Value::Null) => Some(None),
+            Some(Value::String(date)) => chrono::NaiveDateTime::parse_from_str(date, "%+")
+                .ok()
+                .map(|date| {
+                    Some(
+                        date.and_utc()
+                            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                    )
+                }),
+            _ => None,
+        };
+        if let Some(archived_at) = archived_at {
+            save_archive(db, owner, id, archived_at.as_deref())?;
+        } else {
+            // Upstream ignores a malformed date without changing the prior state.
+            // Older databases can have archive metadata only in the raw document.
+            let previous = existing
+                .as_ref()
+                .and_then(|document| document["archivedDate"].as_str())
+                .and_then(|date| chrono::NaiveDateTime::parse_from_str(date, "%+").ok())
+                .map(|date| {
+                    date.and_utc()
+                        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                });
+            db.execute(
+                "INSERT INTO cipher_archives(cipher_id,owner,archived_at) VALUES(?1,?2,?3)
+                 ON CONFLICT(cipher_id,owner) DO NOTHING",
+                params![id, owner, previous],
+            )?;
+        }
+    }
     bump(db, owner, &revision)?;
+    Ok(())
+}
+
+fn save_archive(
+    db: &Connection,
+    owner: &str,
+    id: &str,
+    archived_at: Option<&str>,
+) -> rusqlite::Result<()> {
+    db.execute(
+        "INSERT INTO cipher_archives(cipher_id,owner,archived_at) VALUES(?1,?2,?3)
+         ON CONFLICT(cipher_id,owner) DO UPDATE SET archived_at=excluded.archived_at",
+        params![id, owner, archived_at],
+    )?;
     Ok(())
 }
 
@@ -297,6 +358,49 @@ impl ImportStorage for Store {
         // Even an empty import advances the account revision on the reference server.
         let revision = next_revision(&tx, owner)?;
         bump(&tx, owner, &revision)?;
+        tx.commit()
+    }
+}
+
+impl CipherBulkStorage for Store {
+    fn commit_cipher_bulk(
+        &mut self,
+        owner: &str,
+        plan: &ValidatedCipherBulk<'_, '_>,
+    ) -> Result<(), Self::Error> {
+        let tx = self.db.transaction()?;
+        for id in plan.ids() {
+            let mut document =
+                item(&tx, owner, id, "cipher")?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+            let revision = next_revision(&tx, owner)?;
+            match plan.operation() {
+                CipherBulkOperation::Delete => {
+                    require_change(tx.execute(
+                        "DELETE FROM items WHERE owner=?1 AND id=?2 AND kind='cipher'",
+                        params![owner, id],
+                    )?)?;
+                }
+                CipherBulkOperation::Trash | CipherBulkOperation::Restore => {
+                    let deleted = plan.operation() == CipherBulkOperation::Trash;
+                    document["deletedDate"] = if deleted {
+                        json!(revision)
+                    } else {
+                        Value::Null
+                    };
+                    document["revisionDate"] = json!(revision);
+                    require_change(tx.execute(
+                        "UPDATE items SET document=?1,deleted=?2,revision=?3 WHERE owner=?4 AND id=?5 AND kind='cipher'",
+                        params![document.to_string(), deleted, revision, owner, id],
+                    )?)?;
+                }
+                CipherBulkOperation::Archive | CipherBulkOperation::Unarchive => {
+                    let archived_at = (plan.operation() == CipherBulkOperation::Archive)
+                        .then_some(revision.as_str());
+                    save_archive(&tx, owner, id, archived_at)?;
+                }
+            }
+            bump(&tx, owner, &revision)?;
+        }
         tx.commit()
     }
 }
@@ -426,6 +530,137 @@ mod tests {
     use serde::Deserialize;
 
     const CIPHERTEXT: &str = "2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+    fn bulk(
+        store: &mut Store,
+        operation: CipherBulkOperation,
+        ids: &[&str],
+    ) -> Result<usize, no_warden::ApiError> {
+        let mut scratch = vec![""; ids.len()];
+        VaultService::new(store).bulk_ciphers("alice", operation, ids.iter().copied(), &mut scratch)
+    }
+
+    #[test]
+    fn every_bulk_operation_rolls_back_late_storage_failure() {
+        for operation in [
+            CipherBulkOperation::Trash,
+            CipherBulkOperation::Restore,
+            CipherBulkOperation::Delete,
+            CipherBulkOperation::Archive,
+            CipherBulkOperation::Unarchive,
+        ] {
+            let mut store = setup();
+            for id in ["a", "z"] {
+                save(&mut store, "alice", id, "cipher", None);
+            }
+            save(&mut store, "bob", "foreign", "cipher", None);
+            bulk(&mut store, CipherBulkOperation::Archive, &["a", "z"]).unwrap();
+            if operation == CipherBulkOperation::Restore {
+                bulk(&mut store, CipherBulkOperation::Trash, &["a", "z"]).unwrap();
+            }
+            let before = snapshot(&store);
+            let trigger = match operation {
+                CipherBulkOperation::Delete => {
+                    "CREATE TRIGGER fail_bulk BEFORE DELETE ON items WHEN OLD.id='z' BEGIN SELECT RAISE(ABORT,'injected bulk failure'); END;"
+                }
+                CipherBulkOperation::Trash | CipherBulkOperation::Restore => {
+                    "CREATE TRIGGER fail_bulk BEFORE UPDATE ON items WHEN NEW.id='z' BEGIN SELECT RAISE(ABORT,'injected bulk failure'); END;"
+                }
+                CipherBulkOperation::Archive | CipherBulkOperation::Unarchive => {
+                    "CREATE TRIGGER fail_bulk BEFORE INSERT ON cipher_archives WHEN NEW.cipher_id='z' BEGIN SELECT RAISE(ABORT,'injected bulk failure'); END;"
+                }
+            };
+            store.db.execute_batch(trigger).unwrap();
+            assert_eq!(
+                bulk(&mut store, operation, &["a", "z"]).unwrap_err().kind,
+                ErrorKind::Storage
+            );
+            assert_eq!(
+                snapshot(&store),
+                before,
+                "{operation:?} partially committed"
+            );
+        }
+    }
+
+    #[test]
+    fn archive_annotations_follow_cipher_write_semantics_without_changing_action_revision() {
+        let mut store = setup();
+        save(&mut store, "alice", "cipher", "cipher", None);
+        save(&mut store, "bob", "foreign", "cipher", None);
+        let foreign = store.item("bob", "foreign", "cipher").unwrap().unwrap();
+        let original = store.item("alice", "cipher", "cipher").unwrap().unwrap();
+        let revision = store.account("id", "alice").unwrap().unwrap()["revisionDate"].clone();
+        bulk(
+            &mut store,
+            CipherBulkOperation::Archive,
+            &["cipher", "cipher"],
+        )
+        .unwrap();
+        let archived = store.item("alice", "cipher", "cipher").unwrap().unwrap();
+        assert_eq!(archived["revisionDate"], original["revisionDate"]);
+        assert!(archived["archivedDate"].is_string());
+        assert_ne!(
+            store.account("id", "alice").unwrap().unwrap()["revisionDate"],
+            revision
+        );
+        assert_eq!(
+            store.item("bob", "foreign", "cipher").unwrap().unwrap(),
+            foreign
+        );
+
+        // Invalid dates are ignored, retaining the prior annotation. No value is logged.
+        store.pending =
+            json!({"type":2,"name":CIPHERTEXT,"secureNote":{"type":0},"archivedDate":"invalid"});
+        store.save("alice", "cipher", "cipher").unwrap();
+        assert_eq!(
+            store.item("alice", "cipher", "cipher").unwrap().unwrap()["archivedDate"],
+            archived["archivedDate"]
+        );
+        // Omitted/null metadata explicitly clears archive state on ordinary writes.
+        save(&mut store, "alice", "cipher", "cipher", None);
+        assert!(
+            store.item("alice", "cipher", "cipher").unwrap().unwrap()["archivedDate"].is_null()
+        );
+        store.pending = json!({"type":2,"name":CIPHERTEXT,"secureNote":{"type":0},"archivedDate":"2026-01-01T12:00:00+02:00"});
+        store.save("alice", "cipher", "cipher").unwrap();
+        assert_eq!(
+            store.item("alice", "cipher", "cipher").unwrap().unwrap()["archivedDate"],
+            "2026-01-01T12:00:00.000Z"
+        );
+        // Simulate the pre-annotation schema: valid archive metadata lives only
+        // in the document. An invalid update must retain that effective state.
+        store
+            .db
+            .execute("DELETE FROM cipher_archives WHERE cipher_id='cipher'", [])
+            .unwrap();
+        store.pending =
+            json!({"type":2,"name":CIPHERTEXT,"secureNote":{"type":0},"archivedDate":"invalid"});
+        store.save("alice", "cipher", "cipher").unwrap();
+        assert_eq!(
+            store.item("alice", "cipher", "cipher").unwrap().unwrap()["archivedDate"],
+            "2026-01-01T12:00:00.000Z"
+        );
+        let revision =
+            store.item("alice", "cipher", "cipher").unwrap().unwrap()["revisionDate"].clone();
+        bulk(&mut store, CipherBulkOperation::Unarchive, &["cipher"]).unwrap();
+        let unarchived = store.item("alice", "cipher", "cipher").unwrap().unwrap();
+        assert!(unarchived["archivedDate"].is_null());
+        assert_eq!(unarchived["revisionDate"], revision);
+        bulk(&mut store, CipherBulkOperation::Delete, &["cipher"]).unwrap();
+        let count: i64 = store
+            .db
+            .query_row(
+                "SELECT count(*) FROM cipher_archives WHERE cipher_id='cipher'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "Permanent deletion must remove per-user annotations"
+        );
+    }
 
     fn import(store: &mut Store, owner: &str, document: &Value) -> Result<(), no_warden::ApiError> {
         let folders = Vec::deserialize(&document["folders"]).unwrap();
@@ -567,6 +802,7 @@ mod tests {
         let mut statement=store.db.prepare(
             "SELECT 'account:'||id||':'||document||':'||revision FROM accounts
              UNION ALL SELECT 'item:'||id||':'||owner||':'||document||':'||deleted||':'||revision||':'||created FROM items
+             UNION ALL SELECT 'archive:'||cipher_id||':'||owner||':'||COALESCE(archived_at,'unarchived') FROM cipher_archives
              ORDER BY 1"
         ).unwrap();
         statement

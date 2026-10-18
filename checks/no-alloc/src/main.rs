@@ -7,7 +7,7 @@ use core::{hint::black_box, panic::PanicInfo};
 use no_warden::{
     route::{Method, classify},
     service::ImportData,
-    wire::{CipherRequest, ImportRequest, PreloginRequest, PreloginResponse},
+    wire::{CipherIdsRequest, CipherRequest, ImportRequest, PreloginRequest, PreloginResponse},
 };
 
 #[unsafe(no_mangle)]
@@ -42,6 +42,15 @@ pub extern "C" fn _start() -> ! {
         black_box(import.cipher(0));
         let mut encoded = [0u8; 2048];
         let _ = black_box(serde_json_core::to_slice(&import, &mut encoded));
+        black_box(encoded);
+    }
+    let ids = serde_json_core::from_slice::<CipherIdsRequest<'_, 3>>(black_box(
+        br#"{"ids":["opaque:One/id","opaque:One/id","opaque:one/id"]}"#,
+    ));
+    if let Ok((ids, _)) = ids {
+        black_box(ids.ids.len());
+        let mut encoded = [0u8; 256];
+        let _ = black_box(serde_json_core::to_slice(&ids, &mut encoded));
         black_box(encoded);
     }
     loop {
