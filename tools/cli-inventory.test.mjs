@@ -26,6 +26,19 @@ for (const [name, mutate] of [
   });
 }
 
+test("rejects an omitted command after refreshing the declaration count", () => {
+  const data = structuredClone(inventory);
+  data.commands.pop();
+  data.summary.commandDeclarations--;
+  assert.throws(() => validateCliInventory(data, evidence), /every discovered command registration/);
+});
+
+test("rejects an invented command at an existing source location", () => {
+  const data = structuredClone(inventory);
+  data.commands[0].declaration = "invented-command";
+  assert.throws(() => validateCliInventory(data, evidence), /Command declaration differs/);
+});
+
 for (const [field, value] of [["method", "DELETE"], ["path", "/api/invented"], ["trafficRole", "third_party_service"]]) {
   test(`rejects a changed ${field} with refreshed counts but an unchanged source receipt`, () => {
     const data = structuredClone(inventory);

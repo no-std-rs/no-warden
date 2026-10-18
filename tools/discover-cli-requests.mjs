@@ -4,10 +4,11 @@ const verbs = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS
 export const requestKey = row => JSON.stringify([row.source.path, row.source.start, row.source.end, row.transport, row.method, row.template]);
 export const referenceKey = row => JSON.stringify([row.path, row.line, row.name, row.receiver, row.function]);
 export const genericKey = row => JSON.stringify([row.kind, row.source.path, row.source.line, row.expression]);
+export const commandKey = row => JSON.stringify([row.declaration, row.source.path, row.source.line, row.source.start, row.source.end, row.registration ?? null]);
 
 // This discovers syntax, not a typed call graph or runtime reachability.
 export function discoverRequests(sources) {
-  const requests = [], generic = [], references = [];
+  const requests = [], generic = [], references = [], commands = [];
   function context(node) {
     for (let parent = node; parent; parent = parent.parent) {
       if (ts.isMethodDeclaration(parent) || ts.isFunctionDeclaration(parent) || ts.isConstructorDeclaration(parent) || ts.isGetAccessorDeclaration(parent)) return parent;
@@ -76,7 +77,28 @@ export function discoverRequests(sources) {
       for (const method of methods) for (const template of urls) requests.push({ method, template, transport, source: location(node) });
     }
     function unresolved(node, kind) { generic.push({ kind, expression: node.getText(sf), source: location(node) }); }
+    function ownerClass(node) {
+      for (let parent = node; parent; parent = parent.parent) if (ts.isClassDeclaration(parent)) return parent;
+    }
+    function addCommand(node, argument, startNode = node) {
+      const source = { ...location(startNode), end: node.end };
+      if (ts.isStringLiteralLike(argument)) { commands.push({ declaration: argument.text, source }); return; }
+      const method = context(node);
+      const parameter = method?.parameters?.findIndex(parameter => parameter.name.getText(sf) === argument.getText(sf)) ?? -1;
+      if (parameter < 0 || !method.name) throw Error(`Unresolved command declaration at ${path}:${source.line}`);
+      const callsites = nodes.filter(call => ts.isCallExpression(call) && ts.isPropertyAccessExpression(call.expression) && call.expression.expression.kind === ts.SyntaxKind.ThisKeyword && call.expression.name.text === method.name.getText(sf) && ownerClass(call) === ownerClass(method));
+      if (!callsites.length) throw Error(`No registration calls for ${path}:${source.line}`);
+      for (const call of callsites) {
+        const value = call.arguments[parameter];
+        if (!value || !ts.isStringLiteralLike(value)) throw Error(`Unresolved command registration at ${path}:${location(call).line}`);
+        commands.push({ declaration: value.text, source, registration: location(call) });
+      }
+    }
     for (const node of nodes) {
+      if (/^(apps\/cli\/|bitwarden_license\/bit-cli\/)/.test(path)) {
+        if (ts.isNewExpression(node) && node.expression.getText(sf) === "Command" && node.arguments?.[0]) addCommand(node, node.arguments[0]);
+        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "command" && node.arguments[0]) addCommand(node, node.arguments[0], node.expression.name);
+      }
       if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
         const name = node.expression.name.text, args = node.arguments, func = context(node);
         references.push({ path, line: location(node).line, name, receiver: node.expression.expression.getText(sf), function: func?.name?.getText(sf) ?? (func && ts.isConstructorDeclaration(func) ? "constructor" : "<module>") });
@@ -98,5 +120,5 @@ export function discoverRequests(sources) {
       }
     }
   }
-  return { requests, generic, references };
+  return { requests, generic, references, commands };
 }

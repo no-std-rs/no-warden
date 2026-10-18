@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { discoverRequests, genericKey, referenceKey, requestKey } from "./discover-cli-requests.mjs";
+import { commandKey, discoverRequests, genericKey, referenceKey, requestKey } from "./discover-cli-requests.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const cliInventoryPath = join(root, "compatibility/cli-routes.json");
@@ -117,7 +117,15 @@ export function validateCliInventory(inventory, evidence) {
     assert.equal(row.trafficRole, "cli_local_server");
     sourceExists(row.source);
   }
-  for (const command of inventory.commands) sourceExists(command.source);
+  const commands = inventory.commands.map(command => {
+    sourceExists(command.source);
+    assert(command.construction, "Command needs a discovered registration");
+    assert.equal(command.declaration, command.construction.declaration, "Command declaration differs from shipped syntax");
+    assert.equal(command.source.path, command.construction.source.path);
+    assert.equal(command.source.line, command.construction.source.line);
+    return commandKey(command.construction);
+  });
+  assert.deepEqual(commands.sort(), evidence.discovered.commands.map(commandKey).sort(), "Inventory must cover every discovered command registration variant");
   const constructions = [...inventory.operations, ...inventory.cliLocalServeRoutes].filter(row => !row.sdkSource).map(row => {
     assert(row.construction, `Missing discovered request construction: ${row.id}`);
     assert.equal(row.construction.source.path, row.source.path);

@@ -37,7 +37,7 @@ must remain `no_std` without `alloc` throughout that cycle.
 | Evidence | Revision and scope |
 | --- | --- |
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
-| [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 40 command declarations |
+| [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
 | [Current coverage](../compatibility/no-warden-coverage.json) | 28 routed patterns, 12 with typed requests, 15 with reusable core service behavior; each carries its narrower limits |
 
@@ -92,6 +92,9 @@ shipped source locations. The fetched revision labels must match the recorded
 citations. A pinned host-only TypeScript parser independently discovers all 311
 literal request-construction variants (including 22 local server routes) and
 requires inventory coverage; three generic transports remain explicit obligations.
+It also reconciles all 41 command registration variants from 40 construction
+sites, resolving the parameterized `move` and deprecated `share` registrations
+from their literal caller arguments. Unresolved command declarations fail closed.
 Each operation has a reviewed receipt combining its
 method/path/role, cited expression span, and pinned SDK/helper source hashes.
 Reachability descriptions, conditions, and syntax-checked method references are
