@@ -45,6 +45,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | `POST /api/accounts/key-management/user-key-id` | One-time key-ID migration | SDK login and HTTP |
 | Profile, revision date, sync | Personal account and opaque encrypted vault | CLI and HTTP |
 | `PUT`/`POST /api/accounts/profile`, `PUT /api/accounts/avatar` | Exact profile names and nullable avatar colors with UTF-8 byte limits | Core/provider contracts, host rollback tests, and eight matching Rust HTTP cases on both servers; no CLI mutation claim |
+| `GET`/`POST`/`PUT /api/settings/domains`, sync domains | Opaque ordered custom groups, signed exclusions, full flagged catalog for GET and filtered catalog for sync | Reusable borrowed views and typed projections, host rollback/isolation tests, eight matching Rust HTTP cases; no CLI domain mutation or settings request trace claim |
 | Folder CRUD and POST aliases | Opaque names, four-field responses, owner isolation, clear references without changing cipher revisions | CLI baseline; core/host tests and the focused HTTP comparison described below |
 | Cipher CRUD | Opaque ciphertext and unknown JSON fields | CLI, HTTP, storage tests |
 | Personal v2 attachment reservation and multipart upload | Opaque encrypted metadata and bytes; declared/measured size checks | Core, real CLI on both servers, matching HTTP |
@@ -66,11 +67,12 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Provider conflict errors | `Storage::map_error` can preserve an HTTP 409 conflict | Core provider tests |
 
 The allocation-free core's models include login, secure note, card, identity,
-and SSH-key items, plus optional opaque blob data. Its 80 unit tests cover the
+and SSH-key items, plus optional opaque blob data. Its 89 unit tests cover the
 typed fields, bounded collections and import decoding, validation, ownership,
 lifecycle rules, folder mapping, the atomic import and bulk provider contracts,
 API-key proof selection and authorization, and attachment lifecycle and provider
-rules, account-key initialization, and profile/avatar byte validation. A compile-fail
+rules, account-key initialization, profile/avatar byte validation, and equivalent-domain
+views, serialization, schema and atomic provider boundaries. A compile-fail
 doctest verifies that `Secret` cannot be serialized through the general Serde interface.
 Real-client import evidence covers the types listed above; broader operations
 for those types and blob encryption need their own client fixtures. Keeping
@@ -86,7 +88,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 42 Rust host tests pass and cover storage and transport rules.
+All 53 Rust host tests pass and cover storage and transport rules.
 These establish wire preservation and authorization for the new shapes,
 aliases, and personal imports independently of the CLI evidence.
 They do not prove that a real client can decrypt a blob or use stored passkey
@@ -102,10 +104,9 @@ authenticated cross-user public lookup, UUID guards, and nonmutating repeated
 initialization. The folder group still passes its 220 requests against both.
 
 The profile/avatar group passes all eight Rust HTTP cases against the same two
-servers: 425 counted requests including two password logins. The combined Rust
-HTTP binary passes 24 cases with 887 requests and seven logins; these counts
-exclude fixture registrations. It preserves exact empty, whitespace, control,
-and Unicode names, with a maximum of 50 UTF-8 bytes. Present avatar colors must
+servers: 425 counted requests including two password logins. It preserves exact
+empty, whitespace, control and Unicode names, with a maximum of 50 UTF-8 bytes.
+Present avatar colors must
 contain exactly seven UTF-8 bytes, without hexadecimal or `#` validation.
 An omitted/null object field or `[null]` clears the avatar; `[]` rejects with
 422, and surplus positional elements reject with 400. Profile GET, mutation
@@ -122,6 +123,43 @@ remain adapter-built; these three new routes add no typed core full-profile
 response or CLI mutation claim. The unchanged 120-command CLI baseline also
 passes a fresh regression against the updated adapter. Full account lifecycle
 and upstream API parity remain open.
+
+The equivalent-domain group passes eight Rust HTTP cases against the adapter
+and official Vaultwarden `1.37.4`: 530 counted requests and two password logins.
+The combined folder, account-key, profile/avatar and domain suite passes 32 cases
+with 1417 requests and nine logins, excluding fixture registrations. Its full
+91-entry catalog matches the ordered public reference fingerprint. An initial
+domain-enabled build passed the unchanged 120-command CLI harness; the required
+client job reruns it for the final query/authentication corrections. No CLI
+domain mutation or direct settings request is attributed to that result.
+
+`GET /api/settings/domains` includes every global catalog group with its computed
+exclusion flag. Sync includes custom groups and only unexcluded catalog groups,
+or `domains:null` when `excludeDomains` is true. Custom strings remain opaque,
+including empty strings, NUL and Unicode; group/string order and duplicates are
+preserved. Negative, unknown and duplicate signed `i32` exclusion IDs are retained.
+`POST` and `PUT` replace both arrays, return exactly `{}`, and advance the account
+revision even when the values are unchanged. Omitted/null object fields clear
+their arrays. Positional input uses exclusions first and custom groups second:
+`[null,null]` clears both; `[]` and `[null]` reject with 422; surplus elements reject
+with 400. Schema/syntax errors and unauthenticated writes preserve stored state.
+
+The sync query parser follows the tested Rocket behavior: ASCII-case-insensitive
+boolean aliases, empty/bare true, decoded names, leading dotted/bracketed roots
+and suffixes, and the first matching value. Tested invalid values return 422;
+authentication takes precedence, returning 401 for missing or invalid bearers
+even when the query is invalid. The core has no HTTP/query parser dependency.
+
+`DomainSettingsStorage` exposes stable indexed borrowed data and commits both
+arrays and the account revision atomically. `DomainSettingsRequest` lets embeddings
+choose decoder capacities; the host lends owned vectors without a new count
+limit. The host's owner-keyed settings table ignores registration extras and
+preserves account authority, keys, sessions and vault data, including on failure.
+An adapter-supplied `GlobalDomainCatalog` feeds the allocation-free typed
+GET/sync serializers; no catalog or allocation dependency enters the core.
+The full sync response remains adapter-built. SyncSettings notifications and
+shared content-type, error-envelope and transport-limit gaps remain open;
+this focused comparison does not establish complete settings or API parity.
 
 `AccountKeyStorage` provides borrowed state and atomic initialization for embedding
 applications. Empty strings count as present keys. A partial pair prevents

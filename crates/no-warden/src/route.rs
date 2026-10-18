@@ -39,6 +39,8 @@ pub enum Route<'a> {
     RevisionDate,
     Token,
     Sync,
+    DomainsGet,
+    DomainsUpdate,
     Folders,
     FolderCreate,
     FolderGet(&'a str),
@@ -116,6 +118,8 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (Get, "/api/accounts/revision-date") => Some(RevisionDate),
         (Post, "/identity/connect/token") => Some(Token),
         (Get, "/api/sync") => Some(Sync),
+        (Get, "/api/settings/domains") => Some(DomainsGet),
+        (Post | Put, "/api/settings/domains") => Some(DomainsUpdate),
         (Get, "/api/folders") => Some(Folders),
         (Post, "/api/folders") => Some(FolderCreate),
         (Get, "/api/ciphers") => Some(Ciphers),
@@ -232,6 +236,27 @@ fn valid_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn domain_settings_routes_require_authentication_and_preserve_method_aliases() {
+        for (method, expected) in [
+            (Method::Get, Route::DomainsGet),
+            (Method::Post, Route::DomainsUpdate),
+            (Method::Put, Route::DomainsUpdate),
+        ] {
+            assert_eq!(
+                classify(method, "/api/settings/domains/?future=true"),
+                Some(expected)
+            );
+            assert!(expected.requires_authentication());
+        }
+        for method in [Method::Delete, Method::Options] {
+            assert!(classify(method, "/api/settings/domains").is_none());
+        }
+        for path in ["/api/settings/domains/extra", "/api/settings/unknown"] {
+            assert!(classify(Method::Get, path).is_none());
+        }
+    }
+
     #[test]
     fn profile_and_avatar_mutation_routes_require_authentication_and_exact_methods() {
         for (method, path, expected) in [

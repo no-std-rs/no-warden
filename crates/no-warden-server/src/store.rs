@@ -4,6 +4,7 @@ use no_warden::{
     account_keys::{AccountKeyState, AccountKeyStorage},
     account_profile::AccountProfileStorage,
     bulk::{CipherBulkOperation, CipherBulkStorage, ValidatedCipherBulk},
+    domains::{DomainSettingsData, DomainSettingsStorage},
     identity::{ApiKeyDevice, IdentityStorage, ReauthenticationProof, Secret},
     import::{ImportData, ImportStorage, ValidatedImport},
     service::ItemMetadata,
@@ -31,6 +32,7 @@ pub struct Store {
     api_key_revision: Option<String>,
     account_key_cache: Option<CachedAccountKeys>,
     public_key_cache: Option<String>,
+    domain_settings_cache: crate::domains::Settings,
 }
 
 // Owned query results keep the optional core response borrows tied to this
@@ -172,6 +174,7 @@ impl Store {
             CREATE INDEX IF NOT EXISTS items_owner ON items(owner,kind);
             CREATE TABLE IF NOT EXISTS cipher_archives(cipher_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE, owner TEXT NOT NULL REFERENCES accounts(id), archived_at TEXT, PRIMARY KEY(cipher_id,owner));
             CREATE TABLE IF NOT EXISTS api_keys(owner TEXT PRIMARY KEY REFERENCES accounts(id), secret TEXT NOT NULL, verifier TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS account_domains(owner TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, excluded_globals TEXT NOT NULL, equivalent_domains TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS attachments(id TEXT PRIMARY KEY, cipher_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE, file_name TEXT NOT NULL, key TEXT, size INTEGER NOT NULL CHECK(size>=0), data BLOB);
             CREATE INDEX IF NOT EXISTS attachments_cipher ON attachments(cipher_id);
             CREATE TABLE IF NOT EXISTS attachment_downloads(token TEXT PRIMARY KEY, attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE, expires INTEGER NOT NULL);
@@ -192,6 +195,7 @@ impl Store {
             api_key_revision: None,
             account_key_cache: None,
             public_key_cache: None,
+            domain_settings_cache: crate::domains::Settings::default(),
         })
     }
 
@@ -598,6 +602,50 @@ impl CipherBulkStorage for Store {
     }
 }
 
+impl DomainSettingsStorage for Store {
+    type Settings<'a>
+        = &'a crate::domains::Settings
+    where
+        Self: 'a;
+
+    fn domain_settings(&mut self, owner: &str) -> Result<Self::Settings<'_>, Self::Error> {
+        let (excluded, equivalent): (String, String) = self.db.query_row(
+            "SELECT COALESCE(d.excluded_globals,'[]'),COALESCE(d.equivalent_domains,'[]')
+             FROM accounts a LEFT JOIN account_domains d ON d.owner=a.id WHERE a.id=?1",
+            [owner],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        self.domain_settings_cache = crate::domains::Settings {
+            excluded_globals: serde_json::from_str(&excluded)
+                .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            equivalent_domains: serde_json::from_str(&equivalent)
+                .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        };
+        Ok(&self.domain_settings_cache)
+    }
+
+    fn update_domain_settings<D: DomainSettingsData + ?Sized>(
+        &mut self,
+        owner: &str,
+        data: &D,
+    ) -> Result<(), Self::Error> {
+        let settings = crate::domains::Settings::from_data(data)?;
+        let excluded = serde_json::to_string(&settings.excluded_globals)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let equivalent = serde_json::to_string(&settings.equivalent_domains)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let tx = self.db.transaction()?;
+        let revision = next_revision(&tx, owner)?;
+        require_change(tx.execute(
+            "INSERT INTO account_domains(owner,excluded_globals,equivalent_domains) VALUES(?1,?2,?3)
+             ON CONFLICT(owner) DO UPDATE SET excluded_globals=excluded.excluded_globals,equivalent_domains=excluded.equivalent_domains",
+            params![owner,excluded,equivalent],
+        )?)?;
+        bump(&tx, owner, &revision)?;
+        tx.commit()
+    }
+}
+
 impl AccountProfileStorage for Store {
     fn update_profile_name(
         &mut self,
@@ -836,6 +884,211 @@ mod tests {
     use serde::Deserialize;
 
     const CIPHERTEXT: &str = "2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+    fn domain_rows(store: &Store) -> Vec<(String, String, String)> {
+        store.db.prepare("SELECT owner,excluded_globals,equivalent_domains FROM account_domains ORDER BY owner").unwrap()
+            .query_map([],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
+    }
+
+    #[test]
+    fn domain_defaults_ignore_untrusted_registration_and_legacy_account_extensions() {
+        let mut store = setup();
+        store.db.execute("UPDATE accounts SET document=json_set(document,'$.equivalentDomains',json('[\"untrusted\"]'),'$.excludedGlobalEquivalentDomains',json('[2]'),'$.domains',json('{\"untrusted\":true}')) WHERE id='alice'",[]).unwrap();
+        let document = json!({"email":"new-domain@example.test","name":"fixture","key":CIPHERTEXT,"masterPasswordHash":"fixture-hash","_password":"prepared-fixture-verifier","equivalentDomains":[["untrusted"]],"excludedGlobalEquivalentDomains":[2],"domains":{"untrusted":true}});
+        let request = RegisterRequest::deserialize(&document).unwrap();
+        store.pending = document.clone();
+        Storage::insert_account(&mut store, "new-domain-account", &request).unwrap();
+        for owner in ["alice", "new-domain-account"] {
+            let before = store.account("id", owner).unwrap().unwrap();
+            let settings = DomainSettingsStorage::domain_settings(&mut store, owner).unwrap();
+            assert!(settings.excluded_globals.is_empty());
+            assert!(settings.equivalent_domains.is_empty());
+            assert!(
+                store.account("id", owner).unwrap().unwrap() == before,
+                "Reading defaults changed stored account extensions."
+            );
+        }
+        assert!(domain_rows(&store).is_empty());
+        assert!(DomainSettingsStorage::domain_settings(&mut store, "missing").is_err());
+    }
+
+    #[test]
+    fn domain_writes_preserve_both_arrays_authority_vault_and_foreign_state() {
+        let mut store = profile_fixture();
+        let foreign = crate::domains::Settings {
+            excluded_globals: vec![3],
+            equivalent_domains: vec![vec!["foreign".into()]],
+        };
+        VaultService::new(&mut store)
+            .update_domain_settings("bob", &foreign)
+            .unwrap();
+        let authority = account_authority_snapshot(&store);
+        let other = snapshot(&store)
+            .into_iter()
+            .filter(|row| !row.starts_with("account:alice:"))
+            .collect::<Vec<_>>();
+        let data = crate::domains::Settings {
+            excluded_globals: vec![i32::MIN, 2, 2, i32::MAX],
+            equivalent_domains: vec![
+                vec![],
+                vec![
+                    "".into(),
+                    "NUL\0café 🔐".into(),
+                    "duplicate".into(),
+                    "duplicate".into(),
+                ],
+            ],
+        };
+        let empty = crate::domains::Settings::default();
+        for input in [&data, &data, &empty, &empty] {
+            let mut expected = store.account("id", "alice").unwrap().unwrap();
+            let previous: String = store
+                .db
+                .query_row(
+                    "SELECT revision FROM accounts WHERE id='alice'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let response = VaultService::new(&mut store)
+                .update_domain_settings("alice", input)
+                .unwrap();
+            assert!(serde_json::to_value(response).unwrap() == json!({}));
+            let revision: String = store
+                .db
+                .query_row(
+                    "SELECT revision FROM accounts WHERE id='alice'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(
+                revision > previous,
+                "Every successful domain write must advance the account revision."
+            );
+            expected["revisionDate"] = json!(revision);
+            assert!(
+                store.account("id", "alice").unwrap().unwrap() == expected,
+                "Domain write changed unrelated account fields."
+            );
+            let saved = DomainSettingsStorage::domain_settings(&mut store, "alice").unwrap();
+            assert!(saved.excluded_globals == input.excluded_globals);
+            assert!(saved.equivalent_domains == input.equivalent_domains);
+            let saved = DomainSettingsStorage::domain_settings(&mut store, "bob").unwrap();
+            assert!(
+                saved.excluded_globals == foreign.excluded_globals
+                    && saved.equivalent_domains == foreign.equivalent_domains,
+                "Domain write changed a foreign user's settings."
+            );
+            assert!(
+                account_authority_snapshot(&store) == authority,
+                "Domain write changed credentials, sessions, or attachment data."
+            );
+            assert!(
+                snapshot(&store)
+                    .into_iter()
+                    .filter(|row| !row.starts_with("account:alice:"))
+                    .collect::<Vec<_>>()
+                    == other,
+                "Domain write changed vault or foreign account state."
+            );
+        }
+    }
+
+    #[test]
+    fn domain_insert_and_replacement_roll_back_write_revision_and_commit_failures() {
+        for existing in [false, true] {
+            for failure in ["write", "revision", "commit"] {
+                let mut store = profile_fixture();
+                if existing {
+                    VaultService::new(&mut store)
+                        .update_domain_settings(
+                            "alice",
+                            &crate::domains::Settings {
+                                excluded_globals: vec![3],
+                                equivalent_domains: vec![vec!["preserved".into()]],
+                            },
+                        )
+                        .unwrap();
+                }
+                let before = snapshot(&store);
+                let settings = domain_rows(&store);
+                let authority = account_authority_snapshot(&store);
+                let trigger = match failure {
+                    "write" => {
+                        "CREATE TRIGGER reject_domain_write BEFORE INSERT ON account_domains BEGIN SELECT RAISE(ABORT,'injected domain write failure'); END;"
+                    }
+                    "revision" => {
+                        "CREATE TRIGGER reject_domain_revision BEFORE UPDATE OF revision ON accounts BEGIN SELECT RAISE(ABORT,'injected domain revision failure'); END;"
+                    }
+                    "commit" => {
+                        "CREATE TABLE failed_domain_commit(owner TEXT REFERENCES accounts(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER reject_domain_commit AFTER UPDATE OF revision ON accounts BEGIN INSERT INTO failed_domain_commit(owner) VALUES('missing-owner'); END;"
+                    }
+                    _ => unreachable!(),
+                };
+                store.db.execute_batch(trigger).unwrap();
+                let request = crate::domains::Settings {
+                    excluded_globals: vec![2],
+                    equivalent_domains: vec![vec!["replacement".into()]],
+                };
+                assert!(
+                    VaultService::new(&mut store)
+                        .update_domain_settings("alice", &request)
+                        .is_err(),
+                    "Injected {failure} failure must be reported."
+                );
+                assert!(
+                    domain_rows(&store) == settings,
+                    "Injected {failure} failure partially saved domain settings."
+                );
+                assert!(
+                    snapshot(&store) == before,
+                    "Injected {failure} failure changed account or vault state."
+                );
+                assert!(
+                    account_authority_snapshot(&store) == authority,
+                    "Injected {failure} failure changed existing authority."
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn equivalent_domain_settings_survive_private_database_reopen() {
+        let directory = std::env::temp_dir().join(format!(
+            "no-warden-domain-persistence-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let database = directory.join("vault.db");
+        let path = database.to_str().unwrap();
+        let data = crate::domains::Settings {
+            excluded_globals: vec![2, -1, 2],
+            equivalent_domains: vec![vec![], vec!["".into(), "NUL\0café".into()]],
+        };
+        let account;
+        {
+            let mut store = Store::open(path).unwrap();
+            store.db.execute("INSERT INTO accounts(id,email,document,password,revision) VALUES('alice','alice@example.test','{\"id\":\"alice\"}','test',?1)",[now()]).unwrap();
+            VaultService::new(&mut store)
+                .update_domain_settings("alice", &data)
+                .unwrap();
+            account = store.account("id", "alice").unwrap().unwrap();
+        }
+        {
+            let mut store = Store::open(path).unwrap();
+            assert!(store.account("id", "alice").unwrap().unwrap() == account);
+            let saved = DomainSettingsStorage::domain_settings(&mut store, "alice").unwrap();
+            assert!(saved.excluded_globals == data.excluded_globals);
+            assert!(saved.equivalent_domains == data.equivalent_domains);
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     fn profile_fixture() -> Store {
         let mut store = setup();

@@ -272,3 +272,21 @@ complete profile responses stay in the adapter builder. That builder emits the
 persisted name directly, including an empty string. The bare-metal JSON consumer
 parses and serializes both request models into caller-owned buffers; it does not
 link HTTP, persistence, or the full profile builder into the core.
+
+Equivalent-domain settings use the opt-in `DomainSettingsStorage` provider. Its
+borrowed read view implements `DomainSettingsData`; updates accept the same
+indexed interface and atomically replace custom groups and exclusion IDs with
+the account revision. `GlobalDomainCatalog` supplies adapter-owned catalog facts.
+The core streams typed GET and sync responses directly from these views, retaining
+ordering, duplicates, and opaque strings while filtering excluded global groups
+only for sync. HTTP, storage, clocks, and notification transport remain outside
+the core.
+
+`DomainSettingsRequest` offers caller-selected decoder capacities. An adapter can
+implement the view over its own collections to support larger batches without
+adding allocation to the core. The standalone adapter does this over owned
+vectors and stores authoritative settings in a dedicated `account_domains`
+table. Registration extras do not seed this state. Updates preserve unrelated
+account and vault data; transaction failures preserve both settings and revision.
+The bare-metal consumer encodes both response projections and `{}` mutation
+responses, and decodes settings requests without a global allocator.

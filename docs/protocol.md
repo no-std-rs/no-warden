@@ -479,3 +479,37 @@ syntax failures return 400, and invalid byte lengths return 400.
 The borrowed request DTOs and provider-driven mutation rules are allocation-free.
 The complete profile response remains an adapter builder, with its broader
 account, organization, and authentication variants still tracked as partial.
+
+## Equivalent-domain settings
+
+The [pinned settings handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/mod.rs#L64-L146)
+require bearer authentication for `GET`, `PUT`, and `POST /api/settings/domains`.
+Both write methods replace the account's settings and return `{}` with status
+200. Their optional fields are `excludedGlobalEquivalentDomains`, an array of
+signed 32-bit integers, and `equivalentDomains`, an array of string arrays.
+An omitted or null field resets that part of the settings to an empty array.
+Strings, empty groups, ordering, duplicate domains, and unknown or duplicate
+exclusion IDs remain unchanged; there is no domain-name normalization.
+
+The positional JSON form places exclusions first and custom groups second.
+`[null,null]` resets both arrays. `[]` and `[null]` fail the sequence shape with
+422; a third positional element produces a syntax error with status 400.
+Known duplicate fields and incorrect nested types also return 422. The core's
+bounded request model uses caller-selected capacities; adapter views can accept
+larger collections without allocating in the core.
+
+Reads return exactly `equivalentDomains`, `globalEquivalentDomains`, and
+`object: "domains"`. Each global group has `type`, `domains`, and `excluded`.
+The catalog is supplied by the adapter. GET returns all groups with their flags;
+[sync](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L171-L175)
+omits excluded global groups. Sync includes domain settings by default and returns
+`domains: null` when `excludeDomains` is true.
+The compared query cases include Rocket's case-insensitive boolean aliases,
+first-value handling, and dotted/bracketed root names. Authentication runs before
+query validation: an invalid query returns 401 without a valid bearer and 422
+with one.
+
+Settings writes atomically replace both arrays and advance the account revision,
+including repeated writes. They preserve unrelated account and vault data and
+other accounts. Upstream also sends a `SyncSettings` notification; notification
+transport remains a separate tracked requirement here.

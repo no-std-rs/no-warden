@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 mod attachments;
+mod domains;
 mod protocol;
 mod store;
 
@@ -18,6 +19,7 @@ use hmac::{Hmac, Mac};
 use no_warden::{
     ApiError, ErrorKind, VaultService,
     bulk::CipherBulkOperation,
+    domains::DomainProjection,
     identity::{AuthorizedApiKeyGrant, Secret},
     import::ImportView,
     route::{self, Route},
@@ -376,6 +378,17 @@ async fn dispatch(
     let owner = owner.ok_or_else(unauthorized)?;
     let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
     match route {
+        Route::DomainsGet => {
+            let mut service = VaultService::new(&mut *store);
+            let response =
+                service.domain_settings(&owner, domains::catalog(), DomainProjection::All)?;
+            Ok(Json(response).into_response())
+        }
+        Route::DomainsUpdate => {
+            let input = domains::parse_input(&body)?;
+            let response = VaultService::new(&mut *store).update_domain_settings(&owner, &input)?;
+            Ok(Json(response).into_response())
+        }
         Route::ProfileUpdate => {
             let input = parse_profile_input(&body)?;
             let request = ProfileUpdateRequest { name: &input.name };
@@ -576,12 +589,28 @@ async fn dispatch(
                 .timestamp_millis();
             Ok(json_response(json!(millis)))
         }
-        Route::Sync => Ok(json_response(json!({
-            "object":"sync","profile":protocol::profile(&account),"folders":store.items(&owner,"folder")?.iter().map(protocol::folder).collect::<Vec<_>>(),
-            "ciphers":store.items(&owner,"cipher")?,"collections":[],"policies":[],"sends":[],
-            "domains":{"object":"domains","equivalentDomains":[],"globalEquivalentDomains":[]},
-            "userDecryption":protocol::user_decryption(&account)
-        }))),
+        Route::Sync => {
+            let exclude_domains = domains::sync_excludes(uri.query())?;
+            let settings = if exclude_domains {
+                Value::Null
+            } else {
+                let mut service = VaultService::new(&mut *store);
+                let response =
+                    service.domain_settings(&owner, domains::catalog(), DomainProjection::Sync)?;
+                serde_json::to_value(response).map_err(|_| {
+                    Failure(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Domain response construction failed",
+                    )
+                })?
+            };
+            Ok(json_response(json!({
+                "object":"sync","profile":protocol::profile(&account),"folders":store.items(&owner,"folder")?.iter().map(protocol::folder).collect::<Vec<_>>(),
+                "ciphers":store.items(&owner,"cipher")?,"collections":[],"policies":[],"sends":[],
+                "domains":settings,
+                "userDecryption":protocol::user_decryption(&account)
+            })))
+        }
         Route::Folders => Ok(json_response(
             json!({"object":"list","data":store.items(&owner,"folder")?.iter().map(protocol::folder).collect::<Vec<_>>(),"continuationToken":null}),
         )),
@@ -841,6 +870,271 @@ fn issue_token_grant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn domain_http_dispatch_preserves_owner_isolation_and_sync_projection() {
+        async fn request(
+            app: &App,
+            owner: Option<&str>,
+            method: Method,
+            path: &str,
+            body: &[u8],
+        ) -> Result<Response, Failure> {
+            let mut headers = HeaderMap::new();
+            if let Some(owner) = owner {
+                headers.insert(
+                    "authorization",
+                    format!("Bearer fixture-domains-{owner}").parse().unwrap(),
+                );
+            }
+            dispatch(
+                State(app.clone()),
+                method,
+                path.parse().unwrap(),
+                headers,
+                Bytes::copy_from_slice(body),
+            )
+            .await
+        }
+        async fn document(response: Result<Response, Failure>) -> Value {
+            let response = response.unwrap_or_else(|_| panic!("Valid domain HTTP request failed."));
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), MAX_REQUEST_BYTES)
+                .await
+                .unwrap();
+            serde_json::from_slice(&bytes).unwrap()
+        }
+        let app = App {
+            store: Arc::new(Mutex::new(Store::open(":memory:").unwrap())),
+            base: "http://127.0.0.1".into(),
+            signing_key: [1; 32],
+        };
+        {
+            let store = app.store.lock().unwrap();
+            for owner in ["alice", "bob"] {
+                let account = json!({"id":owner,"email":format!("{owner}@example.test"),"name":"preserved-name","key":"preserved-user-key","keys":{"publicKey":"preserved-public","encryptedPrivateKey":"preserved-private"},"futureField":{"preserved":true},"equivalentDomains":[["untrusted-root-value"]]});
+                store.db.execute("INSERT INTO accounts(id,email,document,password,revision) VALUES(?1,?2,?3,'preserved-verifier',?4)",params![owner,format!("{owner}@example.test"),account.to_string(),store::now()]).unwrap();
+                store.db.execute("INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES(?1,?2,?3,4000000000,4000000000)",params![digest(&format!("fixture-domains-{owner}")),format!("fixture-domain-refresh-{owner}"),owner]).unwrap();
+            }
+        }
+        for method in [Method::GET, Method::POST, Method::PUT] {
+            let result = request(&app, None, method, "/api/settings/domains", b"{}").await;
+            let Err(error) = result else {
+                panic!("Anonymous domain request succeeded.")
+            };
+            assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        }
+        let mut query_statuses = Vec::new();
+        for owner in [None, Some("invalid"), Some("alice")] {
+            let result = request(
+                &app,
+                owner,
+                Method::GET,
+                "/api/sync?excludeDomains=invalid",
+                b"",
+            )
+            .await;
+            let Err(error) = result else {
+                panic!("Invalid sync query succeeded.")
+            };
+            query_statuses.push(error.0);
+        }
+        assert_eq!(
+            query_statuses,
+            [
+                StatusCode::UNAUTHORIZED,
+                StatusCode::UNAUTHORIZED,
+                StatusCode::UNPROCESSABLE_ENTITY
+            ]
+        );
+        let original = app
+            .store
+            .lock()
+            .unwrap()
+            .account("id", "alice")
+            .unwrap()
+            .unwrap();
+        let foreign = app
+            .store
+            .lock()
+            .unwrap()
+            .account("id", "bob")
+            .unwrap()
+            .unwrap();
+        let body=br#"{"excludedGlobalEquivalentDomains":[2,2,-1],"equivalentDomains":[[],["","NUL\u0000caf\u00e9","duplicate","duplicate"]],"id":"bob","owner":"bob","name":"forged","key":"forged","keys":{"publicKey":"forged"}}"#;
+        let response = document(
+            request(
+                &app,
+                Some("alice"),
+                Method::POST,
+                "/api/settings/domains",
+                body,
+            )
+            .await,
+        )
+        .await;
+        assert!(response == json!({}));
+        let all = document(
+            request(
+                &app,
+                Some("alice"),
+                Method::GET,
+                "/api/settings/domains",
+                b"",
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(all["object"], "domains");
+        assert!(
+            all["equivalentDomains"] == json!([[], ["", "NUL\0café", "duplicate", "duplicate"]])
+        );
+        assert_eq!(all["globalEquivalentDomains"].as_array().unwrap().len(), 91);
+        assert_eq!(all["globalEquivalentDomains"][0]["excluded"], true);
+        let sync = document(
+            request(
+                &app,
+                Some("alice"),
+                Method::GET,
+                "/api/sync?excludeDomains=false",
+                b"",
+            )
+            .await,
+        )
+        .await;
+        assert!(sync["domains"]["equivalentDomains"] == all["equivalentDomains"]);
+        assert_eq!(
+            sync["domains"]["globalEquivalentDomains"]
+                .as_array()
+                .unwrap()
+                .len(),
+            90
+        );
+        assert!(
+            sync["domains"]["globalEquivalentDomains"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|group| group["type"] != 2 && group["excluded"] == false)
+        );
+        let excluded = document(
+            request(
+                &app,
+                Some("alice"),
+                Method::GET,
+                "/api/sync?excludeDomains=true",
+                b"",
+            )
+            .await,
+        )
+        .await;
+        assert!(excluded["domains"].is_null());
+        let other =
+            document(request(&app, Some("bob"), Method::GET, "/api/settings/domains", b"").await)
+                .await;
+        assert!(other["equivalentDomains"] == json!([]));
+        assert!(
+            other["globalEquivalentDomains"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|group| group["excluded"] == false)
+        );
+        {
+            let store = app.store.lock().unwrap();
+            let saved = store.account("id", "alice").unwrap().unwrap();
+            for field in [
+                "id",
+                "email",
+                "name",
+                "key",
+                "keys",
+                "futureField",
+                "equivalentDomains",
+            ] {
+                assert!(
+                    saved[field] == original[field],
+                    "Domain update trusted an unrelated body field."
+                );
+            }
+            assert!(
+                store.account("id", "bob").unwrap().unwrap() == foreign,
+                "Domain update changed another account."
+            );
+        }
+        let reset = document(
+            request(
+                &app,
+                Some("alice"),
+                Method::PUT,
+                "/api/settings/domains",
+                b"{}",
+            )
+            .await,
+        )
+        .await;
+        assert!(reset == json!({}));
+        let cleared = document(
+            request(
+                &app,
+                Some("alice"),
+                Method::GET,
+                "/api/settings/domains",
+                b"",
+            )
+            .await,
+        )
+        .await;
+        assert!(cleared["equivalentDomains"] == json!([]));
+        assert!(
+            cleared["globalEquivalentDomains"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|group| group["excluded"] == false)
+        );
+        let persisted = || {
+            let store = app.store.lock().unwrap();
+            store.db.query_row("SELECT a.document||':'||a.revision||':'||COALESCE(d.excluded_globals,'[]')||':'||COALESCE(d.equivalent_domains,'[]') FROM accounts a LEFT JOIN account_domains d ON d.owner=a.id WHERE a.id='alice'",[],|row|row.get::<_,String>(0)).unwrap()
+        };
+        let before = persisted();
+        for (method, path, body, status) in [
+            (
+                Method::POST,
+                "/api/settings/domains",
+                b"[]".as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                Method::PUT,
+                "/api/settings/domains",
+                b"{".as_slice(),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                Method::PUT,
+                "/api/settings/domains",
+                br#"{"excludedGlobalEquivalentDomains":[2147483648]}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                Method::GET,
+                "/api/sync?excludeDomains=invalid",
+                b"".as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+        ] {
+            let result = request(&app, Some("alice"), method, path, body).await;
+            let Err(error) = result else {
+                panic!("Invalid domain request succeeded.")
+            };
+            assert_eq!(error.0, status);
+            assert!(
+                persisted() == before,
+                "Rejected domain request changed settings or account state."
+            );
+        }
+    }
 
     #[test]
     fn profile_and_avatar_inputs_match_upstream_schema_escapes_and_sequence_shapes() {

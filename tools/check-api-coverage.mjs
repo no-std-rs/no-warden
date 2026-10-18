@@ -17,7 +17,7 @@ export function sourceHashes(root = repositoryRoot) {
       if (entry.name === "target") continue;
       const path = join(directory, entry.name);
       if (entry.isDirectory()) walk(path);
-      else if (entry.isFile() && (entry.name.endsWith(".rs") || ["Cargo.toml", "Cargo.lock"].includes(entry.name))) paths.push(path);
+      else if (entry.isFile() && (entry.name.endsWith(".rs") || entry.name.endsWith(".json") || ["Cargo.toml", "Cargo.lock"].includes(entry.name))) paths.push(path);
     }
   }
   for (const directory of ["crates", "checks"]) walk(join(root, directory));

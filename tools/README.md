@@ -8,7 +8,7 @@ server have separate platform requirements.
 The host-only `no-warden-conformance` Rust crate runs the default CLI suite,
 including private subprocess capture, encrypted account fixtures, and disposable
 loopback TLS. `tools/e2e.sh` invokes it through Cargo. Rust HTTP groups cover
-folder, account-key, and profile/avatar contracts; the existing HTTP,
+folder, account-key, profile/avatar, and equivalent-domain contracts; the existing HTTP,
 restart-persistence, and client-inventory checks still use JavaScript; the broader migration remains
 unfinished.
 
@@ -181,7 +181,7 @@ binary payloads never enter assertion output. Build `no-warden-server` first, or
 set `NO_WARDEN_BIN` to its binary path. The test stops its child processes and
 removes the temporary database on success or failure.
 
-## Rust folder, account-key, and profile HTTP contracts
+## Rust folder, account-key, profile, and domain HTTP contracts
 
 The portable folder checks use the Rust fixture library and two disposable
 accounts. They exercise the existing seven folder routes, JSON decoding and
@@ -194,14 +194,16 @@ BW_E2E_SERVER=http://127.0.0.1:8001 cargo run --locked \
   -p no-warden-conformance --bin no-warden-http-conformance
 ```
 
-`BW_FOLDER_RECEIPT`, `BW_ACCOUNT_KEYS_RECEIPT`, and `BW_PROFILE_RECEIPT` optionally
-name new private result files for their respective groups. Existing paths are
+The binary runs folders, account keys, profile/avatar, then equivalent domains.
+`BW_FOLDER_RECEIPT`, `BW_ACCOUNT_KEYS_RECEIPT`, `BW_PROFILE_RECEIPT`, and
+`BW_DOMAINS_RECEIPT` optionally name new private result files for their respective
+groups. Existing paths are
 rejected; files are created with mode 0600 and contain authored case names,
 statuses, request counts, and login counts, without request or response values.
-These HTTP groups make seven fixture logins in total; use a fresh disposable
-reference process before the combined suite and again before the complete CLI
-comparison. Its default login
-limits remain unchanged. Other HTTP and persistence groups still use their
+These HTTP groups make nine fixture logins in total, below the reference's
+unchanged default ten-login limit. Use a fresh disposable reference process
+before the combined suite and again before the complete CLI comparison.
+Other HTTP and persistence groups still use their
 existing JavaScript tools.
 
 The account-key group uses three fresh accounts and one password login for each.
@@ -210,9 +212,10 @@ The fixture helper retains a valid generated pair privately for initialization;
 it omits that pair from the actual registration request. Public-key lookup is
 verified across accounts, while private retrieval always uses the bearer’s owner.
 Initialization checks include positional JSON, opaque/empty values, and rejection
-of an existing pair without any mutation. All three groups preserve response
-bodies, credentials, and encrypted key material inside the process; receipts contain only
-authored case names, statuses, and counts. No authentication or mutation is retried.
+of an existing pair without any mutation. All four groups preserve response
+bodies, credentials, and encrypted key material inside the process. Receipts
+contain authored case names, statuses and counts, plus the public catalog
+fingerprint for domains. No authentication or mutation is retried.
 
 The profile/avatar group adds two disposable accounts and one password login
 per account. It checks both `PUT` and `POST /api/accounts/profile` and
@@ -223,9 +226,38 @@ Present avatar colors require exactly seven UTF-8 bytes, without hexadecimal or
 `[]` rejects with 422. The suite also checks schema/syntax errors, ignored fields,
 unauthenticated requests, repeated writes, and full account/vault snapshots.
 Full profile responses remain adapter-built; the core provides mutation request
-models and provider-driven services. The unchanged 120-command CLI suite also
-passes against the updated adapter; its upstream 120-command baseline was
-verified in the preceding account-key chunk.
+models and provider-driven services. That milestone also passed the unchanged
+120-command CLI suite; its upstream 120-command baseline was verified in the
+preceding account-key chunk.
+
+The domain group uses two fresh accounts and one password login per account.
+It exercises `GET`, `POST`, and `PUT /api/settings/domains`, plus the sync domains
+projection. It checks the complete ordered 91-group catalog and public
+fingerprint, exclusion flags, opaque custom strings, empty groups, order and
+duplicates, and negative/unknown/duplicate signed `i32` IDs. Object omission/null
+resets each array; positional input places exclusions before custom groups.
+`[null,null]` clears both, `[]`/`[null]` return 422, and surplus elements return 400.
+Both aliases return exactly `{}` and advance the revision even for identical
+updates. Whole-profile/vault/revision snapshots check owner isolation and
+nonmutating errors.
+
+Sync query checks include boolean aliases, empty/bare true, decoded names,
+leading dotted/bracketed roots and suffixes, first matching value, and invalid
+values returning 422. Missing or invalid bearers return 401 before query parsing.
+No login or mutation is retried. The optional domain receipt contains the public
+catalog count/fingerprint as well as case names, statuses and counts; account
+settings and response bodies remain private.
+
+The core supplies indexed `DomainSettingsData` and `GlobalDomainCatalog` views,
+configurable `DomainSettingsRequest` capacities, provider-driven atomic writes,
+and streaming typed GET/sync serializers. The host uses its own uncapped vectors
+and an authoritative owner-keyed settings table, retaining the existing
+transport cap. Complete sync responses remain adapter-built. Notifications and
+shared transport/error gaps remain unimplemented; the unchanged CLI suite adds
+no domain mutation or settings request attribution.
+An initial domain-enabled build passed all 120 CLI commands before the final
+query/authentication-order corrections; the required client job reruns the same
+harness for the final head.
 
 The final HTTP receipts pass against both the adapter and official Vaultwarden
 `1.37.4` with the same counts:
@@ -235,7 +267,8 @@ The final HTTP receipts pass against both the adapter and official Vaultwarden
 | Folders | 8 | 220 | 2 |
 | Account keys | 8 | 242 | 3 |
 | Profile/avatar | 8 | 425 | 2 |
-| Combined | 24 | 887 | 7 |
+| Equivalent domains | 8 | 530 | 2 |
+| Combined | 32 | 1417 | 9 |
 
 Login requests are included in the request counts; fixture registrations are
 excluded. These receipts do not establish captured CLI route traces or complete
