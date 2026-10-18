@@ -5,7 +5,8 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The core has 18 unit tests and the SQLite host has seven storage tests on Unix. The
+The core has 18 unit tests; the host has seven storage tests and one session
+expiry test on Unix. The
 expanded HTTP suite passes 20 tests against the rebuilt host, and restart
 persistence checks pass. The core's minimum Rust version is 1.85; the standalone
 server is also checked with its minimum version, 1.89. Bare-metal compilation
