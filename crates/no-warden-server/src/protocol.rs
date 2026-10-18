@@ -17,10 +17,10 @@ pub fn folder(document: &Value) -> Value {
 }
 
 fn kdf(account: &Value, pascal_case: bool) -> Value {
-    let kind = account.get("kdf").and_then(Value::as_u64).unwrap_or(0);
+    let kind = account.get("kdf").and_then(Value::as_i64).unwrap_or(0);
     let iterations = account
         .get("kdfIterations")
-        .and_then(Value::as_u64)
+        .and_then(Value::as_i64)
         .unwrap_or(600_000);
     if pascal_case {
         json!({

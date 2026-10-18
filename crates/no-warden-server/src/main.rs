@@ -6,6 +6,7 @@ mod auth_requests;
 mod devices;
 mod domains;
 mod protocol;
+mod registration;
 mod store;
 
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
@@ -47,6 +48,15 @@ use std::{
     sync::{Arc, Mutex},
 };
 use store::Store;
+
+impl From<no_warden::registration::RegistrationError> for Failure {
+    fn from(error: no_warden::registration::RegistrationError) -> Self {
+        Self(
+            StatusCode::from_u16(error.status_code()).expect("Core HTTP status"),
+            error.message(),
+        )
+    }
+}
 
 // Core field limits apply to decoded bytes. JSON can expand one byte to six
 // bytes, and a request can contain several encrypted fields and metadata.
@@ -343,6 +353,30 @@ async fn dispatch_with_peer(
             &account,
             uri.path().ends_with("/password"),
         )));
+    }
+    if route == Route::RegistrationVerification {
+        let input = registration::parse_verification(&body)?;
+        store.registration_issuer = registration::issuer(&app.base)?;
+        let token =
+            VaultService::new(&mut *store).request_registration_verification(&input.request())?;
+        return Ok(if registration::accepts_json(&headers) {
+            Json(token).into_response()
+        } else {
+            token.expose_token().to_owned().into_response()
+        });
+    }
+    if route == Route::RegistrationFinish {
+        let input = registration::parse_finish(&body)?;
+        store.registration_issuer = registration::issuer(&app.base)?;
+        let storage_email = input.email.to_lowercase();
+        let salt_email = input.email.trim().to_lowercase();
+        let email = no_warden::registration::RegistrationEmail {
+            storage_email: &storage_email,
+            salt_email: &salt_email,
+        };
+        let response =
+            VaultService::new(&mut *store).finish_registration(&input.request(), &email)?;
+        return Ok(Json(response).into_response());
     }
     if route == Route::Register {
         let document: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
@@ -1165,6 +1199,330 @@ fn issue_token_grant_bound(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn modern_verification_token(app: &App, email: &str, name: Option<&str>) -> String {
+        let mut headers = HeaderMap::new();
+        headers.insert("accept", "application/json".parse().unwrap());
+        let body = json!({"email":email,"name":name}).to_string();
+        device_document(
+            device_request(
+                app,
+                Method::POST,
+                "/identity/accounts/register/send-verification-email",
+                headers,
+                body.as_bytes(),
+            )
+            .await,
+        )
+        .await
+        .as_str()
+        .unwrap()
+        .to_owned()
+    }
+    fn modern_finish_body(email: &str, token: &str) -> Value {
+        json!({"email":email,"emailVerificationToken":token,"masterPasswordAuthentication":{"kdf":{"kdfType":0,"iterations":100000},"salt":email.trim().to_lowercase(),"masterPasswordAuthenticationHash":"opaque-proof\0雪"},"masterPasswordUnlock":{"kdf":{"kdfType":0,"iterations":100000},"salt":email.trim().to_lowercase(),"masterKeyWrappedUserKey":"opaque-user-key"},"userAsymmetricKeys":{"publicKey":"opaque-public","encryptedPrivateKey":"opaque-private"},"name":"forged-name","verified":true,"emailVerified":true,"_password":"forged","avatarColor":"forged","userKeyId":"forged","id":"alice","unknown":true})
+    }
+    async fn modern_http_finish(app: &App, body: &Value) -> Result<Response, Failure> {
+        device_request(
+            app,
+            Method::POST,
+            "/identity/accounts/register/finish",
+            HeaderMap::new(),
+            body.to_string().as_bytes(),
+        )
+        .await
+    }
+    #[tokio::test]
+    async fn modern_registration_http_accept_and_deferred_name_validation_do_not_create_accounts() {
+        let app = device_fixture_app();
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        for (accept, json_response) in [
+            (None, false),
+            (Some("*/*"), false),
+            (Some("application/json"), true),
+            (Some("APPLICATION/JSON;charset=utf8"), true),
+            (Some("application/problem+json"), false),
+            (Some("text/plain,application/json"), false),
+            (Some("application/json;q=0"), true),
+            (Some("*/*;q=1,application/json;q=0"), true),
+            (Some("application/json;q=1,text/plain"), false),
+        ] {
+            let mut headers = device_authorization(Some("ignored-invalid-bearer"));
+            if let Some(accept) = accept {
+                headers.insert("accept", accept.parse().unwrap());
+            }
+            let response = device_request(
+                &app,
+                Method::POST,
+                "/identity/accounts/register/send-verification-email",
+                headers,
+                json!({"email":"not an email","name":"a".repeat(51),"verified":true})
+                    .to_string()
+                    .as_bytes(),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("Verification step applied finish validation."));
+            assert_eq!(response.status(), StatusCode::OK);
+            let content_type = response
+                .headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap();
+            assert!(content_type.starts_with(if json_response {
+                "application/json"
+            } else {
+                "text/plain"
+            }));
+            let bytes = axum::body::to_bytes(response.into_body(), MAX_REQUEST_BYTES)
+                .await
+                .unwrap();
+            let token = if json_response {
+                serde_json::from_slice::<String>(&bytes).unwrap()
+            } else {
+                String::from_utf8(bytes.to_vec()).unwrap()
+            };
+            let body = json!({"email":"not an email","emailVerificationToken":token,"kdf":0,"kdfIterations":100000,"key":"","masterPasswordHash":""});
+            let Err(error) = modern_http_finish(&app, &body).await else {
+                panic!("Overlong signed name registered.")
+            };
+            assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        }
+        assert!(device_push_persisted_state(&app.store.lock().unwrap()) == before);
+    }
+    #[tokio::test]
+    async fn modern_registration_http_email_save_validation_is_deferred_and_nonmutating() {
+        let app = device_fixture_app();
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        for email in [
+            "not-an-email",
+            "",
+            " user@example.test",
+            "user@example.test ",
+            "user@127.0.0.1",
+            "user@[127.0.0.1]",
+            "user@example.test/path",
+            "user@example.test?query",
+        ] {
+            let token = modern_verification_token(&app, email, None).await;
+            let body = modern_finish_body(email, &token);
+            let Err(error) = modern_http_finish(&app, &body).await else {
+                panic!("Invalid email registered through HTTP.")
+            };
+            assert_eq!(error.0, StatusCode::BAD_REQUEST);
+            assert!(error.1 == "Email address is invalid.");
+            assert!(device_push_persisted_state(&app.store.lock().unwrap()) == before);
+        }
+        let token = modern_verification_token(&app, "not-an-email", None).await;
+        let mut body = modern_finish_body("not-an-email", &token);
+        body["masterPasswordAuthentication"]["kdf"]["iterations"] = json!(99999);
+        body["masterPasswordUnlock"]["kdf"]["iterations"] = json!(99999);
+        let Err(error) = modern_http_finish(&app, &body).await else {
+            panic!("Invalid KDF accepted.")
+        };
+        assert!(error.1 == "PBKDF2 KDF iterations must be at least 100000.");
+        body["emailVerificationToken"] = json!("invalid");
+        let Err(error) = modern_http_finish(&app, &body).await else {
+            panic!("Invalid token accepted.")
+        };
+        assert!(error.1 == "Invalid registration verification token");
+        body["masterPasswordUnlock"]["salt"] = json!("mismatched");
+        let Err(error) = modern_http_finish(&app, &body).await else {
+            panic!("Invalid nested format accepted.")
+        };
+        assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(device_push_persisted_state(&app.store.lock().unwrap()) == before);
+    }
+    #[tokio::test]
+    async fn modern_registration_http_nested_aliases_claim_name_and_password_login_are_authoritative()
+     {
+        let app = device_fixture_app();
+        let email = "New@EXAMPLE.TEST";
+        let token = modern_verification_token(&app, email, Some("")).await;
+        let mut body = modern_finish_body(email, &token);
+        let nested = body
+            .as_object_mut()
+            .unwrap()
+            .remove("masterPasswordAuthentication")
+            .unwrap();
+        body["MasterPasswordAuthentication"] = nested;
+        let authentication = body["MasterPasswordAuthentication"]
+            .as_object_mut()
+            .unwrap();
+        let salt = authentication.remove("salt").unwrap();
+        authentication.insert("Salt".into(), salt);
+        let kdf = authentication.remove("kdf").unwrap();
+        authentication.insert("Kdf".into(), kdf);
+        let hash = authentication
+            .remove("masterPasswordAuthenticationHash")
+            .unwrap();
+        authentication.insert("MasterPasswordAuthenticationHash".into(), hash);
+        let response = device_document(modern_http_finish(&app, &body).await).await;
+        assert!(response == json!({"object":"registerFinish"}));
+        let account = app
+            .store
+            .lock()
+            .unwrap()
+            .account("email", "new@example.test")
+            .unwrap()
+            .unwrap();
+        assert!(
+            account["name"] == ""
+                && account["id"] != "alice"
+                && account["avatarColor"].is_null()
+                && account["userKeyId"].is_null()
+        );
+        for field in [
+            "masterPasswordAuthentication",
+            "masterPasswordUnlock",
+            "masterPasswordHash",
+            "emailVerificationToken",
+            "_password",
+            "verified",
+            "emailVerified",
+            "unknown",
+        ] {
+            assert!(
+                account.get(field).is_none(),
+                "Raw registration input leaked into account storage."
+            );
+        }
+        let form = serde_urlencoded::to_string([
+            ("grant_type", "password"),
+            ("client_id", "registration-test"),
+            ("scope", "api offline_access"),
+            ("username", "new@example.test"),
+            ("password", "opaque-proof\0雪"),
+            ("deviceIdentifier", "New-Device"),
+            ("deviceName", "New"),
+            ("deviceType", "8"),
+        ])
+        .unwrap();
+        let tokens = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                form.as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        assert!(
+            tokens["Key"] == "opaque-user-key"
+                && tokens["PrivateKey"] == "opaque-private"
+                && device_claims(&tokens)["name"] == ""
+                && device_claims(&tokens)["email_verified"] == true
+        );
+        let profile = device_document(
+            device_request(
+                &app,
+                Method::GET,
+                "/api/accounts/profile",
+                device_authorization(tokens["access_token"].as_str()),
+                b"",
+            )
+            .await,
+        )
+        .await;
+        assert!(
+            profile["name"] == ""
+                && profile["emailVerified"] == true
+                && profile["id"] == account["id"]
+        );
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        let Err(error) = modern_http_finish(&app, &body).await else {
+            panic!("Duplicate registration replaced initialized account.")
+        };
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        assert!(device_push_persisted_state(&app.store.lock().unwrap()) == before);
+    }
+    #[tokio::test]
+    async fn modern_registration_http_schema_nested_format_proof_order_and_opaque_legacy_are_preserved()
+     {
+        let app = device_fixture_app();
+        let token = modern_verification_token(&app, "format@example.test", Some("Claim")).await;
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        for body in [b"{}".as_slice(),b"[]",br#"{"email":"a","email":"b","key":"k","masterPasswordHash":"h","kdf":0,"kdfIterations":100000}"#,br#"{"email":"a","key":"k","masterPasswordHash":"h","kdf":0,"kdfIterations":"100000"}"#] {
+            let Err(error)=device_request(&app,Method::POST,"/identity/accounts/register/finish",HeaderMap::new(),body).await else{panic!("Malformed registration schema accepted.")};assert_eq!(error.0,StatusCode::UNPROCESSABLE_ENTITY);
+        }
+        let Err(error) = device_request(
+            &app,
+            Method::POST,
+            "/identity/accounts/register/finish",
+            HeaderMap::new(),
+            b"{",
+        )
+        .await
+        else {
+            panic!("Malformed registration syntax accepted.")
+        };
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        for case in 0..8 {
+            let mut body = modern_finish_body("format@example.test", &token);
+            let expected = match case {
+                0 => {
+                    body["masterPasswordUnlock"]["salt"] = json!("wrong");
+                    body["emailVerificationToken"] = json!("invalid");
+                    StatusCode::UNPROCESSABLE_ENTITY
+                }
+                1 => {
+                    body["masterPasswordUnlock"]["kdf"]["iterations"] = json!(100001);
+                    StatusCode::UNPROCESSABLE_ENTITY
+                }
+                2 => {
+                    body["masterPasswordUnlock"]["salt"] = json!("wrong");
+                    body["organizationUserId"] = json!("unsupported");
+                    StatusCode::UNPROCESSABLE_ENTITY
+                }
+                3 => {
+                    body["emailVerificationToken"] = json!("invalid");
+                    StatusCode::BAD_REQUEST
+                }
+                4 => {
+                    body["email"] = json!("FORMAT@example.test");
+                    StatusCode::BAD_REQUEST
+                }
+                5 => {
+                    body["organizationUserId"] = json!("unsupported");
+                    StatusCode::BAD_REQUEST
+                }
+                6 => {
+                    body["acceptEmergencyAccessId"] = json!("unsupported");
+                    body["acceptEmergencyAccessInviteToken"] = json!("unsupported");
+                    StatusCode::BAD_REQUEST
+                }
+                _ => {
+                    body["token"] = json!("unsupported");
+                    StatusCode::BAD_REQUEST
+                }
+            };
+            let Err(error) = modern_http_finish(&app, &body).await else {
+                panic!("Invalid registration proof or format accepted.")
+            };
+            assert_eq!(error.0, expected);
+            assert!(device_push_persisted_state(&app.store.lock().unwrap()) == before);
+        }
+        let token = modern_verification_token(&app, "opaque@example.test", None).await;
+        let body = json!({"email":"opaque@example.test","emailVerificationToken":token,"kdf":-1,"kdfIterations":-2,"kdfMemory":-3,"kdfParallelism":-4,"userSymmetricKey":"","master_password_hash":"","masterPasswordHint":"\n\t"});
+        assert!(modern_http_finish(&app, &body).await.is_ok());
+        let account = app
+            .store
+            .lock()
+            .unwrap()
+            .account("email", "opaque@example.test")
+            .unwrap()
+            .unwrap();
+        assert!(
+            account["name"] == "opaque@example.test"
+                && account["key"] == ""
+                && account["kdf"] == -1
+                && account["kdfIterations"] == -2
+                && account["kdfMemory"].is_null()
+                && account["masterPasswordHint"].is_null()
+        );
+    }
 
     fn auth_login_fixture() -> (App, String) {
         let app = auth_request_fixture_app();

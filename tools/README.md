@@ -198,17 +198,20 @@ BW_E2E_SERVER=http://127.0.0.1:8001 cargo run --locked \
 ```
 
 By default the binary runs folders, account keys, profile/avatar, equivalent
-domains, devices, device tokens, authentication requests, responses, then login: 72 cases. `--suite personal` selects the first four groups;
+domains, devices, device tokens, authentication requests, responses, login, then
+registration: 80 cases. `--suite personal` selects the first four groups;
 `--suite devices` selects discovery; `--suite device-tokens` selects token routes;
 `--suite auth-requests` selects authentication-request creation and reads.
 `--suite auth-responses` selects approval, rejection and public response polling.
 `--suite auth-login` selects request-based password grants and consumption.
+`--suite registration` selects the two-step no-SMTP registration flow.
 Individual selectors are `folders`,
 `account-keys`, `profile`, and `domains`; `--suite all` is the default.
 Invalid arguments return exit code 2 without echoing supplied values.
 `BW_FOLDER_RECEIPT`, `BW_ACCOUNT_KEYS_RECEIPT`, `BW_PROFILE_RECEIPT`,
 `BW_DOMAINS_RECEIPT`, `BW_DEVICES_RECEIPT`, `BW_DEVICE_TOKENS_RECEIPT`,
-`BW_AUTH_REQUESTS_RECEIPT`, `BW_AUTH_RESPONSES_RECEIPT`, and `BW_AUTH_LOGIN_RECEIPT`
+`BW_AUTH_REQUESTS_RECEIPT`, `BW_AUTH_RESPONSES_RECEIPT`, `BW_AUTH_LOGIN_RECEIPT`,
+and `BW_REGISTRATION_RECEIPT`
 optionally name new private result
 files for their respective groups. Existing paths are
 rejected; files are created with mode 0600 and contain authored case names,
@@ -218,7 +221,7 @@ requests: five login attempts (four successful and one deliberately rejected)
 and one refresh. Run these selections in separate fresh disposable reference
 processes to stay within its unchanged default ten-login limit. Use another
 fresh reference process for the complete CLI comparison. The adapter's CI job
-runs all 72 cases together; do not run that combined selection against one
+runs all 80 cases together; do not run that combined selection against one
 reference process with default limits.
 Other HTTP and persistence groups still use their
 existing JavaScript tools.
@@ -334,7 +337,7 @@ The authentication-request group passes eight cases against both actual servers:
 273 requests, five successful logins and 33 decoded creation attempts. Run
 `--suite auth-requests` in its own fresh reference process. Its optional private
 receipt also records the decoded creation count; schema rejections do not enter
-the handler. The full local run passed 72 cases and 3038 requests. Preserve
+the handler. The prior local baseline passed 72 cases and 3038 requests. Preserve
 separate reference processes rather than combining groups across default limits.
 
 This group checks public creation for existing owner/device/type pairs and the
@@ -477,3 +480,22 @@ all eight selected cases with 444 counted HTTP requests each: 43 identity reques
 These HTTP results
 are separate from the unchanged official CLI baseline and establish no CLI
 request-login command or captured route trace.
+
+
+`--suite registration` directly exercises verification and finish without the
+fixture helper's legacy-route fallback. It covers token transport and claims,
+legacy and nested credential aliases, claim-only names and UTF-8 limits, syntax
+and schema guards, proof rejection, KDF failure/retry, duplicate finish and
+account isolation. The token and credential values remain private in memory;
+`BW_REGISTRATION_RECEIPT` selects a new private file containing authored case
+names and counters. A fresh reference process uses direct per-case loopback
+peers to preserve its default unauthenticated and login limits. This selected
+HTTP comparison establishes no CLI registration command or captured route trace.
+
+Both servers passed the selected registration suite with 541 counted requests:
+69 verification, 64 finish, ten prelogin and nine successful password logins.
+At most 44 conservative public attempts and nine identity requests reach one
+peer's budget. The final official CLI `2026.10.0` baseline separately passed
+120 commands against each server.
+
+The combined local run passed all 80 cases with 3579 counted HTTP requests.

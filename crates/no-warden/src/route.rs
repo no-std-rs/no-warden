@@ -27,6 +27,8 @@ pub enum Route<'a> {
     Config,
     Prelogin,
     Register,
+    RegistrationVerification,
+    RegistrationFinish,
     AccountApiKey,
     AccountRotateApiKey,
     AccountKeysGet,
@@ -90,6 +92,8 @@ impl Route<'_> {
             Self::Config
                 | Self::Prelogin
                 | Self::Register
+                | Self::RegistrationVerification
+                | Self::RegistrationFinish
                 | Self::Token
                 | Self::AuthRequestCreate
                 | Self::AuthRequestResponse(_)
@@ -121,6 +125,10 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
             | "/identity/accounts/prelogin/password",
         ) => Some(Prelogin),
         (Post, "/api/accounts/register") => Some(Register),
+        (Post, "/identity/accounts/register/send-verification-email") => {
+            Some(RegistrationVerification)
+        }
+        (Post, "/identity/accounts/register/finish") => Some(RegistrationFinish),
         (Post, "/api/accounts/api-key") => Some(AccountApiKey),
         (Post, "/api/accounts/rotate-api-key") => Some(AccountRotateApiKey),
         (Get, "/api/accounts/keys") => Some(AccountKeysGet),
@@ -284,6 +292,31 @@ fn valid_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn registration_verification_and_finish_are_public_post_routes() {
+        for (path, route) in [
+            (
+                "/identity/accounts/register/send-verification-email",
+                Route::RegistrationVerification,
+            ),
+            (
+                "/identity/accounts/register/finish",
+                Route::RegistrationFinish,
+            ),
+        ] {
+            assert_eq!(classify(Method::Post, path), Some(route));
+            assert_eq!(
+                classify(Method::Post, &std::format!("{path}/?ignored=true")),
+                Some(route)
+            );
+            assert!(!route.requires_authentication());
+            for method in [Method::Get, Method::Put, Method::Delete, Method::Options] {
+                assert!(classify(method, path).is_none());
+            }
+            assert!(classify(Method::Post, &std::format!("{path}/extra")).is_none());
+        }
+    }
+
     #[test]
     fn auth_request_decisions_and_public_code_responses_preserve_route_specific_guards() {
         for (method, path, expected, authenticated) in [

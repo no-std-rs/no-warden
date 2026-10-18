@@ -39,7 +39,7 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 76 routed patterns, 41 with typed requests, 64 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 78 routed patterns, 43 with typed requests, 66 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
@@ -286,11 +286,12 @@ pinned legacy key-pair envelope without linking `alloc`.
 The [initialization handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L598-L625)
 accepts opaque strings, including empty values. A partially present pair blocks
 initialization, while private retrieval requires both fields. This differs from
-registration’s stricter cryptographic validation. The
+the legacy embedding registration API’s stricter cryptographic validation.
+Modern ordinary registration preserves opaque values. The
 [shipped TypeScript public-key helper](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/services/api.service.ts#L1205)
 has a direct CLI method reference; that static fact does not establish a captured
 CLI request or command-specific use of this endpoint. Complete account lifecycle,
-modern key rotation/registration, and exhaustive error/configuration behavior
+modern key rotation, remaining registration variants, and exhaustive error/configuration behavior
 remain separate parity work.
 
 The personal API-key chunk adds two account routes and a grant variant on the
@@ -670,3 +671,58 @@ consumption and expiry. The expiry check waited 301 real seconds; four nested
 `authRequest` roots rejected valid ordinary passwords instead of falling back.
 The full local selection passed all 72 cases with 3038 counted requests. These
 results establish no CLI request-login command or captured route trace.
+
+## Modern registration
+
+The public `POST /identity/accounts/register/send-verification-email` and
+`POST /identity/accounts/register/finish` routes implement ordinary registration
+with SMTP disabled. The
+[pinned verification handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L1033-L1104)
+returns a signed token directly, as a JSON string only when the preferred Accept
+media type is `application/json`; otherwise it returns plain text. Its raw email
+and optional name become claims with a 30-minute lifetime. Issuance does not
+create an account or reject an existing email, an unusual email string, or a name
+that will be too long at finish.
+
+`RegistrationStorage` keeps policy, signing, signature/time validation, password
+hashing and atomic persistence in adapters. Borrowed verification input, an
+explicit token serializer, the finish semantic view and `registerFinish`
+response need no core allocation. The semantic view does not decode the full
+flattened, untagged JSON union. The host preserves the upstream legacy-first
+choice, nested aliases, signed KDF fields, and unknown-field behavior before
+calling the service. The existing one-step embedding API remains available.
+
+Finish checks nested KDF/salt agreement before proof, then verifies the token's
+exact raw email binding. Account email is Unicode-lowercased without trimming;
+nested salts instead use trimmed lowercase email. Completion validates email
+syntax and domain URLs through the upstream parser in the adapter; verification
+still accepts those strings for token issuance. Only the signed claim name
+authorizes a name, with a 50-byte UTF-8 limit. A missing name defaults to the
+stored email; a supplied finish-body name has no authority. Client key/hash
+values remain opaque. The modern KDF policy matches the source: PBKDF2 needs at
+least 100000 iterations, Argon2 needs at least one iteration, 15–1024 MiB and
+parallelism 1–16. Other signed KDF identifiers are retained, and non-Argon2
+memory/parallelism become null.
+
+The adapter uses a persistent registration signing key separate from access
+signing. It validates the registration issuer and JWT times with the upstream
+30-second leeway, then atomically stores a canonical account and private verified
+metadata. Registration tokens, raw master hashes, nested credentials and arbitrary
+finish extensions are excluded from account documents. Duplicate registration or
+failure preserves existing accounts and vaults. SMTP delivery, invitation and
+emergency-access completion, signup configuration, abuse limits and broader
+account lifecycle remain partial.
+
+The eight modern registration cases passed against both the adapter and actual
+Vaultwarden `1.37.4`: 541 counted HTTP requests per server, including 69
+verification requests, 64 finish requests, ten prelogin requests and nine
+successful password logins. The suite checks quoted Accept parameters, invalid
+email completion and preserved public account snapshots; hidden-row absence and
+rollback use separate host SQL tests. Each direct peer stays within unchanged
+reference limits (at most 44 public attempts and nine identity requests).
+Official CLI `2026.10.0` separately passed its 120-command baseline against both
+servers. These results establish no CLI registration command or captured route
+trace and do not complete broader registration parity.
+
+The combined local selection passed all 80 cases with 3579 counted HTTP requests,
+including the real 301-second authentication-request expiry case.

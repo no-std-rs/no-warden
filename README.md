@@ -50,7 +50,8 @@ cache and never opens your existing vault. See [test tools](tools/README.md).
 CLI orchestration, private subprocess capture, encrypted account fixtures, and
 disposable loopback TLS. Its separate Rust HTTP binary checks folder, account-key,
 profile/avatar, equivalent-domain, device-discovery, disabled-relay push-token,
-and auth-request creation/decision/polling/login APIs against a configured adapter or
+auth-request creation/decision/polling/login, and modern registration APIs against
+a configured adapter or
 Vaultwarden release. Its comparisons include
 the complete pinned global-domain catalog, settings replacement, sync filtering,
 public known-device headers, and owner-scoped device projections. The reference
@@ -72,13 +73,13 @@ bounded collections require no allocator. Opt-in `ImportStorage`,
 `CipherBulkStorage`, `IdentityStorage`, `AccountKeyStorage`,
 `AccountProfileStorage`, `DomainSettingsStorage`, `DeviceStorage`,
 `DevicePushStorage`, `AuthRequestStorage`, `AuthRequestResponseStorage`,
-`AuthRequestLoginStorage`, and
+`AuthRequestLoginStorage`, `RegistrationStorage`, and
 `AttachmentStorage` providers add
 batch operations,
 credential and account-key services, profile metadata and equivalent-domain updates, device discovery,
 registration after verified login, push-token ordering, pending auth-request
 creation/discovery, approval/code-protected polling, one-use access-code login,
-and attachment transitions
+modern account verification/finish, and attachment transitions
 without adding an allocator. See [architecture](docs/architecture.md) and
 [CI and review](docs/ci.md).
 
@@ -101,8 +102,9 @@ read-only stored-state comparisons with the relay disabled. Enabled relay
 interoperability remains unverified. Auth-request comparisons cover public
 creation, owner-only lookup/pending lists and device pending metadata. Approval
 and code-protected response polling also pass eight focused HTTP cases against
-both servers. The preceding combined local HTTP milestone passes 64 cases and
-2594 requests. The adapter now also implements the approved-auth-request password
+both servers. The prior combined local HTTP milestone passes 72 cases and
+3038 requests, including the eight login cases below. The adapter also implements
+the approved-auth-request password
 grant through an opt-in allocation-free provider: exact access code, same direct
 peer, a strict five-minute lifetime and one successful use. The login can register
 a different device; polling remains readable after use. Compact `authRequest`
@@ -110,9 +112,22 @@ roots include Rocket-style dotted/bracketed names, so those inputs cannot fall
 back to an ordinary password. All eight focused login HTTP cases pass against
 both servers: 444 counted requests each, including a real 301-second expiry
 fixture. Host tests cover atomic consumption/session rollback and a private
-enabled-account policy. Required CI reruns the verified 120-command CLI baseline;
+enabled-account policy. A fresh 120-command CLI regression passes against both
+corrected servers;
 see the compatibility matrix for recorded results. Two-factor/mail policies,
 trusted proxies, expiry cleanup and local rate controls remain open.
+
+The modern identity registration pair is also implemented for new accounts with
+SMTP disabled. An opt-in `RegistrationStorage` provider preserves opaque
+credentials while the host verifies a persistent, purpose-bound email token and
+commits only canonical account state. Finish also applies upstream mailbox/domain
+validation after proof and KDF checks; verification issuance stays permissive.
+The strict legacy registration API remains available. All eight modern HTTP
+cases pass against the adapter and Vaultwarden `1.37.4`: 541 requests per server.
+This HTTP proof adds no CLI registration-command or route-trace claim. SMTP, invitations/emergency
+access, placeholder completion, registration configuration and abuse controls
+remain open.
+
 Organizations, sharing, remaining attachment variants, Sends, notifications and
 the remaining account APIs are tracked in the roadmap.
 The local conformance adapter needs further hardening before production use.
