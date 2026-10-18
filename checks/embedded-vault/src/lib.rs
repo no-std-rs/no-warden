@@ -188,6 +188,7 @@ impl Storage for FixedVault {
         self.require_account(owner)?;
         // Reject data this deliberately small adapter cannot preserve.
         if request.kind != 2
+            || request.archived_date.is_some()
             || request.data.is_some()
             || request.fields.is_some()
             || request.password_history.is_some()
@@ -303,6 +304,7 @@ fn note() -> CipherRequest<'static> {
         fields: None,
         password_history: None,
         last_known_revision_date: None,
+        archived_date: None,
     }
 }
 
