@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { discoverRequests, genericKey, referenceKey, requestKey } from "./discover-cli-requests.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const cliInventoryPath = join(root, "compatibility/cli-routes.json");
@@ -26,6 +27,7 @@ export function cliEvidence() {
   assert(process.env.BW_CLIENTS_BUILD_LOCK, "Set BW_CLIENTS_BUILD_LOCK to the pinned upstream clients package-lock.json");
   const buildLockBytes = readFileSync(process.env.BW_CLIENTS_BUILD_LOCK);
   assert(process.env.BW_SDK_SOURCE_ROOT, "Set BW_SDK_SOURCE_ROOT to the pinned bundled SDK source");
+  for (const name of ["BW_CLIENTS_COMMIT", "BW_SDK_COMMIT"]) assert.match(process.env[name] ?? "", /^[a-f0-9]{40}$/, `Set ${name} to the fetched revision`);
   const sdkSources = new Map();
   for (const row of JSON.parse(readFileSync(cliInventoryPath, "utf8")).operations) {
     if (!row.sdkSource) continue;
@@ -33,7 +35,7 @@ export function cliEvidence() {
     assert(/^crates\/[a-zA-Z0-9_/-]+\.rs$/.test(path) && !path.includes(".."), "Invalid SDK source path");
     if (!sdkSources.has(path)) sdkSources.set(path, readFileSync(join(process.env.BW_SDK_SOURCE_ROOT, path), "utf8"));
   }
-  return { bundleSha256: sha256(bundle), sourceMapSha256: sha256(mapBytes), sources, sdkSources, lock, buildLock: JSON.parse(buildLockBytes), buildLockSha256: sha256(buildLockBytes), embeddedSourceCount: map.sources.length };
+  return { bundleSha256: sha256(bundle), sourceMapSha256: sha256(mapBytes), sources, sdkSources, lock, buildLock: JSON.parse(buildLockBytes), buildLockSha256: sha256(buildLockBytes), embeddedSourceCount: map.sources.length, clientsCommit: process.env.BW_CLIENTS_COMMIT, sdkCommit: process.env.BW_SDK_COMMIT, discovered: discoverRequests(sources) };
 }
 
 // A reviewed receipt binds the interpreted operation to the actual cited expression.
@@ -53,7 +55,9 @@ export function operationBinding(row, evidence) {
     sdkSourceSha256 = sha256(sdkText);
   }
   const helperSourceSha256 = row.helperSource ? sha256(evidence.sources.get(row.helperSource.path)) : null;
-  const claim = { method: row.method, path: row.path, template: row.template, trafficRole: row.trafficRole, transport: row.transport, source: row.source, sdkSource: row.sdkSource ?? null, helperSource: row.helperSource ?? null, expressionSha256, sdkSourceSha256, helperSourceSha256 };
+  const { requestEvidence, ...record } = row;
+  const referenceSha256 = (row.directCliMethodReferences ?? []).map(reference => sha256(evidence.sources.get(reference.path)));
+  const claim = { record, expressionSha256, sdkSourceSha256, helperSourceSha256, referenceSha256 };
   return { sourceSpan: { start: span.start, end: span.end }, expressionSha256, sdkSourceSha256, helperSourceSha256, claimSha256: sha256(JSON.stringify(claim)) };
 }
 
@@ -62,6 +66,7 @@ export function validateCliInventory(inventory, evidence) {
   const pin = inventory.provenance;
   assert.equal(pin.repository, "https://github.com/bitwarden/clients");
   assert.match(pin.commit, /^[a-f0-9]{40}$/);
+  assert.equal(pin.commit, evidence.clientsCommit, "Client citation revision differs from the fetched source revision");
   const locked = evidence.lock.packages["node_modules/@bitwarden/cli"];
   assert.equal(pin.version, locked.version);
   assert.equal(pin.npmIntegrity, locked.integrity);
@@ -69,7 +74,10 @@ export function validateCliInventory(inventory, evidence) {
   assert.equal(pin.sourceMapSha256, evidence.sourceMapSha256, "CLI source map changed");
   assert.equal(pin.embeddedSourceCount, evidence.embeddedSourceCount);
   assert.match(pin.sdk.commit, /^[a-f0-9]{40}$/);
+  assert.equal(pin.sdk.commit, evidence.sdkCommit, "SDK citation revision differs from the fetched source revision");
   assert.equal(pin.clientBuildLockSha256, evidence.buildLockSha256);
+  assert.equal(pin.clientBuildLockUrl, `https://raw.githubusercontent.com/bitwarden/clients/${pin.commit}/package-lock.json`);
+  assert.equal(pin.sdk.source, `https://github.com/bitwarden/sdk-internal/tree/${pin.sdk.commit}`);
   const sdk = evidence.buildLock.packages[`node_modules/${pin.sdk.name}`];
   assert.equal(pin.sdk.version, sdk.version);
   assert.equal(pin.sdk.integrity, sdk.integrity);
@@ -81,6 +89,7 @@ export function validateCliInventory(inventory, evidence) {
   }
   const ids = new Set();
   const roles = new Set(["bitwarden_server", "external_key_connector", "server_supplied_storage_url", "third_party_service", "third_party_provider_rpc"]);
+  const references = new Set(evidence.discovered.references.map(referenceKey));
   function sourceExists(source) {
     assert.equal(typeof source.path, "string");
     const content = evidence.sources.get(source.path);
@@ -99,6 +108,9 @@ export function validateCliInventory(inventory, evidence) {
       assert.equal(row.sdkSource.url, `https://github.com/bitwarden/sdk-internal/blob/${pin.sdk.commit}/${row.sdkSource.path}#L${row.sdkSource.line}`);
     }
     if (row.helperSource) sourceExists(row.helperSource);
+    for (const reference of row.directCliMethodReferences ?? []) {
+      assert(references.has(referenceKey({ ...reference, name: row.source.function })), `Invalid shipped method reference for ${row.id}`);
+    }
     assert.deepEqual(row.requestEvidence, operationBinding(row, evidence), `Operation differs from its reviewed source expression: ${row.id}`);
   }
   for (const row of inventory.cliLocalServeRoutes) {
@@ -106,6 +118,18 @@ export function validateCliInventory(inventory, evidence) {
     sourceExists(row.source);
   }
   for (const command of inventory.commands) sourceExists(command.source);
+  const constructions = [...inventory.operations, ...inventory.cliLocalServeRoutes].filter(row => !row.sdkSource).map(row => {
+    assert(row.construction, `Missing discovered request construction: ${row.id}`);
+    assert.equal(row.construction.source.path, row.source.path);
+    assert.equal(row.construction.source.line, row.source.line);
+    assert.equal(row.construction.method, row.method);
+    assert.equal(row.construction.transport, row.transport);
+    if (row.requestEvidence) assert.deepEqual(row.requestEvidence.sourceSpan, { start: row.construction.source.start, end: row.construction.source.end });
+    return requestKey(row.construction);
+  });
+  assert.deepEqual(constructions.sort(), evidence.discovered.requests.map(requestKey).sort(), "Inventory must cover every discovered request construction and symbolic variant");
+  const generic = inventory.openObligations.filter(row => ["generic_transport", "generic_request"].includes(row.kind));
+  assert.deepEqual(generic.map(genericKey).sort(), evidence.discovered.generic.map(genericKey).sort(), "Every generic transport must remain an explicit obligation");
   const counts = {
     operationRecords: inventory.operations.length,
     uniqueMethodPathPairs: new Set(inventory.operations.map(row => `${row.method} ${row.path}`)).size,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { cliEvidence, cliInventoryPath, validateCliInventory } from "./check-cli-inventory.mjs";
+import { cliEvidence, cliInventoryPath, operationBinding, validateCliInventory } from "./check-cli-inventory.mjs";
 
 const inventory = JSON.parse(readFileSync(cliInventoryPath, "utf8"));
 const evidence = cliEvidence();
@@ -49,3 +49,45 @@ test("rejects a changed SDK request source", () => {
   changed.sdkSources.set(path, `${changed.sdkSources.get(path)}\n// modified request\n`);
   assert.throws(() => validateCliInventory(inventory, changed), /reviewed source expression/);
 });
+
+test("rejects omission of a request construction even with refreshed counts", () => {
+  const data = structuredClone(inventory);
+  data.operations.shift();
+  data.summary.operationRecords--;
+  data.summary.serverOperationRecords--;
+  data.summary.uniqueMethodPathPairs = new Set(data.operations.map(row => `${row.method} ${row.path}`)).size;
+  assert.throws(() => validateCliInventory(data, evidence), /every discovered request construction/);
+});
+
+test("rejects omission of an unresolved generic transport", () => {
+  const data = structuredClone(inventory);
+  data.openObligations.splice(data.openObligations.findIndex(row => row.kind === "generic_transport"), 1);
+  data.summary.openObligations--;
+  assert.throws(() => validateCliInventory(data, evidence), /Every generic transport/);
+});
+
+test("rejects relabeling pinned revisions despite refreshed URLs and receipts", () => {
+  for (const field of ["commit", "sdk"]) {
+    const data = structuredClone(inventory);
+    if (field === "commit") data.provenance.commit = "a".repeat(40);
+    else data.provenance.sdk.commit = "b".repeat(40);
+    for (const row of data.operations) {
+      row.source.url = `${data.provenance.repository}/blob/${data.provenance.commit}/${row.source.path}#L${row.source.line}`;
+      if (row.sdkSource) row.sdkSource.url = `https://github.com/bitwarden/sdk-internal/blob/${data.provenance.sdk.commit}/${row.sdkSource.path}#L${row.sdkSource.line}`;
+      row.requestEvidence = operationBinding(row, evidence);
+    }
+    assert.throws(() => validateCliInventory(data, evidence), /citation revision differs/);
+  }
+});
+
+for (const [name, mutate] of [
+  ["reachability", row => { row.reachability = "direct_cli_implementation"; }],
+  ["a condition", row => { delete row.condition; }],
+  ["an invented direct CLI reference", row => { row.directCliMethodReferences = [{ path: "invented.ts", line: 999999999, function: "missing", receiver: "this.api" }]; }],
+]) {
+  test(`rejects changing ${name} without a new reviewed evidence binding`, () => {
+    const data = structuredClone(inventory);
+    mutate(data.operations.find(row => row.condition));
+    assert.throws(() => validateCliInventory(data, evidence), /reviewed source expression|Invalid shipped method reference/);
+  });
+}

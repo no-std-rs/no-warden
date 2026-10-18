@@ -59,3 +59,22 @@ test("an implemented HTTP route still needs upstream comparison evidence", () =>
   route.full_upstream_parity_verified = true;
   assert.throws(() => validateCoverage(data), /upstream comparison cases/);
 });
+
+test("rejects a missing upstream status", () => {
+  const data = structuredClone(snapshot);
+  data.upstream_routes.pop();
+  assert.throws(() => validateCoverage(data), /Every pinned upstream handler/);
+});
+
+test("rejects deletion of a local row despite refreshed aggregate counts", () => {
+  const data = structuredClone(snapshot);
+  const row = data.routes.shift();
+  data.counts.routed_method_path_patterns -= Number(row.routed);
+  assert.throws(() => validateCoverage(data), /Missing linked coverage record|Missing local extension coverage/);
+});
+
+test("rejects an unexplained parameter-name mapping", () => {
+  const data = structuredClone(snapshot);
+  data.upstream_routes.find(row => Object.keys(row.parameter_mapping).length > 0).parameter_mapping = {};
+  assert.throws(() => validateCoverage(data), /parameter mapping/);
+});

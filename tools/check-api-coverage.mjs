@@ -6,6 +6,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const coveragePath = join(repositoryRoot, "compatibility/no-warden-coverage.json");
+export const upstreamKey = route => `${route.method} ${route.uri} @ ${route.source}:${route.line}#${route.handler}`;
+export const routeShape = path => path.split("?")[0].replace(/<\w+(?:\.\.)?>|\{\w+\}/g, "{}");
+export const routeParameters = path => [...path.split("?")[0].matchAll(/<(\w+)(?:\.\.)?>|\{(\w+)\}/g)].map(match => match[1] ?? match[2]);
 
 export function sourceHashes(root = repositoryRoot) {
   const paths = [];
@@ -35,6 +38,7 @@ export function validateCoverage(coverage, hashes = sourceHashes(), readSource =
   assert.deepEqual(coverage.source_sha256, hashes, "Implementation or test sources changed: audit and update the coverage snapshot");
   assert(Array.isArray(coverage.routes));
   const unique = new Set();
+  const rows = new Map(coverage.routes.map(route => [`${route.method} ${route.path}`, route]));
   const tests = new Set();
   for (const test of coverage.http_test_catalog) {
     assert(readSource(test.file).includes(test.name), `Missing HTTP test: ${test.name}`);
@@ -74,6 +78,36 @@ export function validateCoverage(coverage, hashes = sourceHashes(), readSource =
       assert.deepEqual(route.parity_evidence.remaining_variants, [], `${key}: unresolved variants prevent full parity`);
     }
   }
+  const upstream = JSON.parse(readSource("compatibility/vaultwarden-routes.json"));
+  assert.equal(coverage.upstream_pin, upstream.upstream.sha, "Coverage must use the pinned upstream revision");
+  const handlers = new Map(upstream.routes.map(route => [upstreamKey(route), route]));
+  assert.equal(handlers.size, upstream.routes.length, "Upstream handler keys must be unique");
+  const recorded = new Set(), linked = new Set();
+  for (const entry of coverage.upstream_routes) {
+    assert(handlers.has(entry.upstream_key), `Unknown upstream handler: ${entry.upstream_key}`);
+    assert(!recorded.has(entry.upstream_key), "Duplicate upstream coverage record");
+    recorded.add(entry.upstream_key);
+    assert(["unimplemented", "partial", "verified"].includes(entry.status), "Upstream status must be explicit");
+    if (entry.status === "unimplemented") {
+      assert.equal(entry.coverage_record, null);
+      assert.deepEqual(entry.parameter_mapping, {});
+      continue;
+    }
+    const local = rows.get(entry.coverage_record), remote = handlers.get(entry.upstream_key);
+    assert(local, `Missing linked coverage record: ${entry.coverage_record}`);
+    linked.add(entry.coverage_record);
+    assert.equal(local.method, remote.method);
+    assert.equal(routeShape(local.path), routeShape(remote.uri), "Linked path shapes must agree");
+    assert.deepEqual(entry.parameter_mapping, Object.fromEntries(routeParameters(remote.uri).map((name, index) => [name, routeParameters(local.path)[index]])), "Path parameter mapping must be explicit");
+    if (entry.status === "verified") assert(local.full_upstream_parity_verified, "Verified handler requires full-parity evidence");
+  }
+  assert.deepEqual([...recorded].sort(), [...handlers.keys()].sort(), "Every pinned upstream handler needs a coverage record");
+  for (const key of coverage.local_extensions) {
+    assert(rows.has(key), `Missing local extension coverage: ${key}`);
+    assert(!linked.has(key), `Upstream-linked route is not a local extension: ${key}`);
+    linked.add(key);
+  }
+  assert.deepEqual([...linked].sort(), [...rows.keys()].sort(), "Every local coverage row needs an upstream link or explicit extension record");
   const counts = {
     routed_method_path_patterns: coverage.routes.filter(r => r.routed).length,
     routes_with_typed_requests: coverage.routes.filter(r => r.typed_request).length,

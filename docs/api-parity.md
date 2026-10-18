@@ -41,6 +41,12 @@ must remain `no_std` without `alloc` throughout that cycle.
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
 | [Current coverage](../compatibility/no-warden-coverage.json) | 28 routed patterns, 12 with typed requests, 15 with reusable core service behavior; each carries its narrower limits |
 
+The coverage ledger joins all 294 declared upstream handlers to an explicit
+unimplemented status or a partial local coverage record. Query/rank/configuration
+variants retain separate upstream identities, and path parameter renames have
+explicit mappings. Three additional local aliases are tracked as extensions;
+they do not replace the corresponding upstream endpoints.
+
 The client catalog is an overapproximation of shipped code, not a proof that all
 those operations are reachable from CLI commands. Its 34 open obligations retain
 dynamic destinations, typed call-graph questions, feature flags, and SDK branches.
@@ -69,8 +75,10 @@ After installing the pinned CLI with `npm ci --prefix tools`, fetch its upstream
 build lock and verify the client and implementation snapshots:
 
 ```sh
-curl --fail --location https://raw.githubusercontent.com/bitwarden/clients/b449ac1d255784380d75ef026343198891286be7/package-lock.json -o /tmp/clients-build-lock.json
-curl --fail --location https://codeload.github.com/bitwarden/sdk-internal/tar.gz/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6 -o /tmp/bw-sdk.tar.gz
+export BW_CLIENTS_COMMIT=b449ac1d255784380d75ef026343198891286be7
+export BW_SDK_COMMIT=c5e53d3e82ab80fdc9fd79ebd74058399a6444b6
+curl --fail --location "https://raw.githubusercontent.com/bitwarden/clients/$BW_CLIENTS_COMMIT/package-lock.json" -o /tmp/clients-build-lock.json
+curl --fail --location "https://codeload.github.com/bitwarden/sdk-internal/tar.gz/$BW_SDK_COMMIT" -o /tmp/bw-sdk.tar.gz
 mkdir -p /tmp/bw-sdk-source
 tar -xzf /tmp/bw-sdk.tar.gz -C /tmp/bw-sdk-source --strip-components=1
 BW_CLIENTS_BUILD_LOCK=/tmp/clients-build-lock.json BW_SDK_SOURCE_ROOT=/tmp/bw-sdk-source node --test tools/cli-inventory.test.mjs
@@ -80,9 +88,14 @@ node tools/check-api-coverage.mjs
 
 The client check binds inventory records to the locked package integrity,
 published bundle/source-map hashes, upstream SDK build-lock pins, and actual
-shipped source locations. Each operation has a reviewed receipt combining its
+shipped source locations. The fetched revision labels must match the recorded
+citations. A pinned host-only TypeScript parser independently discovers all 311
+literal request-construction variants (including 22 local server routes) and
+requires inventory coverage; three generic transports remain explicit obligations.
+Each operation has a reviewed receipt combining its
 method/path/role, cited expression span, and pinned SDK/helper source hashes.
-Changing either the claim or those source bytes invalidates the receipt. These
+Reachability descriptions, conditions, and syntax-checked method references are
+also bound. Changing the claim or source bytes invalidates the receipt. These
 are audited interpretations, not automatic semantic inference or runtime request
 traces. Updating a receipt requires inspecting the source expression and its
 SDK/helper trace again; refreshing aggregate counts cannot validate a new claim.
