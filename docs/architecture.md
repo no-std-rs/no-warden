@@ -1,5 +1,10 @@
 # Architecture
 
+On Unix, the standalone host creates its SQLite database with owner-only
+permissions before opening it. Startup also restricts existing database, WAL,
+shared-memory, and rollback-journal files. Filesystem providers remain outside
+the allocation-free core.
+
 `no-warden` is the reusable protocol and business-rules crate. It borrows input
 strings, models wire data without an allocator, classifies routes, validates
 supported payloads, and applies ownership and lifecycle rules through storage

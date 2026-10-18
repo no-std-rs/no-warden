@@ -69,14 +69,63 @@ fn item(db: &Connection, owner: &str, id: &str, kind: &str) -> rusqlite::Result<
     Ok(document.map(|s| serde_json::from_str(&s).expect("stored item JSON")))
 }
 
+#[cfg(unix)]
+fn restrict_database_files(path: &str) -> std::io::Result<()> {
+    use std::{
+        fs::{OpenOptions, Permissions},
+        os::unix::fs::{OpenOptionsExt, PermissionsExt},
+        path::Path,
+    };
+
+    fn restrict(path: &Path, create: bool) -> std::io::Result<()> {
+        // Create privately before SQLite opens the path, regardless of umask.
+        // Setting permissions on the handle also repairs an existing database.
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(create)
+            .truncate(false)
+            .mode(0o600)
+            .open(path)?
+            .set_permissions(Permissions::from_mode(0o600))
+    }
+
+    if path.is_empty() || path == ":memory:" {
+        return Ok(());
+    }
+    restrict(Path::new(path), true)?;
+    for suffix in ["-wal", "-shm", "-journal"] {
+        match restrict(Path::new(&format!("{path}{suffix}")), false) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            result => result?,
+        }
+    }
+    Ok(())
+}
+
 impl Store {
-    pub fn open(path: &str) -> rusqlite::Result<Self> {
+    pub fn open(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        // URI filenames can redirect SQLite away from the path protected below.
+        // This adapter accepts plain filesystem paths.
+        if path.starts_with("file:") {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "NO_WARDEN_DB must be a filesystem path, not a SQLite URI",
+            )
+            .into());
+        }
+        #[cfg(unix)]
+        restrict_database_files(path)?;
         let db = Connection::open(path)?;
         db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS accounts(id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL COLLATE NOCASE, document TEXT NOT NULL, password TEXT NOT NULL, revision TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS items(id TEXT PRIMARY KEY, owner TEXT NOT NULL REFERENCES accounts(id), kind TEXT NOT NULL, document TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, revision TEXT NOT NULL, created TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS items_owner ON items(owner,kind);
             CREATE TABLE IF NOT EXISTS sessions(access TEXT PRIMARY KEY, refresh TEXT UNIQUE NOT NULL, owner TEXT NOT NULL REFERENCES accounts(id), access_expires INTEGER NOT NULL, refresh_expires INTEGER NOT NULL);")?;
+        // SQLite inherits the private database mode for new sidecars. Also
+        // narrow sidecars left behind by an earlier permissive installation.
+        #[cfg(unix)]
+        restrict_database_files(path)?;
         Ok(Self {
             db,
             pending: Value::Null,
@@ -330,6 +379,42 @@ mod tests {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn database_and_existing_sidecars_are_owner_only() {
+        use std::{fs, os::unix::fs::PermissionsExt};
+
+        let directory =
+            std::env::temp_dir().join(format!("no-warden-mode-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("vault.db");
+        assert!(Store::open(&format!("file:{}?mode=rwc", path.display())).is_err());
+        assert!(!path.exists());
+        let store = Store::open(path.to_str().unwrap()).unwrap();
+        let paths = [
+            path.clone(),
+            path.with_file_name("vault.db-wal"),
+            path.with_file_name("vault.db-shm"),
+        ];
+        for file in &paths {
+            assert_eq!(
+                fs::metadata(file).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            fs::set_permissions(file, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let reopened = Store::open(path.to_str().unwrap()).unwrap();
+        for file in &paths {
+            assert_eq!(
+                fs::metadata(file).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        drop(reopened);
+        drop(store);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
