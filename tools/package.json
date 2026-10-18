@@ -6,7 +6,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node e2e.mjs",
+    "test": "bash e2e.sh",
     "test:http": "node --test server-tests.mjs",
     "test:persistence": "node persistence.mjs"
   },

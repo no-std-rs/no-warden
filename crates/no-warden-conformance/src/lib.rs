@@ -4,5 +4,6 @@
 #![forbid(unsafe_code)]
 
 pub mod capture;
+pub mod cli;
 pub mod fixture;
 pub mod transport;

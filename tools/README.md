@@ -1,15 +1,15 @@
 # Real-client compatibility checks
 
-The compatibility harness requires Linux, Node.js 22 or newer, OpenSSL,
-util-linux `prlimit`, and the pinned official Bitwarden CLI. This requirement
-applies to these test tools; the crate and standalone server have separate
-platform requirements.
+The compatibility harness requires Linux, Rust 1.89 or newer, Node.js 22 or newer,
+OpenSSL, util-linux `prlimit`, a `kill` utility, and the pinned official Bitwarden
+CLI. This requirement applies to these test tools; the crate and standalone
+server have separate platform requirements.
 
-The host-only `no-warden-conformance` Rust library now provides private subprocess
-capture, encrypted account fixtures, and disposable loopback TLS. Its tests run
-with `cargo test -p no-warden-conformance`; it requires Rust 1.89 and OpenSSL.
-The commands below still use the JavaScript harness. Moving the default CLI
-orchestration to Rust is a subsequent roadmap step, not a completed migration.
+The host-only `no-warden-conformance` Rust crate runs the default CLI suite,
+including private subprocess capture, encrypted account fixtures, and disposable
+loopback TLS. `tools/e2e.sh` invokes it through Cargo. HTTP, restart-persistence,
+and client-inventory checks still use JavaScript; the broader migration remains
+unfinished.
 
 ```sh
 npm ci --prefix tools
@@ -18,17 +18,26 @@ npm ci --prefix tools
 Build and start the standalone Rust server, then run the checks:
 
 ```sh
-node --test tools/cli-process.test.mjs
+cargo test -p no-warden-conformance
 tools/e2e.sh
 node --test tools/server-tests.mjs
 node tools/persistence.mjs
 ```
 
 The default server is `http://127.0.0.1:8000`. Set `BW_E2E_SERVER` to test a
-different address, or `BW_BIN` to use an already installed CLI. The checked-in
-lockfile pins CLI `2026.10.0` and its transitive dependencies. The script reports
-the actual version it runs.
-Set `BW_E2E_VERBOSE=1` to print each CLI operation while diagnosing a failure.
+different address, or `BW_BIN` to select an installed CLI. The runner prefers
+`tools/node_modules/.bin/bw` and otherwise looks for `bw` on `PATH`. The checked-in
+lockfile pins CLI `2026.10.0` and its transitive dependencies; the runner checks
+that exact version. Optional `BW_E2E_EMAIL` and `BW_E2E_PASSWORD` select the fresh
+account's credentials; otherwise both are generated for the run. Configuration
+uses environment variables, with no positional arguments or verbose-output flag.
+
+Set `BW_E2E_RECEIPT` to a new writable file path to record a JSON run receipt.
+The runner refuses an existing file and creates the receipt with mode 0600. It
+records only `status`, `commands`, `expectedCommands`, and `cliVersion`, updating
+the status from `running` to `passed` or `failed`. It includes no account data,
+server URL, credentials, or vault contents. A receipt counts commands completed
+or attempted by this run; it does not establish per-route traces or full parity.
 
 Current CLI releases require HTTPS. For a loopback HTTP server, the suite starts
 a temporary local HTTPS proxy, generates a one-day certificate with OpenSSL,
@@ -45,18 +54,20 @@ session tokens, and vault contents are never printed.
 CLI subprocess stdout goes through a regular file descriptor explicitly set to
 0600 inside a 0700 directory. Its pathname is unlinked before the child starts,
 so terminating the parent during a synchronous CLI call leaves no named stdout
-file behind. The helper reads the descriptor at explicit offsets, then closes it
-and removes the empty directory in `finally`. This avoids the documented Node.js
+file behind. The helper reads the descriptor at explicit offsets; cleanup guards
+close it and remove the empty directory. This avoids the documented Node.js
 pipe-write hazard when the unmodified CLI exits immediately after printing.
-The helper retains a 90-second timeout and a 4 MiB stderr buffer limit. A
+The Rust capture helper retains a 90-second timeout and a 4 MiB stderr limit.
+Stderr is counted and discarded rather than retained. A timeout stops the
+process group, reaps the child, and closes its capture resources. A
 shell-free [`prlimit` invocation](https://man7.org/linux/man-pages/man1/prlimit.1.html)
 caps each child process's regular files at 4 MiB plus one overflow-detection byte
 and sets the core-dump size limit to zero. Output above
 4 MiB is rejected before reading; output exactly at the limit is accepted.
 This kernel limit also applies to CLI cache files and other regular-file writes
 in that subprocess. An empty login result still
-fails the suite; its diagnostic includes only byte counts, process metadata, and
-the CLI authentication status. The observed intermittent cloud failure has not
+fails the suite; diagnostics include only the stage or command number, exit
+status, and byte counts. The observed intermittent cloud failure has not
 been conclusively attributed to stdout flushing. No command is retried.
 
 The CLI suite checks incorrect-password rejection, password login, key
@@ -75,8 +86,8 @@ encrypts their contents before upload. JSON covers logins, secure notes, cards,
 and identities; CSV covers logins and secure notes. Escaped Unicode folder names,
 multiline notes, custom fields, and item-to-folder links are checked again after
 discarding the CLI cache and logging in afresh. Fixture files live in the private
-temporary directory and are removed in `finally`. CSV folder checks include the
-client's backslash normalization and automatic ancestor-folder creation.
+temporary directory and are removed when the run returns. CSV folder checks
+include the client's backslash normalization and automatic ancestor-folder creation.
 
 All 51 lifecycle and import commands remain intact. Another 15 commands archive
 an imported login, verify its absence from the active vault, discard the client
@@ -100,8 +111,9 @@ Unicode filename. Downloads go to private files and are compared byte for byte;
 binary contents never pass through text stdout capture. The test edits the
 parent item, trashes/restores it, discards the client cache, syncs and downloads
 all attachments again, then deletes them. The complete suite executes 118 real
-CLI commands. Fixture and downloaded files remain inside the existing private
-temporary directory and are removed in `finally`.
+CLI commands. The Rust runner checks the cumulative 37, 51, 66, 90, and 118-command
+milestones. Fixture and downloaded files remain inside private temporary
+directories and are removed when the run returns, including on an error.
 
 The personal-import HTTP checks follow the pinned relationship semantics:
 existing owned folder IDs are reused, foreign or unknown IDs create fresh owned
@@ -210,6 +222,9 @@ Select `personal attachments` to run the portable attachment HTTP group against
 the upstream instance. Use a fresh disposable process after other login-heavy
 groups; the attachment group creates only two password-login fixtures.
 
+The dated results below record the earlier client compatibility milestones. The
+Rust runner preserves their command sequence and cumulative checks.
+
 The initial compatibility baseline passed on 2026-10-18: the same 37 official
 CLI `2026.10.0` commands passed against both no-warden and upstream Vaultwarden
 `1.37.4`. The upstream binary came from the official
@@ -251,7 +266,10 @@ the final focused attachment group then passed all nine tests on the corrected
 backend. Attachment metadata and bytes, an unexpired download capability, and
 deletion/cascade cleanup were verified across two graceful restarts.
 
-`seed-account.mjs` can also register a single explicit test account. Supply
-`BW_E2E_EMAIL`, `BW_E2E_PASSWORD`, and optionally `BW_E2E_SERVER` in the environment.
-It derives the standard server password hash and wrapped user key locally and
-uses the ordinary registration endpoint.
+The Rust `fixture` module derives the standard server password hash and wrapped
+user key locally and registers a fresh account through the ordinary registration
+flow. `BW_E2E_EMAIL` and `BW_E2E_PASSWORD` configure that fixture for a complete
+CLI run. The retained `tools/seed-account.mjs` helper supports the JavaScript
+HTTP/persistence fixtures and standalone account creation until their migration.
+For standalone seeding, supply `BW_E2E_EMAIL`, `BW_E2E_PASSWORD`, and optionally
+`BW_E2E_SERVER` in the environment, then run `node tools/seed-account.mjs`.

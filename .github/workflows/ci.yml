@@ -74,8 +74,7 @@ jobs:
         env:
           BW_CLIENTS_BUILD_LOCK: ${{ runner.temp }}/clients-build-package-lock.json
           BW_SDK_SOURCE_ROOT: ${{ runner.temp }}/sdk-source
-      - run: node --test tools/cli-process.test.mjs
-      - run: cargo build -p no-warden-server --locked
+      - run: cargo build -p no-warden-server -p no-warden-conformance --locked
       - name: Real client and authorization checks
         shell: bash
         run: |

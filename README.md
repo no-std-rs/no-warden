@@ -39,10 +39,10 @@ The suite runs the pinned official Bitwarden CLI `2026.10.0`, creates disposable
 accounts, and provides trusted loopback TLS automatically. It uses its own CLI
 cache and never opens your existing vault. See [test tools](tools/README.md).
 
-The host-only `no-warden-conformance` library provides Rust subprocess capture,
-encrypted account fixtures, and disposable loopback TLS for the harness migration.
-The default CLI suite still uses the JavaScript entry points above; replacing its
-orchestration remains an open roadmap item.
+`tools/e2e.sh` runs the host-only `no-warden-conformance` Rust binary. It provides
+CLI orchestration, private subprocess capture, encrypted account fixtures, and
+disposable loopback TLS. HTTP, restart-persistence, and client-inventory checks
+still use JavaScript; the broader harness migration remains open.
 
 For the Rust checks and the separate bare-metal consumer:
 

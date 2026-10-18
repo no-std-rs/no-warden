@@ -24,7 +24,7 @@ export function sourceHashes(root = repositoryRoot) {
   for (const file of ["Cargo.toml", "Cargo.lock"]) paths.push(join(root, file));
   // Include helpers and subprocess entry points as well as the test entry points.
   for (const entry of readdirSync(join(root, "tools"), { withFileTypes: true })) {
-    if (entry.isFile() && (entry.name.endsWith(".mjs") || ["package.json", "package-lock.json"].includes(entry.name))) {
+    if (entry.isFile() && (entry.name.endsWith(".mjs") || entry.name.endsWith(".sh") || ["package.json", "package-lock.json"].includes(entry.name))) {
       paths.push(join(root, "tools", entry.name));
     }
   }

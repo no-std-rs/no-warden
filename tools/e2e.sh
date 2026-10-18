@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
 set -euo pipefail
-exec node "$(dirname "$0")/e2e.mjs" "$@"
+exec cargo run --quiet --locked --manifest-path "$(dirname "$0")/../Cargo.toml" -p no-warden-conformance -- "$@"
