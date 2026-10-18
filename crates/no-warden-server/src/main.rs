@@ -20,6 +20,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use no_warden::{
     ApiError, ErrorKind, VaultService,
+    auth_login::AuthRequestLoginContext,
     auth_requests::AuthRequestContext,
     bulk::CipherBulkOperation,
     devices::DeviceRegistration,
@@ -29,10 +30,10 @@ use no_warden::{
     route::{self, Route},
     validation::FolderNamePolicy,
     wire::{
-        AccountKeys, AuthRequestCreateRequest, AuthRequestUpdateRequest, AvatarUpdateRequest,
-        CipherRequest, ClientCredentialsRequest, DevicePushTokenRequest, FolderRelationship,
-        FolderRequest, FolderWriteRequest, ImportFolderRequest, PasswordOrOtpRequest,
-        ProfileUpdateRequest, RegisterRequest,
+        AccountKeys, AuthRequestCreateRequest, AuthRequestLoginRequest, AuthRequestUpdateRequest,
+        AvatarUpdateRequest, CipherRequest, ClientCredentialsRequest, DevicePushTokenRequest,
+        FolderRelationship, FolderRequest, FolderWriteRequest, ImportFolderRequest,
+        PasswordOrOtpRequest, ProfileUpdateRequest, RegisterRequest,
     },
 };
 use rand::{RngCore, rngs::OsRng};
@@ -363,7 +364,10 @@ async fn dispatch_with_peer(
     }
     if route == Route::Token {
         let form = parse_connect_form(&body)?;
-        let grant = connect_field(&form, &["grant_type", "granttype"])?.ok_or_else(invalid)?;
+        let grant = connect_field(&form, &["grant_type", "granttype"])?.ok_or(Failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Missing grant type",
+        ))?;
         match grant {
             "client_credentials" => {
                 let request = ClientCredentialsRequest {
@@ -388,9 +392,23 @@ async fn dispatch_with_peer(
                     &account,
                     &registration,
                     Some(&grant),
+                    None,
                 )?));
             }
             "password" => {
+                // Rocket matches the compact, case-insensitive first name segment,
+                // including nested scalar names. A present empty value cannot fall back.
+                if auth_requests::auth_request_field(&form)?.is_some() {
+                    let request = auth_request_login_form(&form, grant)?;
+                    let request_ip = peer_ip.to_string();
+                    let context = AuthRequestLoginContext {
+                        request_ip: &request_ip,
+                        now_unix_nanos: auth_requests::unix_nanos(chrono::Utc::now()),
+                    };
+                    return Ok(json_response(auth_request_login(
+                        &app, &mut store, &request, &context,
+                    )?));
+                }
                 let registration = devices::login_registration(&form)?;
                 let email = form
                     .get("username")
@@ -414,6 +432,7 @@ async fn dispatch_with_peer(
                     &account,
                     &registration,
                     None,
+                    connect_field(&form, &["client_id", "clientid"])?,
                 )?));
             }
             "refresh_token" => {
@@ -445,8 +464,14 @@ async fn dispatch_with_peer(
                 if let Some(identifier) = binding.as_deref() {
                     devices::touch(&tx, owner, identifier)?;
                 }
-                let tokens =
-                    issue_token_grant_bound(&app, &tx, &account, None, binding.as_deref())?;
+                let tokens = issue_token_grant_bound(
+                    &app,
+                    &tx,
+                    &account,
+                    None,
+                    binding.as_deref(),
+                    connect_field(&form, &["client_id", "clientid"])?,
+                )?;
                 tx.commit()?;
                 return Ok(json_response(tokens));
             }
@@ -965,7 +990,63 @@ fn issue_token_grant(
     account: &Value,
     api: Option<&AuthorizedApiKeyGrant<'_>>,
 ) -> Result<Value, Failure> {
-    issue_token_grant_bound(app, db, account, api, None)
+    issue_token_grant_bound(app, db, account, api, None, None)
+}
+
+fn auth_request_login_form<'a>(
+    form: &'a BTreeMap<String, String>,
+    grant_type: &'a str,
+) -> Result<AuthRequestLoginRequest<'a>, Failure> {
+    Ok(AuthRequestLoginRequest {
+        grant_type: Some(grant_type),
+        password: connect_field(form, &["password"])?.map(Secret::new),
+        auth_request: auth_requests::auth_request_field(form)?,
+        client_id: connect_field(form, &["client_id", "clientid"])?,
+        scope: connect_field(form, &["scope"])?,
+        username: connect_field(form, &["username"])?,
+        device_identifier: connect_field(form, &["device_identifier", "deviceidentifier"])?,
+        device_name: connect_field(form, &["device_name", "devicename"])?,
+        device_type: connect_field(form, &["device_type", "devicetype"])?,
+    })
+}
+
+// The same mutex/savepoint covers one-time consumption and every subsequent
+// activity, session and binding mutation, including a deferred commit failure.
+fn auth_request_login(
+    app: &App,
+    store: &mut Store,
+    request: &AuthRequestLoginRequest<'_>,
+    context: &AuthRequestLoginContext<'_>,
+) -> Result<Value, Failure> {
+    store.db.execute_batch("SAVEPOINT auth_request_login")?;
+    let result = (|| {
+        let grant = VaultService::new(&mut *store).authenticate_auth_request(request, context)?;
+        let account = store
+            .account("id", grant.user_id())?
+            .ok_or_else(invalid_grant)?;
+        let device = grant.device();
+        let registration = DeviceRegistration {
+            identifier: device.identifier,
+            name: device.name,
+            device_type: device.device_type.parse().unwrap_or(14),
+        };
+        let tokens = authenticated_login(
+            app,
+            store,
+            &account,
+            &registration,
+            None,
+            Some(grant.client_id()),
+        )?;
+        store.db.execute_batch("RELEASE auth_request_login")?;
+        Ok(tokens)
+    })();
+    if result.is_err() {
+        store
+            .db
+            .execute_batch("ROLLBACK TO auth_request_login; RELEASE auth_request_login")?;
+    }
+    result
 }
 
 // The storage mutex is held across this savepoint. Registration, activity and
@@ -976,13 +1057,20 @@ fn authenticated_login(
     account: &Value,
     registration: &DeviceRegistration<'_>,
     api: Option<&AuthorizedApiKeyGrant<'_>>,
+    password_client_id: Option<&str>,
 ) -> Result<Value, Failure> {
     store.db.execute_batch("SAVEPOINT device_login")?;
     let result = (|| {
         let owner = account["id"].as_str().ok_or_else(invalid)?;
         VaultService::new(&mut *store).register_device(owner, registration)?;
-        let tokens =
-            issue_token_grant_bound(app, &store.db, account, api, Some(registration.identifier))?;
+        let tokens = issue_token_grant_bound(
+            app,
+            &store.db,
+            account,
+            api,
+            Some(registration.identifier),
+            password_client_id,
+        )?;
         store.db.execute_batch("RELEASE device_login")?;
         Ok(tokens)
     })();
@@ -1000,14 +1088,17 @@ fn issue_token_grant_bound(
     account: &Value,
     api: Option<&AuthorizedApiKeyGrant<'_>>,
     device: Option<&str>,
+    password_client_id: Option<&str>,
 ) -> Result<Value, Failure> {
     let timestamp = chrono::Utc::now().timestamp();
     db.execute(
         "DELETE FROM sessions WHERE access_expires<=?1 AND refresh_expires<=?1",
         [timestamp],
     )?;
-    let expires_in = api.map_or(3600_i64, |grant| i64::from(grant.expires_in()));
-    let client_id = api.map_or("cli", |grant| grant.client_id());
+    let expires_in = api.map_or(7200_i64, |grant| i64::from(grant.expires_in()));
+    let client_id = api.map_or(password_client_id.unwrap_or("undefined"), |grant| {
+        grant.client_id()
+    });
     let scopes = if api.is_some() {
         vec!["api"]
     } else {
@@ -1019,6 +1110,12 @@ fn issue_token_grant_bound(
         "client_id":client_id,"scope":scopes,"amr":["Application"],"sstamp":account["id"],"jti":random_token()});
     if let Some(identifier) = device {
         claims["device"] = json!(identifier);
+        let registered =
+            devices::load(db, account["id"].as_str().ok_or_else(invalid)?, identifier)?
+                .ok_or_else(invalid)?;
+        claims["devicetype"] = json!(no_warden::auth_requests::device_type_name(
+            registered.device_type
+        ));
     }
     let unsigned = format!("{header}.{}", URL_SAFE_NO_PAD.encode(claims.to_string()));
     let mut mac = Hmac::<Sha256>::new_from_slice(&app.signing_key).expect("HMAC key size");
@@ -1068,6 +1165,520 @@ fn issue_token_grant_bound(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn auth_login_fixture() -> (App, String) {
+        let app = auth_request_fixture_app();
+        let id = {
+            let mut store = app.store.lock().unwrap();
+            let context = AuthRequestContext {
+                device_type: 8,
+                request_ip: "203.0.113.73",
+                origin: "https://origin.example.test",
+            };
+            let request = AuthRequestCreateRequest {
+                access_code: "NUL\0private-auth-access-sentinel",
+                device_identifier: "Request-Device",
+                email: "alice@example.test",
+                public_key: "opaque-public",
+            };
+            let id = serde_json::to_value(
+                VaultService::new(&mut *store)
+                    .create_auth_request(&request, &context)
+                    .unwrap(),
+            )
+            .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let response = AuthRequestUpdateRequest {
+                device_identifier: "Request-Device",
+                key: "opaque-response-key",
+                master_password_hash: Some("not-the-access-code"),
+                request_approved: true,
+            };
+            VaultService::new(&mut *store)
+                .respond_auth_request(
+                    "alice",
+                    &id,
+                    "Request-Device",
+                    &response,
+                    "https://origin.example.test",
+                )
+                .unwrap();
+            id
+        };
+        (app, id)
+    }
+    fn auth_login_form(id: &str) -> BTreeMap<String, String> {
+        [
+            ("GRANTTYPE", "password"),
+            ("PASSWORD", "NUL\0private-auth-access-sentinel"),
+            ("AuThReQuEsT", id),
+            ("CLIENTID", "opaque-client 雪"),
+            ("SCOPE", "api offline_access"),
+            ("USERNAME", " ALICE@EXAMPLE.TEST "),
+            ("DeviceIdentifier", "Different-Login"),
+            ("device_name", "New login"),
+            ("DEVICETYPE", "-7"),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect()
+    }
+    async fn auth_login_http(
+        app: &App,
+        form: &BTreeMap<String, String>,
+    ) -> Result<Response, Failure> {
+        let body = serde_urlencoded::to_string(form).unwrap();
+        auth_request_http(
+            app,
+            Method::POST,
+            "/identity/connect/token",
+            HeaderMap::new(),
+            body.as_bytes(),
+            Some("2147483647"),
+        )
+        .await
+    }
+    #[tokio::test]
+    async fn auth_login_issues_password_authority_for_new_device_and_poll_remains_readable() {
+        let (app, id) = auth_login_fixture();
+        let account = app
+            .store
+            .lock()
+            .unwrap()
+            .account("id", "alice")
+            .unwrap()
+            .unwrap();
+        let before_poll = device_document(
+            auth_request_http(
+                &app,
+                Method::GET,
+                &auth_response_poll_path(&id),
+                HeaderMap::new(),
+                b"",
+                Some("8"),
+            )
+            .await,
+        )
+        .await;
+        let tokens = device_document(auth_login_http(&app, &auth_login_form(&id)).await).await;
+        let claims = device_claims(&tokens);
+        assert!(
+            tokens["expires_in"] == 7200
+                && tokens["scope"] == "api offline_access"
+                && tokens["refresh_token"].is_string()
+        );
+        assert!(
+            claims["sub"] == "alice"
+                && claims["device"] == "Different-Login"
+                && claims["client_id"] == "opaque-client 雪"
+                && claims["devicetype"] == "Unknown Browser"
+                && claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap() == 7200
+        );
+        let after_poll = device_document(
+            auth_request_http(
+                &app,
+                Method::GET,
+                &auth_response_poll_path(&id),
+                HeaderMap::new(),
+                b"",
+                Some("8"),
+            )
+            .await,
+        )
+        .await;
+        assert!(before_poll == after_poll && after_poll["requestApproved"] == true);
+        {
+            let store = app.store.lock().unwrap();
+            assert!(store.account("id", "alice").unwrap().unwrap() == account);
+            let registered = devices::load(&store.db, "alice", "Different-Login")
+                .unwrap()
+                .unwrap();
+            assert!(registered.device_type == -7 && registered.name == "New login");
+            assert!(
+                devices::access_binding(
+                    &store.db,
+                    &digest(tokens["access_token"].as_str().unwrap()),
+                    "alice"
+                )
+                .unwrap()
+                .as_deref()
+                    == Some("Different-Login")
+            );
+        }
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        let rows = auth_request_persisted_rows(&app.store.lock().unwrap());
+        let Err(error) = auth_login_http(&app, &auth_login_form(&id)).await else {
+            panic!("Consumed request replayed.")
+        };
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        assert!(
+            device_push_persisted_state(&app.store.lock().unwrap()) == before
+                && auth_request_persisted_rows(&app.store.lock().unwrap()) == rows
+        );
+        let refresh = serde_urlencoded::to_string([
+            ("grant_type", "refresh_token"),
+            ("refresh_token", tokens["refresh_token"].as_str().unwrap()),
+            ("CLIENTID", "replacement-client"),
+        ])
+        .unwrap();
+        let refreshed = device_document(
+            auth_request_http(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                refresh.as_bytes(),
+                None,
+            )
+            .await,
+        )
+        .await;
+        assert!(
+            refreshed["expires_in"] == 7200
+                && device_claims(&refreshed)["client_id"] == "replacement-client"
+                && device_claims(&refreshed)["device"] == "Different-Login"
+        );
+        let refresh = serde_urlencoded::to_string([
+            ("grant_type", "refresh_token"),
+            (
+                "refresh_token",
+                refreshed["refresh_token"].as_str().unwrap(),
+            ),
+        ])
+        .unwrap();
+        let refreshed = device_document(
+            auth_request_http(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                refresh.as_bytes(),
+                None,
+            )
+            .await,
+        )
+        .await;
+        assert!(
+            device_claims(&refreshed)["client_id"] == "undefined"
+                && refreshed["expires_in"] == 7200
+        );
+    }
+
+    #[tokio::test]
+    async fn auth_login_required_fields_proof_selection_and_private_disabled_policy_are_atomic() {
+        let (app, id) = auth_login_fixture();
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        let rows = auth_request_persisted_rows(&app.store.lock().unwrap());
+        let mut missing_grant = auth_login_form(&id);
+        missing_grant.remove("GRANTTYPE");
+        let Err(error) = auth_login_http(&app, &missing_grant).await else {
+            panic!("Missing required form field accepted.")
+        };
+        assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
+        for missing in [
+            "PASSWORD",
+            "CLIENTID",
+            "SCOPE",
+            "USERNAME",
+            "DeviceIdentifier",
+            "device_name",
+            "DEVICETYPE",
+        ] {
+            let mut form = auth_login_form(&id);
+            form.remove(missing);
+            let Err(error) = auth_login_http(&app, &form).await else {
+                panic!("Missing grant field accepted.")
+            };
+            assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        }
+        for (key, value) in [
+            ("AuThReQuEsT", ""),
+            ("AuThReQuEsT", "not-a-UUID"),
+            ("PASSWORD", "not-the-access-code"),
+            ("USERNAME", "bob@example.test"),
+            ("SCOPE", "offline_access api"),
+        ] {
+            let mut form = auth_login_form(&id);
+            form.insert(key.into(), value.into());
+            let Err(error) = auth_login_http(&app, &form).await else {
+                panic!("Invalid auth grant accepted.")
+            };
+            assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        }
+        let mut form = auth_login_form("");
+        form.insert("PASSWORD".into(), "fixture-master-hash".into());
+        assert!(
+            auth_login_http(&app, &form).await.is_err(),
+            "Empty authRequest fell back to password verification."
+        );
+        let body = serde_urlencoded::to_string(auth_login_form(&id)).unwrap();
+        let Err(error) = dispatch_with_peer(
+            app.clone(),
+            Method::POST,
+            "/identity/connect/token".parse().unwrap(),
+            HeaderMap::new(),
+            Bytes::from(body),
+            "203.0.113.74".parse().unwrap(),
+        )
+        .await
+        else {
+            panic!("Wrong peer accepted.")
+        };
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        assert!(
+            device_push_persisted_state(&app.store.lock().unwrap()) == before
+                && auth_request_persisted_rows(&app.store.lock().unwrap()) == rows
+        );
+        app.store
+            .lock()
+            .unwrap()
+            .db
+            .execute(
+                "INSERT INTO account_auth_policy(owner,enabled) VALUES('alice',0)",
+                [],
+            )
+            .unwrap();
+        assert!(auth_login_http(&app, &auth_login_form(&id)).await.is_err());
+        assert!(
+            device_push_persisted_state(&app.store.lock().unwrap()) == before
+                && auth_request_persisted_rows(&app.store.lock().unwrap()) == rows
+        );
+    }
+
+    #[tokio::test]
+    async fn auth_login_late_failures_roll_back_consumption_activity_sessions_and_bindings() {
+        for phase in 0..6 {
+            let (app, id) = auth_login_fixture();
+            {
+                let store = app.store.lock().unwrap();
+                let sql = match phase {
+                    0 => {
+                        "CREATE TRIGGER reject_auth_login BEFORE UPDATE OF authentication_date ON auth_requests BEGIN SELECT RAISE(ABORT,'fixture'); END;"
+                    }
+                    1 => {
+                        "CREATE TRIGGER reject_auth_login BEFORE INSERT ON device_registry BEGIN SELECT RAISE(ABORT,'fixture'); END;"
+                    }
+                    2 => {
+                        "CREATE TRIGGER reject_auth_login BEFORE INSERT ON sessions BEGIN SELECT RAISE(ABORT,'fixture'); END;"
+                    }
+                    3 => {
+                        "CREATE TRIGGER reject_auth_login BEFORE INSERT ON session_devices BEGIN SELECT RAISE(ABORT,'fixture'); END;"
+                    }
+                    4 => {
+                        "CREATE TABLE failed_auth_login_commit(owner TEXT REFERENCES accounts(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER reject_auth_login AFTER INSERT ON sessions BEGIN INSERT INTO failed_auth_login_commit(owner) VALUES('missing'); END;"
+                    }
+                    _ => {
+                        "CREATE TRIGGER reject_auth_login BEFORE UPDATE OF updated ON device_registry BEGIN SELECT RAISE(ABORT,'fixture'); END;"
+                    }
+                };
+                store.db.execute_batch(sql).unwrap();
+            }
+            let before = device_push_persisted_state(&app.store.lock().unwrap());
+            let rows = auth_request_persisted_rows(&app.store.lock().unwrap());
+            let mut form = auth_login_form(&id);
+            if phase == 5 {
+                form.insert("DeviceIdentifier".into(), "Request-Device".into());
+            }
+            assert!(auth_login_http(&app, &form).await.is_err());
+            assert!(
+                device_push_persisted_state(&app.store.lock().unwrap()) == before
+                    && auth_request_persisted_rows(&app.store.lock().unwrap()) == rows,
+                "Failed issuance escaped the rollback boundary."
+            );
+            app.store
+                .lock()
+                .unwrap()
+                .db
+                .execute_batch("DROP TRIGGER reject_auth_login")
+                .unwrap();
+            assert!(
+                auth_login_http(&app, &form).await.is_ok(),
+                "Failed issuance consumed the proof."
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_login_opaque_form_id_and_blank_proof_metadata_work_without_uuid_or_type_guard() {
+        let (app, id) = auth_login_fixture();
+        let opaque = "opaque\0request 雪";
+        app.store
+            .lock()
+            .unwrap()
+            .db
+            .execute(
+                "UPDATE auth_requests SET id=?1,access_code='' WHERE id=?2",
+                params![opaque, id],
+            )
+            .unwrap();
+        let mut form = auth_login_form(opaque);
+        for key in [
+            "PASSWORD",
+            "CLIENTID",
+            "DeviceIdentifier",
+            "device_name",
+            "DEVICETYPE",
+        ] {
+            form.insert(key.into(), String::new());
+        }
+        let tokens = device_document(auth_login_http(&app, &form).await).await;
+        assert!(
+            device_claims(&tokens)["device"] == "" && device_claims(&tokens)["client_id"] == ""
+        );
+        let store = app.store.lock().unwrap();
+        let device = devices::load(&store.db, "alice", "").unwrap().unwrap();
+        assert!(device.device_type == 14 && device.name.is_empty());
+    }
+
+    #[tokio::test]
+    async fn auth_login_existing_device_claim_uses_retained_type_and_name() {
+        let (app, id) = auth_login_fixture();
+        let mut form = auth_login_form(&id);
+        form.insert("DeviceIdentifier".into(), "Request-Device".into());
+        form.insert("device_name".into(), "Replacement".into());
+        let tokens = device_document(auth_login_http(&app, &form).await).await;
+        assert!(device_claims(&tokens)["devicetype"] == "Linux");
+        {
+            let store = app.store.lock().unwrap();
+            let device = devices::load(&store.db, "alice", "Request-Device")
+                .unwrap()
+                .unwrap();
+            assert!(device.device_type == 8 && device.name == "Original");
+        }
+        let refresh = serde_urlencoded::to_string([
+            ("grant_type", "refresh_token"),
+            ("refresh_token", tokens["refresh_token"].as_str().unwrap()),
+            ("deviceType", "14"),
+        ])
+        .unwrap();
+        let tokens = device_document(
+            auth_request_http(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                refresh.as_bytes(),
+                None,
+            )
+            .await,
+        )
+        .await;
+        assert!(device_claims(&tokens)["devicetype"] == "Linux");
+    }
+
+    #[tokio::test]
+    async fn auth_login_replay_race_issues_exactly_one_bound_session() {
+        let (app, id) = auth_login_fixture();
+        let count: i64 = app
+            .store
+            .lock()
+            .unwrap()
+            .db
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .unwrap();
+        let form = auth_login_form(&id);
+        let (one, two) = tokio::join!(auth_login_http(&app, &form), auth_login_http(&app, &form));
+        assert!(one.is_ok() != two.is_ok());
+        let store = app.store.lock().unwrap();
+        let after: i64 = store
+            .db
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(after, count + 1);
+    }
+
+    #[tokio::test]
+    async fn auth_login_nested_selector_never_falls_back_to_a_valid_ordinary_password() {
+        let app = device_fixture_app();
+        let mut form =
+            parse_connect_form(&device_login_body("alice", "Nested-Login", "Original", "8"))
+                .unwrap_or_else(|_| panic!("Fixture form failed."));
+        form.insert("client_id".into(), "ordinary-client".into());
+        form.insert("scope".into(), "api offline_access".into());
+        // These credentials are valid on the ordinary password branch.
+        assert!(auth_login_http(&app, &form).await.is_ok());
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        for field in [
+            "authRequest.x",
+            "[authRequest]",
+            ".authRequest",
+            "authRequest[root]",
+            "[AUTHREQUEST]suffix",
+            "[authRequest",
+        ] {
+            let mut nested = form.clone();
+            nested.insert(field.into(), "missing-auth-request".into());
+            let Err(error) = auth_login_http(&app, &nested).await else {
+                panic!("Nested authRequest fell back to ordinary password verification.")
+            };
+            assert_eq!(error.0, StatusCode::BAD_REQUEST);
+            assert!(device_push_persisted_state(&app.store.lock().unwrap()) == before);
+        }
+        for field in [
+            "auth_request.x",
+            "code[root]",
+            "..authRequest",
+            "[authRequest.x]",
+        ] {
+            let mut unrelated = form.clone();
+            unrelated.insert(field.into(), "ignored".into());
+            assert!(
+                auth_login_http(&app, &unrelated).await.is_ok(),
+                "Unrelated form root selected authRequest proof."
+            );
+        }
+        let (app, id) = auth_login_fixture();
+        let mut form = auth_login_form(&id);
+        form.insert("[AUTHREQUEST]suffix".into(), id.clone());
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        let rows = auth_request_persisted_rows(&app.store.lock().unwrap());
+        assert!(
+            auth_login_http(&app, &form).await.is_err(),
+            "Ambiguous selector roots accepted."
+        );
+        assert!(
+            device_push_persisted_state(&app.store.lock().unwrap()) == before
+                && auth_request_persisted_rows(&app.store.lock().unwrap()) == rows
+        );
+        form.remove("AuThReQuEsT");
+        assert!(
+            auth_login_http(&app, &form).await.is_ok(),
+            "Nested selector was not used for proof lookup."
+        );
+    }
+
+    #[tokio::test]
+    async fn auth_login_underscore_field_is_ignored_and_ordinary_password_authority_matches_source()
+    {
+        let app = device_fixture_app();
+        let mut form = parse_connect_form(&device_login_body(
+            "alice",
+            "Ordinary-Login",
+            "Original",
+            "8",
+        ))
+        .unwrap_or_else(|_| panic!("Fixture form failed."));
+        form.insert("client_id".into(), "ordinary-client".into());
+        form.insert("auth_request".into(), "not-an-auth-request-field".into());
+        let body = serde_urlencoded::to_string(form).unwrap();
+        let tokens = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                body.as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        assert!(
+            tokens["expires_in"] == 7200
+                && device_claims(&tokens)["client_id"] == "ordinary-client"
+        );
+    }
 
     fn auth_response_poll_path(id: &str) -> String {
         format!(

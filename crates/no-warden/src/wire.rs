@@ -5,6 +5,34 @@
 use crate::{bounded::BoundedList, identity::Secret};
 use serde::{Deserialize, Serialize};
 
+/// Authentication-request password-grant fields after form decoding. All fields must be
+/// present, including an opaque access code in `password`; present blank strings are not
+/// missing fields. This convenience decoder is not a complete HTTP form/alias parser.
+/// No Serialize implementation is provided, and Debug redacts every field.
+#[derive(Deserialize)]
+pub struct AuthRequestLoginRequest<'a> {
+    pub grant_type: Option<&'a str>,
+    #[serde(borrow)]
+    pub password: Option<Secret<'a>>,
+    #[serde(rename = "authRequest")]
+    pub auth_request: Option<&'a str>,
+    pub client_id: Option<&'a str>,
+    pub scope: Option<&'a str>,
+    pub username: Option<&'a str>,
+    #[serde(rename = "deviceIdentifier", alias = "device_identifier")]
+    pub device_identifier: Option<&'a str>,
+    #[serde(rename = "deviceName", alias = "device_name")]
+    pub device_name: Option<&'a str>,
+    #[serde(rename = "deviceType", alias = "device_type")]
+    pub device_type: Option<&'a str>,
+}
+impl core::fmt::Debug for AuthRequestLoginRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AuthRequestLoginRequest")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Opaque authentication-request decision in upstream positional order. Optional hash
 /// omission/null is accepted in objects; positional sequences must include its slot.
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -1177,6 +1205,53 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auth_request_login_input_borrows_opaque_proof_and_preserves_absence_and_form_values() {
+        let input = r#"{"grant_type":"password","password":"opaque雪","authRequest":"raw-request","client_id":"cli","scope":"api offline_access","username":" ALICE@example.test ","deviceIdentifier":"","deviceName":" ","deviceType":"nonnumeric","ignored":true}"#;
+        let request: AuthRequestLoginRequest<'_> = serde_json::from_str(input).unwrap();
+        assert_eq!(
+            request.password.as_ref().unwrap().expose_secret(),
+            "opaque雪"
+        );
+        assert_eq!(request.auth_request, Some("raw-request"));
+        assert_eq!(request.username, Some(" ALICE@example.test "));
+        assert_eq!(request.device_identifier, Some(""));
+        assert_eq!(request.device_name, Some(" "));
+        assert_eq!(request.device_type, Some("nonnumeric"));
+        let proof_ptr = request.password.as_ref().unwrap().expose_secret().as_ptr() as usize;
+        assert!(
+            (input.as_ptr() as usize..input.as_ptr() as usize + input.len()).contains(&proof_ptr)
+        );
+        assert!(!std::format!("{request:?}").contains("opaque雪"));
+        for input in [
+            "{}",
+            r#"{"password":null,"authRequest":null,"deviceIdentifier":null}"#,
+        ] {
+            let request: AuthRequestLoginRequest<'_> = serde_json::from_str(input).unwrap();
+            assert!(request.password.is_none());
+            assert!(request.auth_request.is_none());
+            assert!(request.device_identifier.is_none());
+        }
+        let request: AuthRequestLoginRequest<'_> = serde_json::from_str(
+            r#"{"password":"","device_identifier":"","device_name":"","device_type":""}"#,
+        )
+        .unwrap();
+        assert_eq!(request.password.as_ref().unwrap().expose_secret(), "");
+        assert_eq!(request.device_identifier, Some(""));
+        assert_eq!(request.device_name, Some(""));
+        assert_eq!(request.device_type, Some(""));
+        for input in [
+            r#"{"password":123}"#,
+            r#"{"authRequest":false}"#,
+            r#"{"username":[]}"#,
+            r#"{"deviceType":14}"#,
+            r#"{"password":"first","password":"second"}"#,
+            r#"{"deviceIdentifier":"first","device_identifier":"second"}"#,
+        ] {
+            assert!(serde_json::from_str::<AuthRequestLoginRequest<'_>>(input).is_err());
+        }
+    }
 
     #[test]
     fn auth_request_update_wire_keeps_required_opaque_fields_optional_hash_and_positional_order() {

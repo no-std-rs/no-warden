@@ -8,7 +8,8 @@ slice covers real Bitwarden CLI personal-vault lifecycles, JSON/CSV imports,
 archive actions, API-key login followed by password unlock, and encrypted
 attachment round trips. Direct HTTP comparisons also cover personal folder,
 account encryption-key, profile/avatar, equivalent-domain, device-discovery,
-disabled-relay push-token, and auth-request creation/decision/polling contracts. The remaining
+disabled-relay push-token, auth-request creation/decision/polling, and one-use
+access-code login contracts. The remaining
 surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden
 replacement. Client-side vault encryption stays with the client.
@@ -49,7 +50,7 @@ cache and never opens your existing vault. See [test tools](tools/README.md).
 CLI orchestration, private subprocess capture, encrypted account fixtures, and
 disposable loopback TLS. Its separate Rust HTTP binary checks folder, account-key,
 profile/avatar, equivalent-domain, device-discovery, disabled-relay push-token,
-and auth-request creation/decision/polling APIs against a configured adapter or
+and auth-request creation/decision/polling/login APIs against a configured adapter or
 Vaultwarden release. Its comparisons include
 the complete pinned global-domain catalog, settings replacement, sync filtering,
 public known-device headers, and owner-scoped device projections. The reference
@@ -70,12 +71,14 @@ accepts a caller-provided `Storage` implementation; borrowed request models and
 bounded collections require no allocator. Opt-in `ImportStorage`,
 `CipherBulkStorage`, `IdentityStorage`, `AccountKeyStorage`,
 `AccountProfileStorage`, `DomainSettingsStorage`, `DeviceStorage`,
-`DevicePushStorage`, `AuthRequestStorage`, `AuthRequestResponseStorage`, and
+`DevicePushStorage`, `AuthRequestStorage`, `AuthRequestResponseStorage`,
+`AuthRequestLoginStorage`, and
 `AttachmentStorage` providers add
 batch operations,
 credential and account-key services, profile metadata and equivalent-domain updates, device discovery,
 registration after verified login, push-token ordering, pending auth-request
-creation/discovery, approval/code-protected polling, and attachment transitions
+creation/discovery, approval/code-protected polling, one-use access-code login,
+and attachment transitions
 without adding an allocator. See [architecture](docs/architecture.md) and
 [CI and review](docs/ci.md).
 
@@ -98,9 +101,18 @@ read-only stored-state comparisons with the relay disabled. Enabled relay
 interoperability remains unverified. Auth-request comparisons cover public
 creation, owner-only lookup/pending lists and device pending metadata. Approval
 and code-protected response polling also pass eight focused HTTP cases against
-both servers. The combined local HTTP run passes all 64 cases and 2594 requests.
-Auth-request login remains open. See the compatibility matrix for scope and
-current CLI regression status.
+both servers. The preceding combined local HTTP milestone passes 64 cases and
+2594 requests. The adapter now also implements the approved-auth-request password
+grant through an opt-in allocation-free provider: exact access code, same direct
+peer, a strict five-minute lifetime and one successful use. The login can register
+a different device; polling remains readable after use. Compact `authRequest`
+roots include Rocket-style dotted/bracketed names, so those inputs cannot fall
+back to an ordinary password. All eight focused login HTTP cases pass against
+both servers: 444 counted requests each, including a real 301-second expiry
+fixture. Host tests cover atomic consumption/session rollback and a private
+enabled-account policy. Required CI reruns the verified 120-command CLI baseline;
+see the compatibility matrix for recorded results. Two-factor/mail policies,
+trusted proxies, expiry cleanup and local rate controls remain open.
 Organizations, sharing, remaining attachment variants, Sends, notifications and
 the remaining account APIs are tracked in the roadmap.
 The local conformance adapter needs further hardening before production use.

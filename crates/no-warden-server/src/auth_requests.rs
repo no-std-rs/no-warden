@@ -39,6 +39,84 @@ pub fn device_type(headers: &HeaderMap) -> i32 {
         .and_then(|value| value.parse().ok())
         .unwrap_or(14)
 }
+
+// Keep nanosecond precision without chrono's i64 timestamp_nanos limitation.
+pub fn unix_nanos(value: chrono::DateTime<chrono::Utc>) -> i128 {
+    i128::from(value.timestamp()) * 1_000_000_000 + i128::from(value.timestamp_subsec_nanos())
+}
+
+pub struct LoginRecord {
+    id: String,
+    owner: String,
+    request_ip: String,
+    approved: Option<bool>,
+    used: bool,
+    created_at_unix_nanos: i128,
+    account_enabled: bool,
+}
+impl LoginRecord {
+    pub fn view(&self) -> no_warden::auth_login::AuthRequestLoginRecord<'_> {
+        no_warden::auth_login::AuthRequestLoginRecord {
+            id: &self.id,
+            owner_id: &self.owner,
+            request_ip: &self.request_ip,
+            approved: self.approved,
+            used: self.used,
+            created_at_unix_nanos: self.created_at_unix_nanos,
+            account_enabled: self.account_enabled,
+        }
+    }
+}
+
+pub fn login_record(
+    db: &rusqlite::Connection,
+    owner: &str,
+    id: &str,
+    code: &no_warden::identity::Secret<'_>,
+) -> rusqlite::Result<Option<LoginRecord>> {
+    let Some(record) = load(db, owner, id)? else {
+        return Ok(None);
+    };
+    if !verify_code(&record.access_code, code) {
+        return Ok(None);
+    }
+    let (used, enabled): (bool, bool) = db.query_row(
+        "SELECT authentication_date IS NOT NULL,COALESCE((SELECT enabled FROM account_auth_policy WHERE owner=?1),1) FROM auth_requests WHERE owner=?1 AND id=?2",
+        rusqlite::params![owner,id], |row| Ok((row.get(0)?,row.get(1)?)),
+    )?;
+    let created = chrono::DateTime::parse_from_rfc3339(&record.created)
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    Ok(Some(LoginRecord {
+        id: record.id,
+        owner: record.owner,
+        request_ip: record.request_ip,
+        approved: record.approved,
+        used,
+        created_at_unix_nanos: unix_nanos(created.with_timezone(&chrono::Utc)),
+        account_enabled: enabled,
+    }))
+}
+
+pub fn consume_login(
+    db: &mut rusqlite::Connection,
+    owner: &str,
+    id: &str,
+    now_unix_nanos: i128,
+) -> rusqlite::Result<bool> {
+    let seconds = i64::try_from(now_unix_nanos.div_euclid(1_000_000_000))
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let nanos = now_unix_nanos.rem_euclid(1_000_000_000) as u32;
+    let date = chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, nanos)
+        .ok_or(rusqlite::Error::InvalidQuery)?
+        .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+    let transaction = db.savepoint()?;
+    let changed = transaction.execute(
+        "UPDATE auth_requests SET authentication_date=?1 WHERE owner=?2 AND id=?3 AND approved=1 AND authentication_date IS NULL",
+        rusqlite::params![date,owner,id],
+    )?;
+    transaction.commit()?;
+    Ok(changed == 1)
+}
 pub fn origin(base: &str) -> Result<String, Failure> {
     let url = url::Url::parse(base).map_err(|_| {
         Failure(
@@ -219,6 +297,22 @@ fn query_root(name: &str) -> &str {
         .split(['.', '['])
         .next()
         .unwrap_or_default()
+}
+
+// Rocket's ConnectData matches the first name segment before handing scalar
+// AuthRequestId its shifted field. Keep this compact selector separate from
+// the adapter's other inherited form-field parsing policies.
+pub fn auth_request_field(
+    form: &std::collections::BTreeMap<String, String>,
+) -> Result<Option<&str>, Failure> {
+    let mut matches = form
+        .iter()
+        .filter(|(name, _)| query_root(name).eq_ignore_ascii_case("authrequest"));
+    let value = matches.next().map(|(_, value)| value.as_str());
+    if matches.next().is_some() {
+        return Err(crate::invalid());
+    }
+    Ok(value)
 }
 pub fn query_code(query: Option<&str>) -> Result<String, Failure> {
     let missing = || {

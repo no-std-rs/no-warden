@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 274 active Rust tests: 126 core, 92 host, and 56 conformance
+The workspace has 299 active Rust tests: 136 core, 104 host, and 59 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -41,13 +41,18 @@ against Vaultwarden `1.37.4`: 199 requests, including five login attempts (four
 successful and one rejected) and one refresh. They verify known-device headers,
 exact owner-only projections, path guards, login metadata retention, API-key
 registration and refresh identity without changing account/vault state.
-The default adapter job runs all 64 cases, totaling 2594 counted requests.
+The default adapter job runs all 72 cases, including authentication-request login
+and real-time expiry. All 72 cases passed locally with 3038 counted requests.
+The eight authentication-request login cases also passed against Vaultwarden
+`1.37.4`: 444 requests per server, including 43 identity requests and a real
+301-second expiry check.
 Eight token cases add 383 requests and three password logins, covering both
 update/clear aliases, opaque strings, positional input, empty success bodies,
 and authentication/path/JSON guard order. The public clears use the reference
 configuration with push disabled; actual relay behavior remains open.
 Reference comparisons use `--suite personal`, `--suite devices`, and
-`--suite device-tokens`, `--suite auth-requests`, and `--suite auth-responses` in separate
+`--suite device-tokens`, `--suite auth-requests`, `--suite auth-responses`,
+and `--suite auth-login` in separate
 fresh disposable Vaultwarden processes. The separate reference CLI comparison starts another fresh process, preserving the
 reference's default ten-login limit.
 The required client job reruns the unchanged 120-command CLI flow for the final
@@ -55,7 +60,8 @@ head. Its verified baseline covers both servers; it establishes no domain
 mutation, settings request trace or device-route trace.
 `BW_FOLDER_RECEIPT`, `BW_ACCOUNT_KEYS_RECEIPT`, `BW_PROFILE_RECEIPT`,
 `BW_DOMAINS_RECEIPT`, `BW_DEVICES_RECEIPT`, `BW_DEVICE_TOKENS_RECEIPT`,
-`BW_AUTH_REQUESTS_RECEIPT`, and `BW_AUTH_RESPONSES_RECEIPT`
+`BW_AUTH_REQUESTS_RECEIPT`, `BW_AUTH_RESPONSES_RECEIPT`, and
+`BW_AUTH_LOGIN_RECEIPT`
 select optional private per-group
 receipts. The domain
 receipt also records the public catalog count and fingerprint, without account
@@ -157,7 +163,7 @@ routes, opaque required fields, client-type defaults, exact projections, owner
 and UUID guards, pending aliases and latest device metadata. The no-allocator
 consumer links request decoding and created/stored/pending-list serializers.
 Host tests include rollback, reopen and actual socket-peer capture. Forwarded-IP
-configuration, login consumption, notifications and expiry/rate controls remain
+configuration, notifications and expiry/rate controls remain
 separate parity work.
 
 
@@ -167,7 +173,7 @@ secret code input, approved/rejected-snapshot projections and both route kinds.
 The adapter owns constant-time code verification, response timestamps and atomic
 persistence. Required CI reruns the default HTTP suite and the unchanged
 120-command real-client regression; the selected reference group runs in its
-own fresh process. Login consumption and notification/expiry/proxy/rate behavior
+own fresh process. Notification/expiry/proxy/rate behavior
 remain separate work.
 
 
@@ -178,3 +184,14 @@ of 50; six rejected query/path guards do not enter the polling handler. The
 focused group verifies positive transitions and negative owner/device/code/type/IP
 boundaries. All 97 coverage, client-inventory and repository-policy tests pass;
 those checks preserve source binding and keep all 294 upstream handlers visible.
+
+
+The authentication-login group exercises the password-grant `authRequest`
+variant, single-use consumption and refresh authority. Its expiry case creates
+and approves a real request, runs other cases, then waits until at least 301
+monotonic seconds after creation before checking rejection. Exact nanosecond
+boundary conditions use core/host tests. Real loopback peers isolate fixture
+login budgets under unchanged reference limits; no forwarding headers or clock
+overrides are used. This adds roughly five minutes to the HTTP job. The
+no-allocator consumer links the borrowed convenience decoder and private
+record/context/device types without a secret serializer or clock dependency.

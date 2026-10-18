@@ -5,6 +5,7 @@
 
 pub mod account_keys;
 pub mod account_profile;
+pub mod auth_login;
 pub mod auth_requests;
 pub mod auth_responses;
 pub mod capture;

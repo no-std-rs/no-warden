@@ -55,7 +55,7 @@ wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
 The ledger records positive or restart HTTP evidence for 68 patterns, negative
-HTTP evidence for 67, 125 named HTTP cases, and 31 CLI command patterns. These are
+HTTP evidence for 67, 133 named HTTP cases, and 31 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -502,7 +502,7 @@ All eight Rust device cases pass against the adapter and official Vaultwarden
 attempts (four successful and one rejected) and one refresh. The previously verified
 32-case personal selection runs separately; fresh reference processes keep
 both selections within the unchanged default login limit. The default adapter
-entry point runs all 64 cases. No CLI device-route trace or full-parity flag is
+entry point runs all 72 cases. No CLI device-route trace or full-parity flag is
 claimed, and the full API delivery goal remains open.
 
 
@@ -578,7 +578,7 @@ creation date; single-device projections remain seven fields.
 
 Eight Rust cases pass against both the adapter and actual Vaultwarden `1.37.4`:
 273 requests, five successful logins and 33 decoded creation attempts each. The
-full local suite passes 64 cases and 2594 requests. Each reference selection uses
+prior creation/discovery/response subtotal passed 64 cases and 2594 requests. Each reference selection uses
 a fresh process within unchanged default limits. Opaque non-UUID device IDs,
 header fallback/raw types, ignored fields, schema/positional inputs, owner and
 UUID guards, repeated creation and latest-pending metadata have direct HTTP
@@ -589,8 +589,7 @@ The adapter records the direct socket peer and canonical configured URL origin.
 Vaultwarden can honor configured `X-Real-IP` from trusted proxies, including local
 peers by default; that forwarding policy remains unimplemented here. A socket
 test verifies adapter behavior, not equivalence for that proxy configuration.
-Authentication-request login, notifications/events, expiry cleanup and rate
-controls remain open. No CLI
+Notifications/events, expiry cleanup and rate controls remain open. No CLI
 request trace or complete authentication-request/API parity is claimed.
 
 The authentication-response slice adds authenticated `PUT /api/auth-requests/<id>`
@@ -614,8 +613,8 @@ Public polling ignores bearer authority, requires a code query field, and checks
 that code plus the exact recorded device type and direct peer IP. Pending and
 approved records use the existing explicit eleven-field response model; polling
 does not consume them. The adapter verifies fixed-size HMAC tags in constant
-time and keeps all credential values out of diagnostics. Login consumption,
-notifications, expiry cleanup, rate controls and trusted forwarding remain open;
+time and keeps all credential values out of diagnostics. Notifications, expiry
+cleanup, rate controls and trusted forwarding remain open;
 these two routes do not complete the authentication-request lifecycle.
 
 
@@ -631,3 +630,43 @@ alternate-loopback peer rejection, and pending-list/device transitions. Hidden
 stored response-device IDs, rollback, account/device invariants and database
 reopen remain separately established by host/provider tests. These direct HTTP
 results add no CLI auth-request login or captured route trace.
+
+
+## Authentication-request login
+
+The existing `POST /identity/connect/token` password grant accepts the compact
+case-insensitive `authRequest` form field. Its `password` value is then the
+request's opaque access code. It never falls back to the account password when
+that field is present. The
+[pinned login handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L370-L498)
+requires an owned approved request, unused authentication state, the same peer
+IP and age strictly below five minutes from creation. Login device identifier and
+type need not match the requesting device. Required fields distinguish absent
+from present empty strings; scope must equal `api offline_access`.
+
+`AuthRequestLoginRequest` borrows decoded fields and a redacted `Secret` proof;
+it cannot be serialized implicitly. `AuthRequestLoginStorage` verifies codes in
+the adapter, returns private eligibility data and atomically claims unused
+requests. Trusted full-width nanosecond time stays in `AuthRequestLoginContext`.
+The core validates the strict deadline and returns a private-construction grant
+owning the provider's account handle, freeing storage borrows for issuance.
+
+The adapter wraps consumption, login-device registration and session/binding
+issuance in one rollback boundary. This is stronger local failure atomicity than
+upstream's separate later issuance steps. A private enabled-policy table governs
+account authority; registration and profile extras cannot change it. Successful
+login preserves approval/key/hash fields, and public polling remains readable.
+Shared password/refresh issuance now uses upstream's two-hour access lifetime,
+requested client ID (or `undefined` when omitted), and retained registered-device
+type. API-key grants keep their access-only scope. Existing stricter refresh
+rotation and unimplemented mobile lifetime, 2FA/mail/SSO/admin policy, events,
+notifications, purge/rate/proxy variants keep this route partial.
+
+The eight selected login cases passed against the adapter and actual Vaultwarden
+`1.37.4`, each with 444 counted HTTP requests and 43 identity requests: two
+ordinary logins, seven successful request-based logins, two refreshes and 32
+rejects. Twelve creations and twelve public response polls include polling after
+consumption and expiry. The expiry check waited 301 real seconds; four nested
+`authRequest` roots rejected valid ordinary passwords instead of falling back.
+The full local selection passed all 72 cases with 3038 counted requests. These
+results establish no CLI request-login command or captured route trace.
