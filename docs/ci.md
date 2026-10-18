@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 250 active Rust tests: 117 core, 81 host, and 52 conformance
+The workspace has 274 active Rust tests: 126 core, 92 host, and 56 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -41,13 +41,13 @@ against Vaultwarden `1.37.4`: 199 requests, including five login attempts (four
 successful and one rejected) and one refresh. They verify known-device headers,
 exact owner-only projections, path guards, login metadata retention, API-key
 registration and refresh identity without changing account/vault state.
-The default adapter job runs all 56 cases, totaling 2272 counted requests.
+The default adapter job runs all 64 cases, totaling 2594 counted requests.
 Eight token cases add 383 requests and three password logins, covering both
 update/clear aliases, opaque strings, positional input, empty success bodies,
 and authentication/path/JSON guard order. The public clears use the reference
 configuration with push disabled; actual relay behavior remains open.
 Reference comparisons use `--suite personal`, `--suite devices`, and
-`--suite device-tokens`, and `--suite auth-requests` in separate
+`--suite device-tokens`, `--suite auth-requests`, and `--suite auth-responses` in separate
 fresh disposable Vaultwarden processes. The separate reference CLI comparison starts another fresh process, preserving the
 reference's default ten-login limit.
 The required client job reruns the unchanged 120-command CLI flow for the final
@@ -55,7 +55,7 @@ head. Its verified baseline covers both servers; it establishes no domain
 mutation, settings request trace or device-route trace.
 `BW_FOLDER_RECEIPT`, `BW_ACCOUNT_KEYS_RECEIPT`, `BW_PROFILE_RECEIPT`,
 `BW_DOMAINS_RECEIPT`, `BW_DEVICES_RECEIPT`, `BW_DEVICE_TOKENS_RECEIPT`,
-and `BW_AUTH_REQUESTS_RECEIPT`
+`BW_AUTH_REQUESTS_RECEIPT`, and `BW_AUTH_RESPONSES_RECEIPT`
 select optional private per-group
 receipts. The domain
 receipt also records the public catalog count and fingerprint, without account
@@ -157,5 +157,24 @@ routes, opaque required fields, client-type defaults, exact projections, owner
 and UUID guards, pending aliases and latest device metadata. The no-allocator
 consumer links request decoding and created/stored/pending-list serializers.
 Host tests include rollback, reopen and actual socket-peer capture. Forwarded-IP
-configuration, approval, public polling, login consumption, notifications and
-expiry/rate controls remain separate parity work.
+configuration, login consumption, notifications and expiry/rate controls remain
+separate parity work.
+
+
+The authentication-response group adds approval/rejection and public response
+polling. Its no-allocator consumer exercises the borrowed update request,
+secret code input, approved/rejected-snapshot projections and both route kinds.
+The adapter owns constant-time code verification, response timestamps and atomic
+persistence. Required CI reruns the default HTTP suite and the unchanged
+120-command real-client regression; the selected reference group runs in its
+own fresh process. Login consumption and notification/expiry/proxy/rate behavior
+remain separate work.
+
+
+The eight response cases pass against the adapter and actual Vaultwarden 1.37.4
+with 322 requests and four logins per target. Eleven decoded creates and
+33 guard-valid polls share a 44-attempt public budget below the unchanged limit
+of 50; six rejected query/path guards do not enter the polling handler. The
+focused group verifies positive transitions and negative owner/device/code/type/IP
+boundaries. All 97 coverage, client-inventory and repository-policy tests pass;
+those checks preserve source binding and keep all 294 upstream handlers visible.

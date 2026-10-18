@@ -198,15 +198,16 @@ BW_E2E_SERVER=http://127.0.0.1:8001 cargo run --locked \
 ```
 
 By default the binary runs folders, account keys, profile/avatar, equivalent
-domains, devices, device tokens, then authentication requests: 56 cases. `--suite personal` selects the first four groups;
+domains, devices, device tokens, authentication requests, then responses: 64 cases. `--suite personal` selects the first four groups;
 `--suite devices` selects discovery; `--suite device-tokens` selects token routes;
 `--suite auth-requests` selects authentication-request creation and reads.
+`--suite auth-responses` selects approval, rejection and public response polling.
 Individual selectors are `folders`,
 `account-keys`, `profile`, and `domains`; `--suite all` is the default.
 Invalid arguments return exit code 2 without echoing supplied values.
 `BW_FOLDER_RECEIPT`, `BW_ACCOUNT_KEYS_RECEIPT`, `BW_PROFILE_RECEIPT`,
 `BW_DOMAINS_RECEIPT`, `BW_DEVICES_RECEIPT`, `BW_DEVICE_TOKENS_RECEIPT`,
-and `BW_AUTH_REQUESTS_RECEIPT`
+`BW_AUTH_REQUESTS_RECEIPT`, and `BW_AUTH_RESPONSES_RECEIPT`
 optionally name new private result
 files for their respective groups. Existing paths are
 rejected; files are created with mode 0600 and contain authored case names,
@@ -216,7 +217,7 @@ requests: five login attempts (four successful and one deliberately rejected)
 and one refresh. Run these selections in separate fresh disposable reference
 processes to stay within its unchanged default ten-login limit. Use another
 fresh reference process for the complete CLI comparison. The adapter's CI job
-runs all 56 cases together; do not run that combined selection against one
+runs all 64 cases together; do not run that combined selection against one
 reference process with default limits.
 Other HTTP and persistence groups still use their
 existing JavaScript tools.
@@ -302,9 +303,10 @@ that handler. The adapter does not yet implement the reference rate controls.
 Device identifiers in headers and login forms remain opaque. Authenticated
 lookup paths accept ASCII letters, digits and hyphens after percent-decoding;
 they are not UUID paths. List entries have ten fields and single responses
-seven. Approval of authentication requests, trust/key setup, enabled push relay
-and notification lifecycles remain unimplemented by the adapter. The core exposes a borrowed
-pending-auth projection without claiming that lifecycle.
+seven. Authentication-request approval and polling now have their own comparison
+group. Trust/key setup, enabled push relay and notification lifecycles remain
+unimplemented by the adapter; the borrowed pending projection is a narrower
+contract than the complete authentication-request lifecycle.
 
 The token group checks POST/PUT update and clear aliases. Update paths have
 normal device syntax guards, but the verified session's device is the mutation
@@ -331,7 +333,7 @@ The authentication-request group passes eight cases against both actual servers:
 273 requests, five successful logins and 33 decoded creation attempts. Run
 `--suite auth-requests` in its own fresh reference process. Its optional private
 receipt also records the decoded creation count; schema rejections do not enter
-the handler. The full local suite passes 56 cases and 2272 requests. Preserve
+the handler. The full local suite passes 64 cases and 2594 requests. Preserve
 separate reference processes rather than combining groups across default limits.
 
 This group checks public creation for existing owner/device/type pairs and the
@@ -341,8 +343,8 @@ created false versus pending null, positional/schema cases, owner/UUID guards,
 repeated creation and the latest pending two-field metadata in device lists.
 Access codes and internal identities never enter authentication-request responses.
 Actual peer IP and canonical advertised origin are adapter inputs; configurable
-trusted-proxy forwarding remains unimplemented. Approval, code-protected public
-polling, auth-request login, notification and expiry/rate controls remain open.
+trusted-proxy forwarding remains unimplemented. Auth-request login, notifications
+and expiry/rate controls remain open.
 
 ## Compare against upstream Vaultwarden
 
@@ -445,3 +447,16 @@ public key; `bw get fingerprint <user-id>` requests that user’s public key fro
 the server. The runner requires the two fingerprints to match without printing
 either fingerprint or the account ID. This is direct client evidence for the
 public-key read flow, with no captured route trace or full-parity claim.
+
+
+The `--suite auth-responses` comparison uses another fresh reference process.
+Its eight cases cover approval, rejection, repeated non-consuming polling,
+verified response-device and owner boundaries, opaque/nullable/positional input,
+JSON and path guards, code query decoding and duplicate selection, raw client
+header defaults, ignored bearers, alternate-loopback IP rejection, and pending
+projection transitions. The fixture passes against both actual servers with 322 requests and four
+password logins per target. Eleven decoded creations plus 33 guard-valid polls
+make 44 public handler entries, preserving the reference's unchanged burst
+limit of 50; six path/query guard rejects do not enter that handler. Set `BW_AUTH_RESPONSES_RECEIPT` to a new path for a
+private receipt containing only authored case names and counters. The selected group passes with exit zero against both servers; no CLI
+auth-request login or route trace is inferred from this suite.

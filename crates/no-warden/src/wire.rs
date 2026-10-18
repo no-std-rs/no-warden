@@ -5,6 +5,23 @@
 use crate::{bounded::BoundedList, identity::Secret};
 use serde::{Deserialize, Serialize};
 
+/// Opaque authentication-request decision in upstream positional order. Optional hash
+/// omission/null is accepted in objects; positional sequences must include its slot.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthRequestUpdateRequest<'a> {
+    pub device_identifier: &'a str,
+    pub key: &'a str,
+    pub master_password_hash: Option<&'a str>,
+    pub request_approved: bool,
+}
+impl core::fmt::Debug for AuthRequestUpdateRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AuthRequestUpdateRequest")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Opaque public authentication-request input, in pinned positional field order.
 /// Required strings can be empty. Borrow escaped strings from decoded caller-owned scratch.
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -1160,6 +1177,72 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auth_request_update_wire_keeps_required_opaque_fields_optional_hash_and_positional_order() {
+        for (input, device, key, hash, approved) in [
+            (r#"["device","key",null,true]"#, "device", "key", None, true),
+            (r#"["","","",false]"#, "", "", Some(""), false),
+            (
+                r#"{"deviceIdentifier":"device","key":"opaque雪","requestApproved":false,"ignored":true}"#,
+                "device",
+                "opaque雪",
+                None,
+                false,
+            ),
+            (
+                r#"{"deviceIdentifier":"device","key":"key","masterPasswordHash":"hash","requestApproved":true}"#,
+                "device",
+                "key",
+                Some("hash"),
+                true,
+            ),
+        ] {
+            let value: AuthRequestUpdateRequest<'_> = serde_json::from_str(input).unwrap();
+            assert_eq!(
+                (
+                    value.device_identifier,
+                    value.key,
+                    value.master_password_hash,
+                    value.request_approved
+                ),
+                (device, key, hash, approved)
+            );
+            assert_eq!(
+                serde_json::to_value(value).unwrap(),
+                serde_json::json!({"deviceIdentifier":device,"key":key,"masterPasswordHash":hash,"requestApproved":approved})
+            );
+        }
+        for input in [
+            "{}",
+            "[]",
+            r#"["d","k"]"#,
+            r#"["d","k",true]"#,
+            r#"["d","k",null,true,0]"#,
+            r#"{"deviceIdentifier":null,"key":"k","requestApproved":true}"#,
+            r#"{"deviceIdentifier":"d","key":null,"requestApproved":false}"#,
+            r#"{"deviceIdentifier":"d","key":"k"}"#,
+            r#"{"deviceIdentifier":"d","key":"k","requestApproved":null}"#,
+            r#"{"deviceIdentifier":"d","key":"k","requestApproved":1}"#,
+            r#"{"deviceIdentifier":"d","key":"k","masterPasswordHash":false,"requestApproved":true}"#,
+            r#"{"deviceIdentifier":"d","key":"k","requestApproved":true,"requestApproved":false}"#,
+        ] {
+            assert!(serde_json::from_str::<AuthRequestUpdateRequest<'_>>(input).is_err());
+        }
+        let value = AuthRequestUpdateRequest {
+            device_identifier: "hidden-device\0雪",
+            key: "hidden-key\"",
+            master_password_hash: Some("hidden-hash\0雪"),
+            request_approved: false,
+        };
+        let projected = serde_json::to_value(value).unwrap();
+        assert_eq!(projected["key"], value.key);
+        assert_eq!(
+            projected["masterPasswordHash"],
+            value.master_password_hash.unwrap()
+        );
+        assert!(!std::format!("{value:?}").contains("hidden"));
+    }
 
     #[test]
     fn auth_request_create_wire_keeps_four_required_opaque_strings_and_positional_order() {

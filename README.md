@@ -8,7 +8,7 @@ slice covers real Bitwarden CLI personal-vault lifecycles, JSON/CSV imports,
 archive actions, API-key login followed by password unlock, and encrypted
 attachment round trips. Direct HTTP comparisons also cover personal folder,
 account encryption-key, profile/avatar, equivalent-domain, device-discovery,
-disabled-relay push-token, and auth-request discovery contracts. The remaining
+disabled-relay push-token, and auth-request creation/decision/polling contracts. The remaining
 surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden
 replacement. Client-side vault encryption stays with the client.
@@ -49,8 +49,8 @@ cache and never opens your existing vault. See [test tools](tools/README.md).
 CLI orchestration, private subprocess capture, encrypted account fixtures, and
 disposable loopback TLS. Its separate Rust HTTP binary checks folder, account-key,
 profile/avatar, equivalent-domain, device-discovery, disabled-relay push-token,
-and auth-request discovery APIs against a configured adapter or Vaultwarden
-release. Its comparisons include
+and auth-request creation/decision/polling APIs against a configured adapter or
+Vaultwarden release. Its comparisons include
 the complete pinned global-domain catalog, settings replacement, sync filtering,
 public known-device headers, and owner-scoped device projections. The reference
 release is Vaultwarden `1.37.4`.
@@ -70,11 +70,12 @@ accepts a caller-provided `Storage` implementation; borrowed request models and
 bounded collections require no allocator. Opt-in `ImportStorage`,
 `CipherBulkStorage`, `IdentityStorage`, `AccountKeyStorage`,
 `AccountProfileStorage`, `DomainSettingsStorage`, `DeviceStorage`,
-`DevicePushStorage`, `AuthRequestStorage`, and `AttachmentStorage` providers add
+`DevicePushStorage`, `AuthRequestStorage`, `AuthRequestResponseStorage`, and
+`AttachmentStorage` providers add
 batch operations,
 credential and account-key services, profile metadata and equivalent-domain updates, device discovery,
 registration after verified login, push-token ordering, pending auth-request
-creation/discovery, and attachment transitions
+creation/discovery, approval/code-protected polling, and attachment transitions
 without adding an allocator. See [architecture](docs/architecture.md) and
 [CI and review](docs/ci.md).
 
@@ -95,8 +96,11 @@ legacy/v2 uploads, scoped downloads, metadata updates and deletion cleanup.
 Device push-token write/clear aliases also pass focused HTTP and private
 read-only stored-state comparisons with the relay disabled. Enabled relay
 interoperability remains unverified. Auth-request comparisons cover public
-creation, owner-only lookup/pending lists and device pending metadata; approval
-and auth-request login remain open. See the compatibility matrix for scope.
+creation, owner-only lookup/pending lists and device pending metadata. Approval
+and code-protected response polling also pass eight focused HTTP cases against
+both servers. The combined local HTTP run passes all 64 cases and 2594 requests.
+Auth-request login remains open. See the compatibility matrix for scope and
+current CLI regression status.
 Organizations, sharing, remaining attachment variants, Sends, notifications and
 the remaining account APIs are tracked in the roadmap.
 The local conformance adapter needs further hardening before production use.

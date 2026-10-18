@@ -4,6 +4,7 @@ use no_warden::{
     account_keys::{AccountKeyState, AccountKeyStorage},
     account_profile::AccountProfileStorage,
     auth_requests::{AuthRequestContext, AuthRequestRecord, AuthRequestStorage},
+    auth_responses::AuthRequestResponseStorage,
     bulk::{CipherBulkOperation, CipherBulkStorage, ValidatedCipherBulk},
     device_push::{ClearedDevicePush, DevicePushState, DevicePushStorage},
     devices::{DeviceRecord, DeviceRegistration, DeviceStorage},
@@ -12,8 +13,9 @@ use no_warden::{
     import::{ImportData, ImportStorage, ValidatedImport},
     service::ItemMetadata,
     wire::{
-        AccountKeys, ApiKeyResponse, AuthRequestCreateRequest, AvatarUpdateRequest, CipherRequest,
-        DevicePushTokenRequest, FolderRequest, ProfileUpdateRequest, RegisterRequest,
+        AccountKeys, ApiKeyResponse, AuthRequestCreateRequest, AuthRequestUpdateRequest,
+        AvatarUpdateRequest, CipherRequest, DevicePushTokenRequest, FolderRequest,
+        ProfileUpdateRequest, RegisterRequest,
     },
 };
 use rand::{
@@ -620,6 +622,34 @@ impl CipherBulkStorage for Store {
     }
 }
 
+impl AuthRequestResponseStorage for Store {
+    fn respond_auth_request(
+        &mut self,
+        owner: &str,
+        id: &str,
+        request: &AuthRequestUpdateRequest<'_>,
+    ) -> rusqlite::Result<AuthRequestRecord<'_>> {
+        let record = crate::auth_requests::respond(&mut self.db, owner, id, request)?;
+        self.auth_request_cache = Some(record);
+        Ok(self
+            .auth_request_cache
+            .as_ref()
+            .expect("Committed auth-response cache.")
+            .view())
+    }
+    fn auth_request_by_code(
+        &mut self,
+        id: &str,
+        code: &Secret<'_>,
+    ) -> rusqlite::Result<Option<AuthRequestRecord<'_>>> {
+        self.auth_request_cache = crate::auth_requests::by_code(&self.db, id, code)?;
+        Ok(self
+            .auth_request_cache
+            .as_ref()
+            .map(crate::auth_requests::Record::view))
+    }
+}
+
 impl AuthRequestStorage for Store {
     type OwnerId = String;
     type Requests<'a> = &'a crate::auth_requests::Requests;
@@ -1020,6 +1050,362 @@ mod tests {
     use serde::Deserialize;
 
     const CIPHERTEXT: &str = "2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+    fn respond_fixture_auth(
+        store: &mut Store,
+        id: &str,
+        device: &str,
+        key: &str,
+        hash: Option<&str>,
+        approved: bool,
+    ) -> Result<Value, no_warden::ApiError> {
+        let request = AuthRequestUpdateRequest {
+            device_identifier: device,
+            key,
+            master_password_hash: hash,
+            request_approved: approved,
+        };
+        serde_json::to_value(VaultService::new(store).respond_auth_request(
+            "alice",
+            id,
+            device,
+            &request,
+            "https://origin.example.test",
+        )?)
+        .map_err(|_| no_warden::ApiError::invalid("fixture", "Auth-response serialization failed"))
+    }
+    #[test]
+    fn auth_response_approval_sets_only_response_fields_and_polling_is_repeatable() {
+        let mut store = auth_request_fixture();
+        let before = snapshot(&store);
+        let authority = account_authority_snapshot(&store);
+        let devices = device_rows(&store);
+        let pushes = device_push_rows(&store);
+        for hash in [None, Some(""), Some("NUL\0opaque-hash-雪")] {
+            let created =
+                create_fixture_auth_request(&mut store, "alice@example.test", "Request-Device", 8)
+                    .unwrap();
+            let id = created["id"].as_str().unwrap();
+            let approved = respond_fixture_auth(
+                &mut store,
+                id,
+                "Other-Device",
+                "NUL\0opaque-key-雪",
+                hash,
+                true,
+            )
+            .unwrap();
+            assert_eq!(approved.as_object().unwrap().len(), 11);
+            assert!(
+                approved["requestApproved"] == true
+                    && approved["key"] == "NUL\0opaque-key-雪"
+                    && approved["masterPasswordHash"] == json!(hash)
+            );
+            assert!(
+                approved["publicKey"] == created["publicKey"]
+                    && approved["requestIpAddress"] == created["requestIpAddress"]
+                    && approved["creationDate"] == created["creationDate"]
+                    && !approved["responseDate"].is_null()
+            );
+            let response_device: String = store
+                .db
+                .query_row(
+                    "SELECT response_device_id FROM auth_requests WHERE id=?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(response_device == "Other-Device");
+            let requests = auth_request_rows(&store);
+            let context = AuthRequestContext {
+                device_type: 8,
+                request_ip: "203.0.113.27",
+                origin: "https://origin.example.test",
+            };
+            for _ in 0..2 {
+                let polled = serde_json::to_value(
+                    VaultService::new(&mut store)
+                        .get_auth_request_response(
+                            id,
+                            &Secret::new("NUL\0private-access-sentinel"),
+                            &context,
+                        )
+                        .unwrap(),
+                )
+                .unwrap();
+                assert!(polled == approved);
+            }
+            assert!(
+                respond_fixture_auth(&mut store, id, "Other-Device", "replacement", None, true)
+                    .is_err()
+            );
+            assert!(
+                respond_fixture_auth(&mut store, id, "Other-Device", "replacement", None, false)
+                    .is_err()
+            );
+            assert!(auth_request_rows(&store) == requests);
+        }
+        let pending = serde_json::to_value(
+            VaultService::new(&mut store)
+                .list_auth_requests("alice", "https://origin.example.test")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(pending["data"].as_array().unwrap().is_empty());
+        let list =
+            serde_json::to_value(VaultService::new(&mut store).list_devices("alice").unwrap())
+                .unwrap();
+        assert!(
+            list["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|item| item["devicePendingAuthRequest"].is_null())
+        );
+        assert!(
+            snapshot(&store) == before
+                && account_authority_snapshot(&store) == authority
+                && device_rows(&store) == devices
+                && device_push_rows(&store) == pushes
+        );
+    }
+    #[test]
+    fn auth_response_rejection_deletes_only_pending_row_and_returns_old_snapshot_with_fresh_date() {
+        let mut store = auth_request_fixture();
+        let created =
+            create_fixture_auth_request(&mut store, "alice@example.test", "Request-Device", 8)
+                .unwrap();
+        let id = created["id"].as_str().unwrap();
+        let foreign =
+            create_fixture_auth_request(&mut store, "bob@example.test", "Request-Device", 8)
+                .unwrap();
+        store.db.execute("UPDATE auth_requests SET encrypted_key='previous-key',master_password_hash='previous-hash',response_date='2000-01-01T00:00:00.000000Z' WHERE id=?1",[id]).unwrap();
+        let before = snapshot(&store);
+        let authority = account_authority_snapshot(&store);
+        let devices = device_rows(&store);
+        let rejected = respond_fixture_auth(
+            &mut store,
+            id,
+            "Other-Device",
+            "untrusted-new-key",
+            Some("untrusted-new-hash"),
+            false,
+        )
+        .unwrap();
+        assert!(
+            rejected["id"] == id
+                && rejected["requestApproved"].is_null()
+                && rejected["key"] == "previous-key"
+                && rejected["masterPasswordHash"] == "previous-hash"
+                && rejected["responseDate"] != "2000-01-01T00:00:00.000000Z"
+                && rejected["creationDate"] == created["creationDate"]
+        );
+        assert!(
+            crate::auth_requests::load(&store.db, "alice", id)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            crate::auth_requests::load(&store.db, "bob", foreign["id"].as_str().unwrap())
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            respond_fixture_auth(&mut store, id, "Other-Device", "retry", None, false).is_err()
+        );
+        assert!(
+            crate::auth_requests::by_code(
+                &store.db,
+                id,
+                &Secret::new("NUL\0private-access-sentinel")
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            snapshot(&store) == before
+                && account_authority_snapshot(&store) == authority
+                && device_rows(&store) == devices
+        );
+    }
+    #[test]
+    fn auth_response_bad_code_type_ip_owner_and_session_device_never_mutate() {
+        let mut store = auth_request_fixture();
+        let created =
+            create_fixture_auth_request(&mut store, "alice@example.test", "Request-Device", 8)
+                .unwrap();
+        let id = created["id"].as_str().unwrap();
+        let requests = auth_request_rows(&store);
+        let authority = account_authority_snapshot(&store);
+        for (kind, ip, code) in [
+            (8, "203.0.113.27", "wrong"),
+            (14, "203.0.113.27", "NUL\0private-access-sentinel"),
+            (8, "203.0.113.28", "NUL\0private-access-sentinel"),
+        ] {
+            let context = AuthRequestContext {
+                device_type: kind,
+                request_ip: ip,
+                origin: "https://origin.example.test",
+            };
+            let error = match VaultService::new(&mut store).get_auth_request_response(
+                id,
+                &Secret::new(code),
+                &context,
+            ) {
+                Ok(_) => panic!("Invalid auth-response polling succeeded."),
+                Err(error) => error,
+            };
+            assert_eq!(error.status_code(), 400);
+            assert_eq!(error.message, "AuthRequest doesn't exist");
+        }
+        let request = AuthRequestUpdateRequest {
+            device_identifier: "Other-Device",
+            key: "new",
+            master_password_hash: None,
+            request_approved: true,
+        };
+        assert!(
+            VaultService::new(&mut store)
+                .respond_auth_request("bob", id, "Other-Device", &request, "origin")
+                .is_err()
+        );
+        assert!(
+            VaultService::new(&mut store)
+                .respond_auth_request("alice", id, "Request-Device", &request, "origin")
+                .is_err()
+        );
+        assert!(
+            auth_request_rows(&store) == requests
+                && account_authority_snapshot(&store) == authority
+        );
+    }
+    #[test]
+    fn auth_response_update_and_delete_roll_back_late_write_and_deferred_commit_failures() {
+        for approved in [false, true] {
+            for commit in [false, true] {
+                let mut store = auth_request_fixture();
+                let created = create_fixture_auth_request(
+                    &mut store,
+                    "alice@example.test",
+                    "Request-Device",
+                    8,
+                )
+                .unwrap();
+                let id = created["id"].as_str().unwrap();
+                let before = snapshot(&store);
+                let authority = account_authority_snapshot(&store);
+                let devices = device_rows(&store);
+                let requests = auth_request_rows(&store);
+                let event = if approved { "UPDATE" } else { "DELETE" };
+                let row = if approved { "NEW" } else { "OLD" };
+                if commit {
+                    store.db.execute_batch("CREATE TABLE failed_auth_response_commit(owner TEXT REFERENCES accounts(id) DEFERRABLE INITIALLY DEFERRED)").unwrap();
+                }
+                let action = if commit {
+                    "INSERT INTO failed_auth_response_commit(owner) VALUES('missing');".to_owned()
+                } else {
+                    format!(
+                        "UPDATE accounts SET revision='corrupt' WHERE id={row}.owner; SELECT RAISE(FAIL,'injected auth response failure');"
+                    )
+                };
+                store.db.execute_batch(&format!("CREATE TRIGGER reject_auth_response AFTER {event} ON auth_requests BEGIN {action} END;")).unwrap();
+                assert!(
+                    respond_fixture_auth(
+                        &mut store,
+                        id,
+                        "Other-Device",
+                        "new",
+                        Some("new-hash"),
+                        approved
+                    )
+                    .is_err()
+                );
+                assert!(
+                    snapshot(&store) == before
+                        && account_authority_snapshot(&store) == authority
+                        && device_rows(&store) == devices
+                        && auth_request_rows(&store) == requests,
+                    "Failed auth response changed persisted state."
+                );
+                assert!(store.db.is_autocommit());
+            }
+        }
+    }
+    #[test]
+    fn auth_response_approved_fields_and_deleted_rejection_survive_private_reopen() {
+        let directory =
+            std::env::temp_dir().join(format!("no-warden-auth-response-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("vault.db");
+        let mut store = Store::open(path.to_str().unwrap()).unwrap();
+        store.db.execute("INSERT INTO accounts(id,email,document,password,revision) VALUES('alice','alice@example.test','{}','preserved',?1)",[now()]).unwrap();
+        VaultService::new(&mut store)
+            .register_device(
+                "alice",
+                &DeviceRegistration {
+                    identifier: "Request-Device",
+                    name: "Original",
+                    device_type: 8,
+                },
+            )
+            .unwrap();
+        let accepted =
+            create_fixture_auth_request(&mut store, "alice@example.test", "Request-Device", 8)
+                .unwrap();
+        let rejected =
+            create_fixture_auth_request(&mut store, "alice@example.test", "Request-Device", 8)
+                .unwrap();
+        let approved = respond_fixture_auth(
+            &mut store,
+            accepted["id"].as_str().unwrap(),
+            "Request-Device",
+            "",
+            Some(""),
+            true,
+        )
+        .unwrap();
+        respond_fixture_auth(
+            &mut store,
+            rejected["id"].as_str().unwrap(),
+            "Request-Device",
+            "ignored",
+            None,
+            false,
+        )
+        .unwrap();
+        let rows = auth_request_rows(&store);
+        let authority = snapshot(&store);
+        drop(store);
+        let mut reopened = Store::open(path.to_str().unwrap()).unwrap();
+        assert!(auth_request_rows(&reopened) == rows && snapshot(&reopened) == authority);
+        let context = AuthRequestContext {
+            device_type: 8,
+            request_ip: "203.0.113.27",
+            origin: "https://origin.example.test",
+        };
+        let polled = serde_json::to_value(
+            VaultService::new(&mut reopened)
+                .get_auth_request_response(
+                    accepted["id"].as_str().unwrap(),
+                    &Secret::new("NUL\0private-access-sentinel"),
+                    &context,
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(polled == approved && polled["key"] == "" && polled["masterPasswordHash"] == "");
+        assert!(
+            crate::auth_requests::by_code(
+                &reopened.db,
+                rejected["id"].as_str().unwrap(),
+                &Secret::new("NUL\0private-access-sentinel")
+            )
+            .unwrap()
+            .is_none()
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     fn auth_request_fixture() -> Store {
         let mut store = profile_fixture();

@@ -29,10 +29,10 @@ use no_warden::{
     route::{self, Route},
     validation::FolderNamePolicy,
     wire::{
-        AccountKeys, AuthRequestCreateRequest, AvatarUpdateRequest, CipherRequest,
-        ClientCredentialsRequest, DevicePushTokenRequest, FolderRelationship, FolderRequest,
-        FolderWriteRequest, ImportFolderRequest, PasswordOrOtpRequest, ProfileUpdateRequest,
-        RegisterRequest,
+        AccountKeys, AuthRequestCreateRequest, AuthRequestUpdateRequest, AvatarUpdateRequest,
+        CipherRequest, ClientCredentialsRequest, DevicePushTokenRequest, FolderRelationship,
+        FolderRequest, FolderWriteRequest, ImportFolderRequest, PasswordOrOtpRequest,
+        ProfileUpdateRequest, RegisterRequest,
     },
 };
 use rand::{RngCore, rngs::OsRng};
@@ -314,6 +314,20 @@ async fn dispatch_with_peer(
         let response = service.create_auth_request(&request, &context)?;
         return Ok(Json(response).into_response());
     }
+    if let Route::AuthRequestResponse(raw) = route {
+        let id = auth_requests::path_id(raw)?;
+        let code = auth_requests::query_code(uri.query())?;
+        let origin = auth_requests::origin(&app.base)?;
+        let request_ip = peer_ip.to_string();
+        let context = AuthRequestContext {
+            device_type: auth_requests::device_type(&headers),
+            request_ip: &request_ip,
+            origin: &origin,
+        };
+        let mut service = VaultService::new(&mut *store);
+        let response = service.get_auth_request_response(&id, &Secret::new(&code), &context)?;
+        return Ok(Json(response).into_response());
+    }
     if route == Route::Prelogin {
         let input: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
         let email = input["email"]
@@ -455,6 +469,23 @@ async fn dispatch_with_peer(
     let owner = owner.ok_or_else(unauthorized)?;
     let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
     match route {
+        Route::AuthRequestUpdate(raw) => {
+            let identifier = devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let id = auth_requests::path_id(raw)?;
+            let input = auth_requests::parse_update(&body)?;
+            let request = AuthRequestUpdateRequest {
+                device_identifier: &input.device_identifier,
+                key: &input.key,
+                master_password_hash: input.master_password_hash.as_deref(),
+                request_approved: input.request_approved,
+            };
+            let origin = auth_requests::origin(&app.base)?;
+            let mut service = VaultService::new(&mut *store);
+            let response =
+                service.respond_auth_request(&owner, &id, &identifier, &request, &origin)?;
+            Ok(Json(response).into_response())
+        }
         Route::AuthRequests => {
             devices::access_binding(&store.db, &digest(bearer), &owner)?
                 .ok_or_else(unauthorized)?;
@@ -1037,6 +1068,360 @@ fn issue_token_grant_bound(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn auth_response_poll_path(id: &str) -> String {
+        format!(
+            "/api/auth-requests/{id}/response?{}",
+            serde_urlencoded::to_string([("code", "NUL\0private-auth-access-sentinel")]).unwrap()
+        )
+    }
+    #[tokio::test]
+    async fn auth_response_http_pending_approval_repeated_poll_and_rejection_snapshots() {
+        let app = auth_request_fixture_app();
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        let created = device_document(
+            auth_request_http(
+                &app,
+                Method::POST,
+                "/api/auth-requests",
+                HeaderMap::new(),
+                &auth_request_body("alice@example.test", "Request-Device"),
+                Some("8"),
+            )
+            .await,
+        )
+        .await;
+        let id = created["id"].as_str().unwrap();
+        let poll = auth_response_poll_path(id);
+        let update = format!("/api/auth-requests/{id}");
+        let pending = device_document(
+            auth_request_http(
+                &app,
+                Method::GET,
+                &poll,
+                device_authorization(Some("invalid")),
+                b"",
+                Some("8"),
+            )
+            .await,
+        )
+        .await;
+        assert!(pending["requestApproved"].is_null() && pending["key"].is_null());
+        let approved=device_document(auth_request_http(&app,Method::PUT,&update,device_authorization(Some("device-fixture-alice")),br#"{"deviceIdentifier":"Request-Device","key":"NUL\u0000opaque-key","masterPasswordHash":"","requestApproved":true,"owner":"bob","responseDate":"1900-01-01T00:00:00Z"}"#,None).await).await;
+        assert_eq!(approved.as_object().unwrap().len(), 11);
+        assert!(
+            approved["requestApproved"] == true
+                && approved["key"] == "NUL\0opaque-key"
+                && approved["masterPasswordHash"] == ""
+                && approved["responseDate"] != "1900-01-01T00:00:00Z"
+        );
+        let rows = auth_request_persisted_rows(&app.store.lock().unwrap());
+        let changes = app.store.lock().unwrap().db.total_changes();
+        for _ in 0..2 {
+            let read = device_document(
+                auth_request_http(&app, Method::GET, &poll, HeaderMap::new(), b"", Some("8")).await,
+            )
+            .await;
+            assert!(read == approved);
+        }
+        assert_eq!(app.store.lock().unwrap().db.total_changes(), changes);
+        let Err(error) = auth_request_http(
+            &app,
+            Method::PUT,
+            &update,
+            device_authorization(Some("device-fixture-alice")),
+            br#"["Request-Device","replacement",null,false]"#,
+            None,
+        )
+        .await
+        else {
+            panic!("Already-approved auth request changed.")
+        };
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        assert!(auth_request_persisted_rows(&app.store.lock().unwrap()) == rows);
+        let pending = device_document(
+            auth_request_http(
+                &app,
+                Method::GET,
+                "/api/auth-requests/pending",
+                device_authorization(Some("device-fixture-alice")),
+                b"",
+                None,
+            )
+            .await,
+        )
+        .await;
+        assert!(pending["data"].as_array().unwrap().is_empty());
+        let another = device_document(
+            auth_request_http(
+                &app,
+                Method::POST,
+                "/api/auth-requests",
+                HeaderMap::new(),
+                &auth_request_body("alice@example.test", "Request-Device"),
+                Some("8"),
+            )
+            .await,
+        )
+        .await;
+        let rejected_id = another["id"].as_str().unwrap();
+        let rejected = device_document(
+            auth_request_http(
+                &app,
+                Method::PUT,
+                &format!("/api/auth-requests/{rejected_id}"),
+                device_authorization(Some("device-fixture-alice")),
+                br#"["Request-Device","ignored","ignored-hash",false]"#,
+                None,
+            )
+            .await,
+        )
+        .await;
+        assert!(
+            rejected["requestApproved"].is_null()
+                && rejected["key"].is_null()
+                && rejected["masterPasswordHash"].is_null()
+                && rejected["responseDate"].is_string()
+        );
+        let Err(error) = auth_request_http(
+            &app,
+            Method::GET,
+            &auth_response_poll_path(rejected_id),
+            HeaderMap::new(),
+            b"",
+            Some("8"),
+        )
+        .await
+        else {
+            panic!("Rejected auth request remained readable.")
+        };
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        assert!(device_push_persisted_state(&app.store.lock().unwrap()) == before);
+    }
+    #[tokio::test]
+    async fn auth_response_http_guard_precedence_wrong_proofs_and_failures_are_nonmutating() {
+        let app = auth_request_fixture_app();
+        let created = device_document(
+            auth_request_http(
+                &app,
+                Method::POST,
+                "/api/auth-requests",
+                HeaderMap::new(),
+                &auth_request_body("alice@example.test", "Request-Device"),
+                Some("8"),
+            )
+            .await,
+        )
+        .await;
+        let id = created["id"].as_str().unwrap();
+        let update = format!("/api/auth-requests/{id}");
+        let poll = auth_response_poll_path(id);
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        let rows = auth_request_persisted_rows(&app.store.lock().unwrap());
+        for bearer in [None, Some("invalid"), Some("legacy-auth-access")] {
+            let Err(error) = auth_request_http(
+                &app,
+                Method::PUT,
+                "/api/auth-requests/not-a-uuid",
+                device_authorization(bearer),
+                b"{",
+                None,
+            )
+            .await
+            else {
+                panic!("Unauthenticated decision succeeded.")
+            };
+            assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        }
+        for (path, body, status) in [
+            (
+                "/api/auth-requests/not-a-uuid",
+                b"{".as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (update.as_str(), b"{", StatusCode::BAD_REQUEST),
+            (update.as_str(), b"{}", StatusCode::UNPROCESSABLE_ENTITY),
+            (
+                update.as_str(),
+                br#"["Request-Device","k",null,true,null]"#,
+                StatusCode::BAD_REQUEST,
+            ),
+        ] {
+            let Err(error) = auth_request_http(
+                &app,
+                Method::PUT,
+                path,
+                device_authorization(Some("device-fixture-alice")),
+                body,
+                None,
+            )
+            .await
+            else {
+                panic!("Invalid decision guard accepted.")
+            };
+            assert_eq!(error.0, status);
+        }
+        for bearer in ["device-fixture-alice", "device-fixture-bob"] {
+            let Err(error) = auth_request_http(
+                &app,
+                Method::PUT,
+                &update,
+                device_authorization(Some(bearer)),
+                br#"{"deviceIdentifier":"Different-Device","key":"k","requestApproved":true}"#,
+                None,
+            )
+            .await
+            else {
+                panic!("Wrong response device or owner accepted.")
+            };
+            assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        }
+        for path in [
+            format!("/api/auth-requests/{id}/response"),
+            format!("/api/auth-requests/{id}/response?Code=ignored"),
+        ] {
+            let Err(error) =
+                auth_request_http(&app, Method::GET, &path, HeaderMap::new(), b"", Some("8")).await
+            else {
+                panic!("Missing code guard accepted.")
+            };
+            assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
+        }
+        for (path, kind) in [
+            (
+                format!("/api/auth-requests/{id}/response?code=wrong"),
+                Some("8"),
+            ),
+            (poll.clone(), Some("14")),
+            (
+                "/api/auth-requests/10000000-0000-4000-8000-0000000000ab/response?code=wrong"
+                    .to_owned(),
+                Some("8"),
+            ),
+        ] {
+            let Err(error) =
+                auth_request_http(&app, Method::GET, &path, HeaderMap::new(), b"", kind).await
+            else {
+                panic!("Wrong polling proof accepted.")
+            };
+            assert_eq!(error.0, StatusCode::BAD_REQUEST);
+            assert_eq!(error.1, "AuthRequest doesn't exist");
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert("device-type", "8".parse().unwrap());
+        let Err(error) = dispatch_with_peer(
+            app.clone(),
+            Method::GET,
+            poll.parse().unwrap(),
+            headers,
+            Bytes::new(),
+            "203.0.113.74".parse().unwrap(),
+        )
+        .await
+        else {
+            panic!("Wrong IP polling succeeded.")
+        };
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        assert_eq!(error.1, "AuthRequest doesn't exist");
+        {
+            let store = app.store.lock().unwrap();
+            assert!(
+                device_push_persisted_state(&store) == before
+                    && auth_request_persisted_rows(&store) == rows
+            );
+            store.db.execute_batch("CREATE TRIGGER reject_http_auth_response AFTER UPDATE ON auth_requests BEGIN SELECT RAISE(ABORT,'injected auth response failure'); END;").unwrap();
+        }
+        let Err(error) = auth_request_http(
+            &app,
+            Method::PUT,
+            &update,
+            device_authorization(Some("device-fixture-alice")),
+            br#"["Request-Device","k",null,true]"#,
+            None,
+        )
+        .await
+        else {
+            panic!("Injected decision failure succeeded.")
+        };
+        assert_eq!(error.0, StatusCode::INTERNAL_SERVER_ERROR);
+        {
+            let store = app.store.lock().unwrap();
+            assert!(
+                device_push_persisted_state(&store) == before
+                    && auth_request_persisted_rows(&store) == rows
+            );
+        }
+    }
+    #[tokio::test]
+    async fn auth_response_http_code_query_preserves_empty_plus_and_first_match_semantics() {
+        let app = auth_request_fixture_app();
+        for code in ["", "a+b NUL\0雪"] {
+            let body=json!({"accessCode":code,"deviceIdentifier":"Request-Device","email":"alice@example.test","publicKey":""}).to_string();
+            let created = device_document(
+                auth_request_http(
+                    &app,
+                    Method::POST,
+                    "/api/auth-requests",
+                    HeaderMap::new(),
+                    body.as_bytes(),
+                    Some("8"),
+                )
+                .await,
+            )
+            .await;
+            let id = created["id"].as_str().unwrap();
+            let query = serde_urlencoded::to_string([("code", code)]).unwrap();
+            for query in [
+                query.clone(),
+                format!("{query}&code=wrong"),
+                query.replacen("code=", "[code]=", 1),
+                query.replacen("code=", "code.nested=", 1),
+            ] {
+                let value = device_document(
+                    auth_request_http(
+                        &app,
+                        Method::GET,
+                        &format!("/api/auth-requests/{id}/response?{query}"),
+                        device_authorization(Some("invalid")),
+                        b"",
+                        Some("8"),
+                    )
+                    .await,
+                )
+                .await;
+                assert!(value["id"] == id && value["requestApproved"].is_null());
+            }
+            let Err(error) = auth_request_http(
+                &app,
+                Method::GET,
+                &format!("/api/auth-requests/{id}/response?code=wrong&{query}"),
+                HeaderMap::new(),
+                b"",
+                Some("8"),
+            )
+            .await
+            else {
+                panic!("Later code value replaced the first.")
+            };
+            assert_eq!(error.0, StatusCode::BAD_REQUEST);
+            if code.contains('+') {
+                let raw = query.replace("%2B", "+");
+                let Err(error) = auth_request_http(
+                    &app,
+                    Method::GET,
+                    &format!("/api/auth-requests/{id}/response?{raw}"),
+                    HeaderMap::new(),
+                    b"",
+                    Some("8"),
+                )
+                .await
+                else {
+                    panic!("Literal plus was not decoded as space.")
+                };
+                assert_eq!(error.0, StatusCode::BAD_REQUEST);
+            }
+        }
+    }
 
     fn auth_request_fixture_app() -> App {
         let mut app = device_fixture_app();

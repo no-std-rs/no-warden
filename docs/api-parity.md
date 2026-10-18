@@ -39,23 +39,23 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 74 routed patterns, 40 with typed requests, 62 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 76 routed patterns, 41 with typed requests, 64 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 71 partial and 223 unimplemented. Query/rank/configuration
+status: 73 partial and 221 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
 
-Thirty local patterns have some typed response representation, including
+32 local patterns have some typed response representation, including
 the domain settings projections and empty mutation response, explicit API-key
 responses, and attachment responses. Bulk cipher lists use the generic `ListResponse`
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 66 patterns, negative
-HTTP evidence for 65, 117 named HTTP cases, and 31 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 68 patterns, negative
+HTTP evidence for 67, 125 named HTTP cases, and 31 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -493,15 +493,16 @@ compatibility limitation.
 Borrowed core records and streamed responses require no allocator. The
 known-device request represents decoded headers and has no JSON decoder. The
 core list model exposes a two-field pending-auth request when one exists; the
-adapter now supplies the latest owned pending record. Approval, trust/key setup,
-enabled push relay, notification policy and legacy registry backfill remain open.
+adapter supplies the latest owned pending record and approval/rejection updates
+that view. Trust/key setup, enabled push relay, notification policy and legacy
+registry backfill remain open.
 
 All eight Rust device cases pass against the adapter and official Vaultwarden
 `1.37.4`: 199 requests including six identity requests. Those comprise five login
 attempts (four successful and one rejected) and one refresh. The previously verified
 32-case personal selection runs separately; fresh reference processes keep
 both selections within the unchanged default login limit. The default adapter
-entry point runs all 40 cases. No CLI device-route trace or full-parity flag is
+entry point runs all 64 cases. No CLI device-route trace or full-parity flag is
 claimed, and the full API delivery goal remains open.
 
 
@@ -577,7 +578,7 @@ creation date; single-device projections remain seven fields.
 
 Eight Rust cases pass against both the adapter and actual Vaultwarden `1.37.4`:
 273 requests, five successful logins and 33 decoded creation attempts each. The
-full local suite passes 56 cases and 2272 requests. Each reference selection uses
+full local suite passes 64 cases and 2594 requests. Each reference selection uses
 a fresh process within unchanged default limits. Opaque non-UUID device IDs,
 header fallback/raw types, ignored fields, schema/positional inputs, owner and
 UUID guards, repeated creation and latest-pending metadata have direct HTTP
@@ -588,6 +589,45 @@ The adapter records the direct socket peer and canonical configured URL origin.
 Vaultwarden can honor configured `X-Real-IP` from trusted proxies, including local
 peers by default; that forwarding policy remains unimplemented here. A socket
 test verifies adapter behavior, not equivalence for that proxy configuration.
-Approval, public code-protected response polling, authentication-request login,
-notifications/events, expiry cleanup and rate controls remain open. No CLI
+Authentication-request login, notifications/events, expiry cleanup and rate
+controls remain open. No CLI
 request trace or complete authentication-request/API parity is claimed.
+
+The authentication-response slice adds authenticated `PUT /api/auth-requests/<id>`
+and public `GET /api/auth-requests/<id>/response?code=...`, following the
+[pinned approval and polling handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1745-L1861).
+`AuthRequestUpdateRequest` borrows the required response-device identifier, opaque
+key, optional nullable master-password hash, and approval boolean. Its redacted
+formatting keeps all input values private. `AuthRequestResponseStorage` extends
+the creation/discovery provider with atomic responses and code-verified lookup;
+credential comparison remains an adapter cryptographic duty.
+
+The service requires an owned pending request and an exact match between the
+body device and the verified session device. It does not require the responder
+to be the requesting device. Approval persists the supplied key/hash, response
+device and timestamp, and removes the request from pending lists and device
+pending metadata. Rejection deletes the request but returns its prior pending
+fields with a fresh response timestamp and null approval. Already answered,
+foreign, missing and mismatched-device requests leave state unchanged.
+
+Public polling ignores bearer authority, requires a code query field, and checks
+that code plus the exact recorded device type and direct peer IP. Pending and
+approved records use the existing explicit eleven-field response model; polling
+does not consume them. The adapter verifies fixed-size HMAC tags in constant
+time and keeps all credential values out of diagnostics. Login consumption,
+notifications, expiry cleanup, rate controls and trusted forwarding remain open;
+these two routes do not complete the authentication-request lifecycle.
+
+
+All eight authentication-response cases pass against the actual adapter and
+Vaultwarden `1.37.4`, with 322 counted HTTP requests and four successful logins
+per server. The selected fixture makes eleven decoded creation attempts and
+33 guard-valid response polls, below the unchanged public burst limit of 50;
+six path/query guard rejects do not enter the polling handler. Comparisons cover
+pending/approved/rejected projections, repeated polling, owner/session-device
+boundaries, opaque and optional fields, schema/positional guards, query decoding
+and first duplicate selection, raw type/default handling, ignored bearers,
+alternate-loopback peer rejection, and pending-list/device transitions. Hidden
+stored response-device IDs, rollback, account/device invariants and database
+reopen remain separately established by host/provider tests. These direct HTTP
+results add no CLI auth-request login or captured route trace.
