@@ -9,6 +9,7 @@ endpoint and exercised client, not inferred from matching JSON field names.
 - [x] Actual Bitwarden CLI end-to-end verification and Vaultwarden comparison.
 - [x] Rust CI, bare-metal compile check, Runnerless configuration, Codex gate.
 - [x] Bare-metal consumer links JSON decoding/encoding without a global allocator.
+- [x] Owned fixed-capacity vault consumer exercises service rules without std/alloc.
 - [ ] Expanded clients: browser extension, desktop, mobile.
 - [ ] Device sessions, token rotation, revocation, account lifecycle and recovery.
 - [ ] Organizations, collections, sharing and permissions.

@@ -11,6 +11,11 @@ persistence checks pass. The core's minimum Rust version is 1.85; the standalone
 server is also checked with its minimum version, 1.89. Bare-metal compilation
 and the allocator-free consumer link pass independently of the host suites.
 
+The `embedded` job separately tests the owned fixed-capacity storage consumer,
+checks it with Rust 1.85, and links its RISC-V firmware without an allocator.
+Its four tests exercise the real service lifecycle, bounded profile metadata,
+capacity failures, and rejection of payloads the example cannot preserve.
+
 `.runnerless-ci.ts` is a Runnerless v1 program. It evaluates current-head Codex
 review evidence and reports `Runnerless / Codex review`. PRs execute the trusted
 base revision, so the configuration starts on `main`. Repository enrollment and
@@ -27,13 +32,15 @@ actual check contexts, pinned to the reporting GitHub App:
 | `rust` | GitHub Actions **15368** |
 | `msrv` | GitHub Actions **15368** |
 | `bitwarden-cli` | GitHub Actions **15368** |
+| `embedded` | GitHub Actions **15368** |
 
 The native review gate and the configured Runnerless check must both succeed
 for the current PR head. The native gate has been observed rejecting unresolved
 Codex findings, and the core PR passed both review checks before merging.
 Strict branch freshness, administrator enforcement, and resolved conversations
-are required too. The fifth required context, `bitwarden-cli`, runs the client,
-HTTP, and host persistence checks; it was added after a successful live run.
+are required too. The `bitwarden-cli` context runs the client, HTTP, and host
+persistence checks. The `embedded` context protects owned allocation-free
+storage and bare-metal linking. Both became required after successful live runs.
 
 Request `@codex review` for the exact PR head. After fixes, request a new review
 and verify the new checks. Required checks should be pinned to their actual
