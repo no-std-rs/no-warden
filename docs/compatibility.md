@@ -15,13 +15,14 @@ restore and permanent deletion. A per-run trusted loopback TLS proxy meets the
 current CLI's HTTPS requirement without changing the client or disabling
 certificate validation.
 
-The expanded suite passes 51 CLI commands against both servers. It imports
+The expanded suite passes 66 CLI commands against both servers. It imports
 Bitwarden JSON containing login, secure-note, card, and identity items (types
 1–4), and Bitwarden CSV containing login and secure-note items (types 1–2).
 It verifies decrypted imported fields and folder assignments after sync and a
 fresh client cache. CSV folder normalization and ancestor folders are generated
-by the client. Real-client blob, SSH-key, and other import variants still need
-their own fixtures.
+by the client. The suite also archives an imported login, decrypts its password
+and notes after a fresh cache login, and restores it from the archive.
+Real-client blob, SSH-key, and other import variants still need their own fixtures.
 
 | API surface | Standalone behavior | Verification |
 | --- | --- | --- |
@@ -35,20 +36,22 @@ their own fixtures.
 | Cipher CRUD | Opaque ciphertext and unknown JSON fields | CLI, HTTP, storage tests |
 | `POST /api/ciphers/import` | Personal encrypted batch import, folder-index mapping, fresh item IDs, owned-folder reuse | Real CLI JSON/CSV, HTTP, storage rollback tests |
 | Trash, restore, permanent-delete aliases | Owner-checked lifecycle | CLI and HTTP |
+| Bulk trash, restore, and permanent deletion, including admin-named aliases | Deduplicated IDs, personal ownership checks, atomic batch persistence | Core, HTTP comparison with upstream, storage rollback and restart tests |
+| Single and bulk archive/unarchive | Per-user archive metadata, preserved cipher revision, advancing account revision | Real CLI archive/unarchive, core, HTTP comparison with upstream, rollback and restart tests |
 | Conditional cipher update | Stale revision returns 409 | Concurrent HTTP edits |
 | Legacy folder update/delete aliases, cipher clone wrapper | Owner isolation, fresh clone IDs, empty collection IDs, PascalCase wrapper aliases | Core and HTTP tests |
 | `CipherRequest.data` blob payload | Preserve escaped opaque data through create/get/update/sync | Core and HTTP tests; real-client blob round trip unverified |
 | Stored login FIDO2 credentials | Preserve bounded encrypted records and unknown nested fields through create/get/update/sync | Core and HTTP tests; authenticator use unverified |
-| `archivedDate` metadata | Preserve client-supplied archive metadata through create/update/sync | HTTP preservation tests; archive action endpoints are unsupported |
+| CRUD `archivedDate` metadata | Absent/null clears archive state, a valid timestamp sets it, and an invalid timestamp leaves it unchanged | HTTP comparison with upstream |
 | Organization ID aliases | Reject non-null `organizationId` and `organizationID` in direct and wrapped personal writes | HTTP authorization tests |
 | Type-7 encrypted strings | Validate outer base64 envelope and preserve COSE bytes | Core tests; no COSE cryptography in the core |
 | Current user-key ID on creates and imports | Compare a supplied ID with `Storage::user_key_id` when available | Core provider tests for both; HTTP tests for creates |
 | Provider conflict errors | `Storage::map_error` can preserve an HTTP 409 conflict | Core provider tests |
 
 The allocation-free core's models include login, secure note, card, identity,
-and SSH-key items, plus optional opaque blob data. Its 27 unit tests cover the
+and SSH-key items, plus optional opaque blob data. Its 36 unit tests cover the
 typed fields, bounded collections and import decoding, validation, ownership,
-lifecycle rules, folder mapping, and the atomic import provider contract.
+lifecycle rules, folder mapping, and the atomic import and bulk provider contracts.
 Real-client import evidence covers the types listed above; broader operations
 for those types and blob encryption need their own client fixtures. Keeping
 encrypted passkey records in a login item does not
@@ -60,9 +63,10 @@ desktop and mobile are not covered by the CLI result. Full organization,
 attachment, Send, notification and account-management compatibility remains on
 the [roadmap](../ROADMAP.md).
 
-The expanded HTTP regression suite passes all 27 tests against the rebuilt
-standalone server. These establish wire preservation and authorization for the
-new shapes, aliases, and personal imports independently of the CLI evidence.
+The expanded HTTP regression suite passes all 38 tests against the rebuilt
+standalone server, with 13 Rust host tests covering storage and transport rules.
+These establish wire preservation and authorization for the new shapes,
+aliases, and personal imports independently of the CLI evidence.
 They do not prove that a real client can decrypt a blob or use stored passkey
 credentials.
 User-key-ID migration is a one-time identifier backfill, not a key-rotation
@@ -80,6 +84,37 @@ which prevalidates selected fields and then saves sequentially. The
 [pinned client submits JSON and CSV imports](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/importer/src/services/import.service.ts#L468-L481)
 to the same authenticated route and expects an empty success response.
 Organization import and a full import/export contract remain unimplemented.
+
+The current bulk lifecycle contract follows the pinned
+[Vaultwarden delete and restore helpers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L1816-L1972)
+and [archive helpers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L2026-L2139).
+Requests contain `ids`; duplicates collapse and result order is unspecified.
+Delete and trash return an empty success response; bulk restore, archive, and
+unarchive return a list of cipher responses. Empty batches succeed. The adapter
+requires ownership of every selected personal item before an atomic commit;
+missing or inaccessible bulk members return 400, matching the pinned helper's
+status. Vaultwarden may already have mutated other members when returning that
+error; the adapter rolls back the complete batch. Existing single-item lifecycle
+handlers retain their earlier 404 policy. Atomicity and the narrower personal
+permissions remain explicit limitations on full parity.
+
+Archive state is independent of trash state. Archive/unarchive updates the
+account revision without changing the cipher's revision. Ordinary cipher
+create/update follows the
+[upstream `archivedDate` handling](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L580-L586):
+absent or null unarchives, a valid timestamp sets the supplied date, and an
+invalid timestamp leaves the current archive annotation unchanged. The
+[pinned CLI archive service](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/vault/services/default-cipher-archive.service.ts#L64-L89)
+uses the bulk archive/unarchive routes even for one item. Its archive command
+checks premium and item state before sending the request; the pinned server
+helpers do not impose those checks. The shared client also constructs bulk
+delete/trash/restore requests, but that source evidence does not establish a
+dedicated CLI bulk command. Source declarations at Vaultwarden `58a980f` and
+runtime behavior of release `1.37.4` are tracked separately. The same 10 portable
+HTTP tests pass against the release binary and cover all 12 new route patterns.
+The complete standalone suite also checks atomic rollback and persistence across
+two graceful restarts; these provider guarantees are separate from the upstream
+comparison.
 
 Direct HTTP tests verify that refreshing consumes the supplied refresh token and
 issues a new pair while existing access tokens keep their original expiry. The

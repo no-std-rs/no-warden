@@ -268,7 +268,40 @@ try {
     assert(fetchedImport.login.password === freshImports.get(name).login.password, "Fresh-cache get did not decrypt the imported password");
   }
   run(["logout"]);
-  console.log(`PASS: ${commands} real CLI commands; original 37-command lifecycle plus JSON/CSV imports and fresh-cache decryption verified.`);
+  assert.equal(commands, 51, "The existing lifecycle and import suite must retain all 51 commands");
+
+  stage("Archive an encrypted item, discard the cache, and restore it from the archive");
+  login();
+  const archiveItem = imported.get(importItems[0].name);
+  run(["archive", "item", archiveItem.id]);
+  run(["sync"]);
+  const archived = json(["list", "items", "--archived"]);
+  assert.equal(archived.length, 1);
+  assert.equal(archived[0].id, archiveItem.id);
+  assert(archived[0].login.password === importItems[0].login.password, "Archived password must decrypt");
+  assert.equal(json(["list", "items"]).length, 5);
+  run(["logout"]);
+  delete env.BW_SESSION;
+  rmSync(appdata, { recursive: true, force: true });
+  run(["config", "server", clientServer]);
+  login();
+  const freshArchived = json(["list", "items", "--archived"]);
+  assert.equal(freshArchived.length, 1);
+  assert.equal(freshArchived[0].id, archiveItem.id);
+  assert(freshArchived[0].login.password === importItems[0].login.password, "Fresh-cache archived password must decrypt");
+  const freshArchiveItem = json(["get", "item", archiveItem.id]);
+  assert.equal(typeof freshArchiveItem.archivedDate, "string");
+  assert(freshArchiveItem.notes === importItems[0].notes, "Fresh-cache archived notes must decrypt");
+  run(["restore", "item", archiveItem.id]);
+  run(["sync"]);
+  assert.deepEqual(json(["list", "items", "--archived"]), []);
+  const unarchived = json(["get", "item", archiveItem.id]);
+  assert.equal(unarchived.archivedDate ?? null, null);
+  assert(unarchived.login.password === importItems[0].login.password, "Unarchived password must decrypt");
+  assert.equal(unarchived.folderId, archiveItem.folderId);
+  run(["logout"]);
+  assert.equal(commands, 66, "The archive extension must exercise all 66 CLI commands");
+  console.log(`PASS: ${commands} real CLI commands; original 51 lifecycle/import commands plus archive, fresh-cache decryption, and unarchive verified.`);
 } finally {
   proxy?.kill();
   rmSync(appdata, { recursive: true, force: true });

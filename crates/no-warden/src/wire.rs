@@ -282,6 +282,16 @@ pub struct CipherCreateRequest<'a> {
     pub collection_ids: Option<BoundedList<&'a str, MAX_COLLECTION_IDS>>,
 }
 
+/// The selected-ID body shared by cipher lifecycle and archive endpoints.
+///
+/// The caller chooses the decoder capacity. IDs are exact strings, without UUID
+/// canonicalization; duplicate IDs are collapsed by `VaultService::bulk_ciphers`.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CipherIdsRequest<'a, const N: usize> {
+    #[serde(borrow)]
+    pub ids: BoundedList<&'a str, N>,
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListResponse<'a, T: Serialize> {
@@ -304,6 +314,26 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
 mod tests {
     use super::*;
     use std::string::ToString;
+    #[test]
+    fn selected_cipher_ids_are_required_exact_strings_with_caller_selected_capacity() {
+        let input = r#"{"ids":["opaque:One/id","opaque:One/id","opaque:one/id"]}"#;
+        let request: CipherIdsRequest<'_, 3> = serde_json::from_str(input).unwrap();
+        assert_eq!(request.ids.get(0), Some(&"opaque:One/id"));
+        assert_eq!(request.ids.get(1), request.ids.get(0));
+        assert_eq!(request.ids.get(2), Some(&"opaque:one/id"));
+        assert_eq!(serde_json::to_string(&request).unwrap(), input);
+        assert!(serde_json::from_str::<CipherIdsRequest<'_, 2>>(input).is_err());
+        assert!(serde_json::from_str::<CipherIdsRequest<'_, 0>>(r#"{"ids":[]}"#).is_ok());
+        for invalid in [
+            "{}",
+            r#"{"ids":null}"#,
+            r#"{"ids":"id"}"#,
+            r#"{"ids":[null]}"#,
+            r#"{"ids":[7]}"#,
+        ] {
+            assert!(serde_json::from_str::<CipherIdsRequest<'_, 3>>(invalid).is_err());
+        }
+    }
     #[test]
     fn import_decoder_capacities_are_independent_and_caller_selected() {
         let input = r#"{"folders":[],"ciphers":[{"type":1,"data":"sealed","encryptedFor":"alice","encryptedByKeyId":"opaque:key/id"}],"folderRelationships":[{"key":0,"value":99}]}"#;

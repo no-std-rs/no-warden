@@ -57,6 +57,39 @@ pinned Vaultwarden import handler's sequential writes. Existing `Storage`
 implementations do not gain an import operation unless they implement this
 additional contract.
 
+Bulk cipher lifecycle requests use `CipherIdsRequest<'a, N>` or a borrowed ID
+iterator. `VaultService::bulk_ciphers` takes a `CipherBulkOperation` and
+caller-owned ID scratch sized for the raw input, including duplicates. It sorts
+and deduplicates exact strings in O(N log N) time without allocation, then returns
+the unique count. `CipherBulkStorage::cipher_access` distinguishes read access
+for archive/unarchive from write access for trash, restore, and delete. Its
+default implementation permits only personal ownership; providers can override
+it to model broader permissions.
+
+An opt-in `CipherBulkStorage` provider receives a `ValidatedCipherBulk` plan and
+commits it under one lock or transaction, rechecking access before mutation.
+A failure must preserve all selected items and the account revision. This
+guarantee is stronger than Vaultwarden's sequential bulk helpers, which may
+retain writes made before an error. Admin-named aliases apply the same access
+rules and grant no additional permission. Existing storage adapters do not
+support bulk lifecycle operations until they implement this provider contract.
+
+Trash and restore update each affected cipher's revision; permanent deletion
+also accepts an active item. Archive and unarchive change per-user archive
+metadata and the account revision while preserving the cipher revision.
+Archiving preserves trash state, and restoring from trash preserves archive
+state. Repeating an action does not require an opposite starting state; an empty
+bulk request succeeds without changing stored revisions. Providers publish
+notifications after a successful commit; the standalone adapter does not yet
+implement the upstream websocket or push transport.
+
+The host stores archive state as per-owner annotations separate from the cipher
+document. Ordinary cipher create/update synchronizes that state from
+`archivedDate`, matching the pinned upstream helper: absent or null unarchives,
+a valid timestamp sets the supplied date, and an invalid timestamp leaves the
+annotation unchanged. Unlike an archive action, ordinary CRUD also updates the
+cipher revision.
+
 Legacy field-level ciphers and opaque blob ciphers have separate validation
 paths. A blob request stores `data` and can omit the legacy name and type-specific
 object. The blob is an escaped JSON string, requiring a decoder scratch buffer

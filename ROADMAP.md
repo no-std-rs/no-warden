@@ -16,6 +16,7 @@ Continue through the remaining API families in small, green, squash-merged PRs.
 - [x] Personal vault: encrypted ciphers, folders, sync, trash, restore.
 - [x] Actual Bitwarden CLI end-to-end verification and Vaultwarden comparison.
 - [x] Personal JSON/CSV import subset: CLI JSON types 1–4, CSV types 1–2, and allocation-free batch/provider contracts with verified atomic persistence.
+- [x] Personal cipher bulk lifecycle and archive/unarchive subset: reusable allocation-free contracts, atomic provider behavior, HTTP comparison of all 12 route patterns, and real CLI archive/unarchive verification.
 - [x] Rust CI, bare-metal compile check, Runnerless configuration, Codex gate.
 - [x] Bare-metal consumer links JSON decoding/encoding without a global allocator.
 - [x] Owned fixed-capacity vault consumer exercises service rules without std/alloc.
