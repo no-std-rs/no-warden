@@ -58,6 +58,27 @@ test("rejects stdout beyond 4 MiB before reading it and removes the capture", ()
   });
 }));
 
+test("caps a child's regular-file writes at its quota plus one detection byte", () => withCache(cacheDirectory => {
+  assert.throws(() => runCliProcess(process.execPath, [
+    "-e", 'require("node:fs").writeSync(1,Buffer.alloc(16*1024,120))',
+  ], { cacheDirectory, maxOutputBytes: 1024 }), error => {
+    assert.equal(error.code, "ERR_CLI_STDOUT_LIMIT");
+    assert(error.stdoutBytes > 1024);
+    assert(error.stdoutBytes <= 1025, "The child must not exceed the kernel-enforced capture bound");
+    return true;
+  });
+}));
+
+test("accepts output exactly at the configured file quota", () => withCache(cacheDirectory => {
+  const result = runCliProcess(process.execPath, [
+    "-e", 'require("node:fs").writeSync(1,Buffer.alloc(1024,120))',
+  ], { cacheDirectory, maxOutputBytes: 1024 });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "x".repeat(1024));
+  assert.equal(result.stdoutBytes, 1024);
+}));
+
 test("retains the 4 MiB stderr buffer limit and removes the capture", () => withCache(cacheDirectory => {
   const result = runCliProcess(process.execPath, [
     "-e", 'require("node:fs").writeSync(2,Buffer.alloc(4*1024*1024+1,120))',
@@ -77,7 +98,8 @@ test("preserves failed exit status and stderr byte counts without leaving files"
 
 test("cleans up after a missing executable", () => withCache(cacheDirectory => {
   const result = runCliProcess(join(cacheDirectory, "missing-executable"), [], { cacheDirectory });
-  assert.equal(result.error?.code, "ENOENT");
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 127);
   assert.equal(result.stdoutBytes, 0);
   assert.equal(result.stdout, "");
 }));
@@ -159,16 +181,28 @@ test("leaves no stdout file when its parent is terminated during spawnSync", { s
       if (Number.isInteger(childPid) && childPid > 1 && childPid !== process.pid) {
         try { process.kill(childPid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
         const deadline = Date.now() + 3000;
-        let reaped = false;
+        let terminated = false;
         while (Date.now() < deadline) {
           try { process.kill(childPid, 0); } catch (error) {
             if (error.code !== "ESRCH") throw error;
-            reaped = true;
+            terminated = true;
+            break;
+          }
+          try {
+            const stat = readFileSync(`/proc/${childPid}/stat`, "utf8");
+            // A minimal PID1 may leave this non-child as a non-running zombie.
+            if (stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3) === "Z") {
+              terminated = true;
+              break;
+            }
+          } catch (error) {
+            if (error.code !== "ENOENT" && error.code !== "ESRCH") throw error;
+            terminated = true;
             break;
           }
           await delay(20);
         }
-        assert(reaped, "Public marker child must terminate and be reaped");
+        assert(terminated, "Public marker child must stop executing");
       }
     } finally {
       rmSync(directory, { recursive: true, force: true });

@@ -44,6 +44,7 @@ jobs:
       - run: rustup update stable --no-self-update
       - run: rustup default stable
       - run: npm ci --prefix tools
+      - run: prlimit --version
       - run: node --test tools/cli-process.test.mjs
       - run: cargo build -p no-warden-server --locked
       - name: Real client and authorization checks

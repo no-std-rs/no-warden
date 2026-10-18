@@ -31,7 +31,12 @@ export function runCliProcess(binary, args, {
     fchmodSync(descriptor, 0o600);
     // No stdout pathname survives once the child can write sensitive output.
     unlinkSync(path);
-    const result = spawnSync(binary, args, {
+    // One extra byte distinguishes overflow from a valid exact-limit write.
+    // The hard limit also bounds writes while spawnSync blocks the parent.
+    const fileLimit = maxOutputBytes + 1;
+    const result = spawnSync("prlimit", [
+      `--fsize=${fileLimit}:${fileLimit}`, "--core=0:0", "--", binary, ...args,
+    ], {
       env, cwd, encoding: "utf8", timeout,
       maxBuffer: maxOutputBytes,
       stdio: ["ignore", descriptor, "pipe"],
