@@ -11,5 +11,11 @@
   integration suite for wire or server changes.
 - Deliver small PRs. Request `@codex review` for every final head and resolve
   substantiated findings before merging. Do not bypass or weaken review gates.
+- Full upstream API parity is the delivery goal. Track every upstream route and
+  its behavior; a working personal-vault subset does not complete that goal.
+  Prioritize Bitwarden client compatibility over expanding the example vault.
+- Never push directly to `main`. Merge green PRs using squash with an expected
+  head guard. Keep the active no-bypass ruleset and App-pinned Runnerless review
+  checks enforced, including for administrators.
 - Use subagents for independent bounded tasks when parallel work is useful;
   assign disjoint paths and integrate sequentially.

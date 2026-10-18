@@ -2,6 +2,11 @@
 
 Only mark behavior complete after verification. Compatibility is tracked by
 endpoint and exercised client, not inferred from matching JSON field names.
+Full API parity is the finish line. The completed foundation below is an initial
+slice, and the standalone vault is a conformance adapter for the reusable core.
+Continue through the remaining API families in small, green, squash-merged PRs.
+
+- [ ] Pinned, exhaustive upstream route inventory with implementation and test evidence.
 
 - [x] Allocation-free core: borrowed wire types, routing, policy, storage traits.
 - [x] Standalone Rust adapter: persistent SQLite, registration, authentication.
