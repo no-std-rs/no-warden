@@ -7,6 +7,7 @@ pub mod account_keys;
 pub mod account_profile;
 pub mod capture;
 pub mod cli;
+pub mod domains;
 pub mod fixture;
 pub mod folders;
 pub mod transport;

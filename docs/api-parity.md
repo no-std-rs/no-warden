@@ -39,22 +39,23 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 60 routed patterns, 34 with typed requests, 48 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 63 routed patterns, 36 with typed requests, 51 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-unimplemented status or a partial local coverage record. Query/rank/configuration
+status: 60 partial and 234 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
 
-Twenty local patterns have some typed response representation, including the
-explicit API-key and attachment responses. Bulk cipher lists use the generic `ListResponse`
+Twenty-three local patterns have some typed response representation, including
+the domain settings projections and empty mutation response, explicit API-key
+responses, and attachment responses. Bulk cipher lists use the generic `ListResponse`
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 52 patterns, negative
-HTTP evidence for 51, 85 named HTTP cases, and 31 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 55 patterns, negative
+HTTP evidence for 54, 93 named HTTP cases, and 31 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -75,8 +76,8 @@ The CLI tests cover JSON types 1–4 and CSV types 1–2; they do not close the 
 import/export family. Additional source-proven gaps remain in every API family;
 the inventory is not a plan to stop after import or personal-vault APIs.
 
-The current folder chunk improves seven existing routes, without adding route
-patterns or closing the folder family's full-parity status:
+The folder compatibility chunk improves seven existing routes, without adding
+route patterns or closing the folder family's full-parity status:
 
 | Method and route | Personal folder contract |
 | --- | --- |
@@ -128,9 +129,10 @@ complete upstream failure-semantics proof.
 
 The eight Rust folder cases pass against both the adapter and official Vaultwarden
 `1.37.4`, with 220 requests and two logins per run. The required client job reruns
-the 120-command CLI suite
-against both servers. No coverage counts or full-parity statuses are advanced by
-this in-progress comparison. Notifications, WebSocket/push updates, complete error
+the 120-command CLI suite against the adapter; the separate reference comparison
+is documented in [the test tools](../tools/README.md).
+These focused comparisons do not establish a full-parity
+status. Notifications, WebSocket/push updates, complete error
 envelopes, content-type handling, and transport limits remain open. The host's
 16-MiB request cap differs from the
 [pinned 20-MB JSON limit](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/main.rs#L575-L578).
@@ -186,6 +188,61 @@ patterns. Bulk changes and archive state survive two graceful restarts.
 Full-parity statuses and the formal comparison/trace receipt requirements remain
 unchanged.
 
+The equivalent-domain chunk adds three previously unimplemented pinned handlers:
+
+| Method and route | Reusable settings contract |
+| --- | --- |
+| `GET /api/settings/domains` | Custom groups plus all global catalog groups with computed exclusion flags |
+| `POST /api/settings/domains` | Replace both settings arrays and advance account revision; return `{}` |
+| `PUT /api/settings/domains` | Same replacement contract |
+
+The [pinned settings handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/mod.rs#L64-L146)
+preserve arbitrary domain strings, including empty strings, controls and Unicode,
+without normalization. Group/string order and duplicates survive unchanged.
+Exclusion IDs are signed `i32` values; negative, unknown and duplicate IDs are
+retained. Missing/null object fields reset their corresponding arrays to empty.
+Positional input places exclusions first and custom groups second: `[null,null]`
+clears both, `[]` and `[null]` return 422, and surplus sequence elements return
+400. Repeated writes still advance the account revision.
+
+`DomainSettingsRequest` has independently configurable exclusion/group/domain
+capacities for embeddings. The host instead lends its owned vectors through
+`DomainSettingsData`, introducing no array-count or string-size cap beyond its
+existing transport limit. `DomainSettingsStorage` returns a borrowed GAT read
+view and atomically replaces both arrays and the account revision. Its dedicated
+owner-keyed SQLite table is authoritative; registration extras cannot inject
+settings. Keys, credentials, sessions, vault records and foreign settings remain
+unchanged, including on provider failure.
+`VaultService::update_domain_settings` returns an explicit
+`DomainSettingsUpdateResponse` that serializes as `{}`.
+
+`VaultService::domain_settings` takes an adapter-supplied `GlobalDomainCatalog`;
+the allocation-free core embeds no JSON catalog. `DomainSettingsResponse`
+serializes the indexed views directly. `DomainProjection::All` includes all 91
+catalog entries with exclusion flags; `DomainProjection::Sync` omits flagged
+groups and preserves retained order. The host's copied
+[pinned catalog](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/static/global_domains.json)
+is source-hashed and its ordered public fingerprint matches the reference.
+The entire sync response remains adapter-built, so sync gains no whole-response
+typed model or reusable-service coverage flag.
+
+For sync, missing/false `excludeDomains` includes settings and true returns
+`domains:null`. Tested Rocket-compatible parsing accepts case-insensitive
+`true`/`on`/`yes` and `false`/`off`/`no`, plus empty/bare true, decoded query names,
+leading dotted/bracketed root names and suffixes. The first matching root value
+wins. Invalid tested values return 422 after authentication; missing or invalid
+bearers still return 401. These query edges are HTTP evidence, without a new CLI
+domain mutation or captured settings request claim.
+
+All eight domain HTTP cases pass against the adapter and official Vaultwarden
+`1.37.4`: 530 counted requests including two password logins. The four-group suite
+passes 32 cases with 1417 requests and nine logins, excluding fixture
+registrations. An initial domain-enabled build also passed the unchanged
+120-command CLI flow; the required client job checks the final query/authentication
+corrections with the same harness.
+SyncSettings notifications, shared error/content-type/transport limits, and full
+settings/API parity remain open. All full-parity flags remain false.
+
 The profile/avatar chunk adds three previously unimplemented pinned handlers:
 
 | Method and route | Reusable metadata contract |
@@ -212,9 +269,9 @@ including an empty string.
 
 All eight profile/avatar Rust HTTP cases pass against the adapter and official
 Vaultwarden `1.37.4`: 425 counted requests including two password logins. Together
-with folders and account keys, all 24 cases pass with 887 requests and seven
-logins, excluding fixture registrations. The unchanged 120-command CLI baseline
-also passes against the updated adapter; no CLI profile/avatar mutation or
+with folders and account keys, the preceding 24-case milestone passed with 887
+requests and seven logins, excluding fixture registrations. That milestone also
+passed the unchanged 120-command CLI baseline; no CLI profile/avatar mutation or
 captured route trace is claimed.
 All 294 upstream entries remain tracked and all full-parity flags remain false.
 
@@ -381,9 +438,9 @@ are audited interpretations, not automatic semantic inference or runtime request
 traces. Updating a receipt requires inspecting the source expression and its
 SDK/helper trace again; refreshing aggregate counts cannot validate a new claim.
 
-Implementation and test source hashes, including local helpers and the tool
-dependency lock, workspace manifests, and Rust lockfiles keep coverage claims
-tied to the audited code. Model and service references must resolve to source
+Implementation and test source hashes, including local helpers, protocol JSON
+such as the global domain catalog, the tool dependency lock, workspace manifests,
+and Rust lockfiles keep coverage claims tied to the audited code. Model and service references must resolve to source
 symbols, and handler references must cite the matching classifier arm. A Rust
 test checks every local coverage route against the compiled classifier. HTTP coverage
 flags must agree with their positive, negative, or restart evidence. An

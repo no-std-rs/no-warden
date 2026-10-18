@@ -11,6 +11,199 @@ pub const MAX_PASSWORD_HISTORY: usize = 32;
 pub const MAX_FIDO2_CREDENTIALS: usize = 16;
 pub const MAX_COLLECTION_IDS: usize = 64;
 
+/// Configurable domain-settings decoder. Capacities are caller policy, not protocol limits.
+/// Fields follow upstream positional order. Object omission/null clears each setting;
+/// positional arrays still require both fields, for example `[null, null]`.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainSettingsRequest<'a, const E: usize, const G: usize, const D: usize> {
+    pub excluded_global_equivalent_domains: Option<BoundedList<i32, E>>,
+    #[serde(borrow)]
+    pub equivalent_domains: Option<BoundedList<BoundedList<&'a str, D>, G>>,
+}
+
+impl<const E: usize, const G: usize, const D: usize> core::fmt::Debug
+    for DomainSettingsRequest<'_, E, G, D>
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DomainSettingsRequest")
+            .field(
+                "excluded_global_count",
+                &self
+                    .excluded_global_equivalent_domains
+                    .as_ref()
+                    .map_or(0, |v| v.len()),
+            )
+            .field(
+                "equivalent_group_count",
+                &self.equivalent_domains.as_ref().map_or(0, |v| v.len()),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+/// Borrowed response over any provider view and adapter-supplied global catalog.
+/// GET includes flagged groups; the sync projection omits them without reordering.
+pub struct DomainSettingsResponse<
+    'a,
+    D: crate::domains::DomainSettingsData,
+    C: crate::domains::GlobalDomainCatalog + ?Sized,
+> {
+    settings: D,
+    catalog: &'a C,
+    projection: crate::domains::DomainProjection,
+}
+impl<'a, D: crate::domains::DomainSettingsData, C: crate::domains::GlobalDomainCatalog + ?Sized>
+    DomainSettingsResponse<'a, D, C>
+{
+    pub const fn new(
+        settings: D,
+        catalog: &'a C,
+        projection: crate::domains::DomainProjection,
+    ) -> Self {
+        Self {
+            settings,
+            catalog,
+            projection,
+        }
+    }
+}
+impl<D: crate::domains::DomainSettingsData, C: crate::domains::GlobalDomainCatalog + ?Sized>
+    core::fmt::Debug for DomainSettingsResponse<'_, D, C>
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DomainSettingsResponse")
+            .field(
+                "equivalent_group_count",
+                &self.settings.equivalent_group_count(),
+            )
+            .field("global_group_count", &self.catalog.group_count())
+            .field("projection", &self.projection)
+            .finish_non_exhaustive()
+    }
+}
+impl<D: crate::domains::DomainSettingsData, C: crate::domains::GlobalDomainCatalog + ?Sized>
+    Serialize for DomainSettingsResponse<'_, D, C>
+{
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use crate::domains::{DomainProjection, DomainSettingsData, GlobalDomainCatalog};
+        use serde::ser::{Error, SerializeSeq, SerializeStruct};
+        fn missing<E: Error>() -> E {
+            E::custom("Incomplete domain settings or catalog view")
+        }
+        fn excluded<D: DomainSettingsData + ?Sized, E: Error>(
+            data: &D,
+            kind: i32,
+        ) -> Result<bool, E> {
+            for i in 0..data.excluded_global_count() {
+                if data.excluded_global(i).ok_or_else(missing)? == kind {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        struct DomainStrings<'a, D: ?Sized>(&'a D, usize);
+        impl<D: DomainSettingsData + ?Sized> Serialize for DomainStrings<'_, D> {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                let count = self.0.equivalent_domain_count(self.1).ok_or_else(missing)?;
+                let mut seq = s.serialize_seq(Some(count))?;
+                for i in 0..count {
+                    seq.serialize_element(
+                        self.0.equivalent_domain(self.1, i).ok_or_else(missing)?,
+                    )?;
+                }
+                seq.end()
+            }
+        }
+        struct Groups<'a, D: ?Sized>(&'a D);
+        impl<D: DomainSettingsData + ?Sized> Serialize for Groups<'_, D> {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                let mut seq = s.serialize_seq(Some(self.0.equivalent_group_count()))?;
+                for g in 0..self.0.equivalent_group_count() {
+                    seq.serialize_element(&DomainStrings(self.0, g))?;
+                }
+                seq.end()
+            }
+        }
+        struct CatalogStrings<'a, C: ?Sized>(&'a C, usize);
+        impl<C: GlobalDomainCatalog + ?Sized> Serialize for CatalogStrings<'_, C> {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                let count = self.0.domain_count(self.1).ok_or_else(missing)?;
+                let mut seq = s.serialize_seq(Some(count))?;
+                for i in 0..count {
+                    seq.serialize_element(self.0.domain(self.1, i).ok_or_else(missing)?)?;
+                }
+                seq.end()
+            }
+        }
+        struct GlobalGroup<'a, C: ?Sized> {
+            catalog: &'a C,
+            index: usize,
+            kind: i32,
+            excluded: bool,
+        }
+        impl<C: GlobalDomainCatalog + ?Sized> Serialize for GlobalGroup<'_, C> {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                let mut row = s.serialize_struct("GlobalDomain", 3)?;
+                row.serialize_field("type", &self.kind)?;
+                row.serialize_field("domains", &CatalogStrings(self.catalog, self.index))?;
+                row.serialize_field("excluded", &self.excluded)?;
+                row.end()
+            }
+        }
+        struct Globals<'a, D: ?Sized, C: ?Sized> {
+            data: &'a D,
+            catalog: &'a C,
+            projection: DomainProjection,
+        }
+        impl<D: DomainSettingsData + ?Sized, C: GlobalDomainCatalog + ?Sized> Serialize
+            for Globals<'_, D, C>
+        {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                let mut count = 0;
+                for g in 0..self.catalog.group_count() {
+                    let kind = self.catalog.kind(g).ok_or_else(missing)?;
+                    if self.projection == DomainProjection::All
+                        || !excluded::<_, S::Error>(self.data, kind)?
+                    {
+                        count += 1;
+                    }
+                }
+                let mut seq = s.serialize_seq(Some(count))?;
+                for g in 0..self.catalog.group_count() {
+                    let kind = self.catalog.kind(g).ok_or_else(missing)?;
+                    let excluded = excluded::<_, S::Error>(self.data, kind)?;
+                    if self.projection == DomainProjection::All || !excluded {
+                        seq.serialize_element(&GlobalGroup {
+                            catalog: self.catalog,
+                            index: g,
+                            kind,
+                            excluded,
+                        })?;
+                    }
+                }
+                seq.end()
+            }
+        }
+        let mut response = serializer.serialize_struct("DomainSettingsResponse", 3)?;
+        response.serialize_field("equivalentDomains", &Groups(&self.settings))?;
+        response.serialize_field(
+            "globalEquivalentDomains",
+            &Globals {
+                data: &self.settings,
+                catalog: self.catalog,
+                projection: self.projection,
+            },
+        )?;
+        response.serialize_field("object", "domains")?;
+        response.end()
+    }
+}
+
+/// Successful settings mutations return exactly an empty JSON object.
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+pub struct DomainSettingsUpdateResponse {}
+
 /// V2 reservation metadata. Encrypted filename/key strings are kept opaque.
 ///
 /// `fileSize` accepts a signed JSON integer or an integer string without allocation.
@@ -666,6 +859,76 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
 mod tests {
     use super::*;
     use std::string::ToString;
+    #[test]
+    fn domain_request_fields_keep_positional_order_null_clears_and_signed_i32_bounds() {
+        use crate::domains::DomainSettingsData;
+        for input in [
+            "{}",
+            r#"{"equivalentDomains":null,"excludedGlobalEquivalentDomains":null}"#,
+            "[null,null]",
+        ] {
+            let request: DomainSettingsRequest<'_, 0, 0, 0> = serde_json::from_str(input).unwrap();
+            assert_eq!(request.excluded_global_count(), 0);
+            assert_eq!(request.equivalent_group_count(), 0);
+        }
+        let input = r#"[[-2147483648,2147483647,-1,-1],[["opaque","opaque"],[]]]"#;
+        let request: DomainSettingsRequest<'_, 4, 2, 2> = serde_json::from_str(input).unwrap();
+        assert_eq!(request.excluded_global(0), Some(i32::MIN));
+        assert_eq!(request.excluded_global(1), Some(i32::MAX));
+        assert_eq!(request.excluded_global(2), request.excluded_global(3));
+        assert_eq!(request.equivalent_domain_count(1), Some(0));
+        assert_eq!(request.equivalent_domain(0, 1), Some("opaque"));
+        assert!(!std::format!("{request:?}").contains("opaque"));
+        for input in [
+            "[]",
+            "[null]",
+            r#"{"excludedGlobalEquivalentDomains":[2147483648]}"#,
+            r#"{"excludedGlobalEquivalentDomains":[-2147483649]}"#,
+            r#"{"excludedGlobalEquivalentDomains":[1.5]}"#,
+            r#"{"excludedGlobalEquivalentDomains":["1"]}"#,
+            r#"{"equivalentDomains":[null]}"#,
+            r#"{"equivalentDomains":[[null]]}"#,
+            r#"{"equivalentDomains":[[1]]}"#,
+            r#"{"equivalentDomains":[],"equivalentDomains":[]}"#,
+        ] {
+            assert!(serde_json::from_str::<DomainSettingsRequest<'_, 4, 2, 2>>(input).is_err());
+        }
+        assert_eq!(
+            serde_json::from_str::<DomainSettingsRequest<'_, 0, 0, 0>>("[]")
+                .unwrap_err()
+                .classify(),
+            serde_json::error::Category::Data
+        );
+        assert_eq!(
+            serde_json::from_str::<DomainSettingsRequest<'_, 0, 0, 0>>("[null,null,0]")
+                .unwrap_err()
+                .classify(),
+            serde_json::error::Category::Syntax
+        );
+    }
+
+    #[test]
+    fn domain_decoder_capacities_are_independent_and_strings_remain_opaque() {
+        use crate::domains::DomainSettingsData;
+        let input = r#"{"excludedGlobalEquivalentDomains":[9,9],"equivalentDomains":[["not a domain","not a domain"],[]]}"#;
+        let request: DomainSettingsRequest<'_, 2, 2, 2> = serde_json::from_str(input).unwrap();
+        assert_eq!(serde_json::to_string(&request).unwrap(), input);
+        assert!(serde_json::from_str::<DomainSettingsRequest<'_, 1, 2, 2>>(input).is_err());
+        assert!(serde_json::from_str::<DomainSettingsRequest<'_, 2, 1, 2>>(input).is_err());
+        assert!(serde_json::from_str::<DomainSettingsRequest<'_, 2, 2, 1>>(input).is_err());
+        let start = input.as_ptr() as usize;
+        let domain = request.equivalent_domain(0, 0).unwrap();
+        assert!((start..start + input.len()).contains(&(domain.as_ptr() as usize)));
+        let document = serde_json::json!({"equivalentDomains":[["","雪\0\"\n","  MIXED.Case  "]]});
+        let request = DomainSettingsRequest::<'_, 0, 1, 3>::deserialize(&document).unwrap();
+        assert_eq!(request.equivalent_domain(0, 1), Some("雪\0\"\n"));
+        assert_eq!(request.equivalent_domain(0, 2), Some("  MIXED.Case  "));
+        assert_eq!(
+            serde_json::to_value(DomainSettingsUpdateResponse {}).unwrap(),
+            serde_json::json!({})
+        );
+    }
+
     #[test]
     fn profile_requests_borrow_raw_names_and_keep_upstream_single_field_sequence_shape() {
         for input in [r#"{"name":"  café 🔐  "}"#, r#"["  café 🔐  "]"#] {

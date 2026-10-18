@@ -5,13 +5,15 @@
 
 use core::{hint::black_box, panic::PanicInfo};
 use no_warden::{
+    domains::{DomainProjection, DomainSettingsView, GlobalDomain},
     identity::Secret,
     route::{Method, classify},
     service::ImportData,
     wire::{
         AccountKeys, AccountKeysResponse, ApiKeyResponse, AttachmentRequest, AttachmentResponse,
         AttachmentUploadResponse, AvatarUpdateRequest, CipherIdsRequest, CipherRequest,
-        ClientCredentialsRequest, ImportRequest, InitializedAccountKeysResponse,
+        ClientCredentialsRequest, DomainSettingsRequest, DomainSettingsResponse,
+        DomainSettingsUpdateResponse, ImportRequest, InitializedAccountKeysResponse,
         PasswordOrOtpRequest, PreloginRequest, PreloginResponse, ProfileUpdateRequest,
         UserPublicKeyResponse,
     },
@@ -148,6 +150,41 @@ pub extern "C" fn _start() -> ! {
         let _ = black_box(serde_json_core::to_slice(&avatar, &mut output));
         black_box(output);
     }
+    let domains = serde_json_core::from_slice::<DomainSettingsRequest<'_, 2, 2, 2>>(black_box(
+        br#"{"excludedGlobalEquivalentDomains":[1],"equivalentDomains":[["example.test","example.org"]]}"#,
+    ));
+    if let Ok((domains, _)) = domains {
+        let mut output = [0u8; 256];
+        let _ = black_box(serde_json_core::to_slice(&domains, &mut output));
+        black_box(output);
+    }
+    let groups: &[&[&str]] = &[&["embedded.test", "embedded.example"]];
+    let catalog = [
+        GlobalDomain {
+            kind: 1,
+            domains: &["example.org"],
+        },
+        GlobalDomain {
+            kind: 2,
+            domains: &["example.net"],
+        },
+    ];
+    for projection in [DomainProjection::All, DomainProjection::Sync] {
+        let settings = DomainSettingsView {
+            excluded_globals: black_box(&[1]),
+            equivalent_domains: black_box(groups),
+        };
+        let response = DomainSettingsResponse::new(settings, black_box(&catalog[..]), projection);
+        let mut output = [0u8; 512];
+        let _ = black_box(serde_json_core::to_slice(&response, &mut output));
+        black_box(output);
+    }
+    let mut output = [0u8; 8];
+    let _ = black_box(serde_json_core::to_slice(
+        &DomainSettingsUpdateResponse {},
+        &mut output,
+    ));
+    black_box(output);
     loop {
         core::hint::spin_loop();
     }

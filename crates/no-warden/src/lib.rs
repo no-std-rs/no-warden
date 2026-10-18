@@ -13,6 +13,7 @@ pub mod account_profile;
 pub mod attachment;
 pub mod bounded;
 pub mod bulk;
+pub mod domains;
 pub mod error;
 pub mod identity;
 pub mod import;
