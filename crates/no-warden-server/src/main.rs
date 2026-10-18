@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 mod attachments;
+mod auth_requests;
 mod devices;
 mod domains;
 mod protocol;
@@ -11,7 +12,7 @@ use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_ha
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, State},
+    extract::{ConnectInfo, DefaultBodyLimit, State},
     http::{HeaderMap, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
@@ -19,6 +20,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use no_warden::{
     ApiError, ErrorKind, VaultService,
+    auth_requests::AuthRequestContext,
     bulk::CipherBulkOperation,
     devices::DeviceRegistration,
     domains::DomainProjection,
@@ -27,9 +29,10 @@ use no_warden::{
     route::{self, Route},
     validation::FolderNamePolicy,
     wire::{
-        AccountKeys, AvatarUpdateRequest, CipherRequest, ClientCredentialsRequest,
-        DevicePushTokenRequest, FolderRelationship, FolderRequest, FolderWriteRequest,
-        ImportFolderRequest, PasswordOrOtpRequest, ProfileUpdateRequest, RegisterRequest,
+        AccountKeys, AuthRequestCreateRequest, AvatarUpdateRequest, CipherRequest,
+        ClientCredentialsRequest, DevicePushTokenRequest, FolderRelationship, FolderRequest,
+        FolderWriteRequest, ImportFolderRequest, PasswordOrOtpRequest, ProfileUpdateRequest,
+        RegisterRequest,
     },
 };
 use rand::{RngCore, rngs::OsRng};
@@ -39,6 +42,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
+    net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
 };
 use store::Store;
@@ -195,25 +199,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         signing_key,
     };
     let router = Router::new()
-        .fallback(dispatch)
+        .fallback(dispatch_http)
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .with_state(app);
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     eprintln!("no-warden conformance server listening on {bind}; database {database}");
-    axum::serve(listener, router)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await?;
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await?;
     Ok(())
 }
 
+async fn dispatch_http(
+    State(app): State<App>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, Failure> {
+    dispatch_with_peer(app, method, uri, headers, body, peer.ip()).await
+}
+
+#[cfg(test)]
 async fn dispatch(
     State(app): State<App>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
     body: Bytes,
+) -> Result<Response, Failure> {
+    // Existing direct-dispatch tests have no socket. New IP-sensitive tests pass
+    // their peer explicitly; production always obtains it from ConnectInfo.
+    dispatch_with_peer(app, method, uri, headers, body, IpAddr::from([0, 0, 0, 0])).await
+}
+
+async fn dispatch_with_peer(
+    app: App,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+    peer_ip: IpAddr,
 ) -> Result<Response, Failure> {
     if method == Method::OPTIONS {
         return Ok(StatusCode::NO_CONTENT.into_response());
@@ -261,6 +293,25 @@ async fn dispatch(
     if route == Route::KnownDevice {
         let headers = devices::known_headers(&headers)?;
         let response = VaultService::new(&mut *store).known_device(&headers.request())?;
+        return Ok(Json(response).into_response());
+    }
+    if route == Route::AuthRequestCreate {
+        let input = auth_requests::parse_input(&body)?;
+        let origin = auth_requests::origin(&app.base)?;
+        let request_ip = peer_ip.to_string();
+        let context = AuthRequestContext {
+            device_type: auth_requests::device_type(&headers),
+            request_ip: &request_ip,
+            origin: &origin,
+        };
+        let request = AuthRequestCreateRequest {
+            access_code: &input.access_code,
+            device_identifier: &input.device_identifier,
+            email: &input.email,
+            public_key: &input.public_key,
+        };
+        let mut service = VaultService::new(&mut *store);
+        let response = service.create_auth_request(&request, &context)?;
         return Ok(Json(response).into_response());
     }
     if route == Route::Prelogin {
@@ -404,6 +455,23 @@ async fn dispatch(
     let owner = owner.ok_or_else(unauthorized)?;
     let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
     match route {
+        Route::AuthRequests => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let origin = auth_requests::origin(&app.base)?;
+            let mut service = VaultService::new(&mut *store);
+            let response = service.list_auth_requests(&owner, &origin)?;
+            Ok(Json(response).into_response())
+        }
+        Route::AuthRequestGet(raw) => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let id = auth_requests::path_id(raw)?;
+            let origin = auth_requests::origin(&app.base)?;
+            let mut service = VaultService::new(&mut *store);
+            let response = service.get_auth_request(&owner, &id, &origin)?;
+            Ok(Json(response).into_response())
+        }
         Route::DevicePushToken(segment) => {
             // Rocket's Headers guard resolves the authenticated device before
             // path and body guards. Never use a request header or path as target.
@@ -969,6 +1037,402 @@ fn issue_token_grant_bound(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn auth_request_fixture_app() -> App {
+        let mut app = device_fixture_app();
+        app.base = "https://ORIGIN.example.test:443/configured/path".into();
+        {
+            let mut store = app.store.lock().unwrap();
+            for (owner, id, kind) in [
+                ("alice", "Request-Device", 8),
+                ("bob", "Request-Device", 8),
+                ("alice", "Fallback-Device", 14),
+            ] {
+                VaultService::new(&mut *store)
+                    .register_device(
+                        owner,
+                        &DeviceRegistration {
+                            identifier: id,
+                            name: "Original",
+                            device_type: kind,
+                        },
+                    )
+                    .unwrap();
+            }
+            for owner in ["alice", "bob"] {
+                devices::bind(
+                    &store.db,
+                    owner,
+                    "Request-Device",
+                    &format!("device-fixture-{owner}"),
+                )
+                .unwrap();
+            }
+            store.db.execute("INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES(?1,'legacy-auth-refresh','alice',4000000000,4000000000)",[digest("legacy-auth-access")]).unwrap();
+        }
+        app
+    }
+    fn auth_request_body(email: &str, id: &str) -> Vec<u8> {
+        json!({"accessCode":"NUL\0private-auth-access-sentinel","deviceIdentifier":id,"email":email,"publicKey":"opaque-public\0café 雪","owner":"bob","userId":"bob","requestApproved":true,"key":"untrusted","creationDate":"1900-01-01T00:00:00Z","requestIpAddress":"198.51.100.2"}).to_string().into_bytes()
+    }
+    async fn auth_request_http(
+        app: &App,
+        method: Method,
+        path: &str,
+        mut headers: HeaderMap,
+        body: &[u8],
+        kind: Option<&str>,
+    ) -> Result<Response, Failure> {
+        if let Some(kind) = kind {
+            headers.insert("device-type", kind.parse().unwrap());
+        }
+        dispatch_with_peer(
+            app.clone(),
+            method,
+            path.parse().unwrap(),
+            headers,
+            Bytes::copy_from_slice(body),
+            "203.0.113.73".parse().unwrap(),
+        )
+        .await
+    }
+    fn auth_request_persisted_rows(store: &Store) -> Vec<String> {
+        store.db.prepare("SELECT id||':'||owner||':'||request_device_identifier||':'||device_type||':'||request_ip||':'||access_code||':'||public_key||':'||COALESCE(encrypted_key,'null')||':'||COALESCE(master_password_hash,'null')||':'||COALESCE(approved,'null')||':'||creation_date||':'||COALESCE(response_date,'null') FROM auth_requests ORDER BY id").unwrap().query_map([],|row|row.get(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
+    }
+    #[tokio::test]
+    async fn auth_request_http_create_read_list_and_pending_device_projection_preserve_boundaries()
+    {
+        let app = auth_request_fixture_app();
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        let created = device_document(
+            auth_request_http(
+                &app,
+                Method::POST,
+                "/api/auth-requests",
+                device_authorization(Some("invalid")),
+                &auth_request_body("ALICE@EXAMPLE.TEST", "Request-Device"),
+                Some("8"),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(created.as_object().unwrap().len(), 11);
+        assert!(
+            created["requestApproved"] == false
+                && created["requestIpAddress"] == "203.0.113.73"
+                && created["origin"] == "https://origin.example.test"
+                && created["requestDeviceType"] == "Linux"
+        );
+        assert!(
+            created["publicKey"] == "opaque-public\0café 雪"
+                && created["key"].is_null()
+                && created["masterPasswordHash"].is_null()
+                && !created.to_string().contains("private-auth-access-sentinel")
+        );
+        let id = created["id"].as_str().unwrap();
+        let mut expected = created.clone();
+        expected["requestApproved"] = Value::Null;
+        let read = device_document(
+            auth_request_http(
+                &app,
+                Method::GET,
+                &format!("/api/auth-requests/{id}"),
+                device_authorization(Some("device-fixture-alice")),
+                b"",
+                None,
+            )
+            .await,
+        )
+        .await;
+        assert!(read == expected);
+        let encoded = format!("/api/auth-requests/%{:02X}{}", id.as_bytes()[0], &id[1..]);
+        let encoded_read = device_document(
+            auth_request_http(
+                &app,
+                Method::GET,
+                &encoded,
+                device_authorization(Some("device-fixture-alice")),
+                b"",
+                None,
+            )
+            .await,
+        )
+        .await;
+        assert!(encoded_read == expected);
+        device_document(
+            auth_request_http(
+                &app,
+                Method::POST,
+                "/api/auth-requests",
+                HeaderMap::new(),
+                &auth_request_body("bob@example.test", "Request-Device"),
+                Some("8"),
+            )
+            .await,
+        )
+        .await;
+        for path in ["/api/auth-requests", "/api/auth-requests/pending"] {
+            let list = device_document(
+                auth_request_http(
+                    &app,
+                    Method::GET,
+                    path,
+                    device_authorization(Some("device-fixture-alice")),
+                    b"",
+                    None,
+                )
+                .await,
+            )
+            .await;
+            assert!(list == json!({"object":"list","data":[expected],"continuationToken":null}));
+        }
+        let devices = device_document(
+            device_request(
+                &app,
+                Method::GET,
+                "/api/devices",
+                device_authorization(Some("device-fixture-alice")),
+                b"",
+            )
+            .await,
+        )
+        .await;
+        let pending = devices["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == "Request-Device")
+            .unwrap();
+        assert_eq!(pending.as_object().unwrap().len(), 10);
+        assert!(
+            pending["devicePendingAuthRequest"]
+                == json!({"id":id,"creationDate":created["creationDate"]})
+        );
+        let single = device_document(
+            device_request(
+                &app,
+                Method::GET,
+                "/api/devices/identifier/Request-Device",
+                device_authorization(Some("device-fixture-alice")),
+                b"",
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(single.as_object().unwrap().len(), 7);
+        assert!(
+            device_push_persisted_state(&app.store.lock().unwrap()) == before,
+            "Auth-request discovery changed unrelated persisted state."
+        );
+    }
+    #[tokio::test]
+    async fn auth_request_http_rejections_guard_order_and_legacy_policy_preserve_state() {
+        let app = auth_request_fixture_app();
+        let created = device_document(
+            auth_request_http(
+                &app,
+                Method::POST,
+                "/api/auth-requests",
+                HeaderMap::new(),
+                &auth_request_body("alice@example.test", "Request-Device"),
+                Some("8"),
+            )
+            .await,
+        )
+        .await;
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        let requests = auth_request_persisted_rows(&app.store.lock().unwrap());
+        for bearer in [None, Some("invalid"), Some("legacy-auth-access")] {
+            for path in [
+                "/api/auth-requests",
+                "/api/auth-requests/pending",
+                "/api/auth-requests/not-a-uuid",
+            ] {
+                let Err(error) = auth_request_http(
+                    &app,
+                    Method::GET,
+                    path,
+                    device_authorization(bearer),
+                    b"",
+                    None,
+                )
+                .await
+                else {
+                    panic!("Unauthenticated auth-request read succeeded.")
+                };
+                assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+            }
+        }
+        for (bearer, path, status) in [
+            (
+                "device-fixture-bob",
+                format!("/api/auth-requests/{}", created["id"].as_str().unwrap()),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "device-fixture-alice",
+                "/api/auth-requests/not-a-uuid".into(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                "device-fixture-alice",
+                "/api/auth-requests/%FF".into(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                "device-fixture-alice",
+                "/api/auth-requests/%7B10000000-0000-4000-8000-0000000000ab%7D".into(),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "device-fixture-alice",
+                "/api/auth-requests/urn%3Auuid%3A10000000-0000-4000-8000-0000000000ab".into(),
+                StatusCode::BAD_REQUEST,
+            ),
+        ] {
+            let Err(error) = auth_request_http(
+                &app,
+                Method::GET,
+                &path,
+                device_authorization(Some(bearer)),
+                b"",
+                None,
+            )
+            .await
+            else {
+                panic!("Invalid or foreign auth-request read succeeded.")
+            };
+            assert_eq!(error.0, status);
+        }
+        for (body,kind,status) in [(b"{".as_slice(),None,StatusCode::BAD_REQUEST),(b"{}",None,StatusCode::UNPROCESSABLE_ENTITY),(br#"["a","b","c","d",null]"#,None,StatusCode::BAD_REQUEST),(br#"{"accessCode":"a","deviceIdentifier":"d","email":"e","publicKey":"p","accessCode":"duplicate"}"#,None,StatusCode::UNPROCESSABLE_ENTITY)] {
+            let Err(error)=auth_request_http(&app,Method::POST,"/api/auth-requests",HeaderMap::new(),body,kind).await else{panic!("Invalid auth-request JSON accepted.")};assert_eq!(error.0,status);
+        }
+        for (email, id, kind) in [
+            (" alice@example.test", "Request-Device", Some("8")),
+            ("alice@example.test ", "Request-Device", Some("8")),
+            ("alice@example.test", "request-device", Some("8")),
+            ("alice@example.test", "Request-Device", None),
+            ("alice@example.test", "Request-Device", Some("iOS")),
+            ("bob@example.test", "Fallback-Device", Some("14")),
+        ] {
+            let Err(error) = auth_request_http(
+                &app,
+                Method::POST,
+                "/api/auth-requests",
+                HeaderMap::new(),
+                &auth_request_body(email, id),
+                kind,
+            )
+            .await
+            else {
+                panic!("Invalid auth-request device verification succeeded.")
+            };
+            assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        }
+        let legacy = device_document(
+            device_request(
+                &app,
+                Method::GET,
+                "/api/devices",
+                device_authorization(Some("legacy-auth-access")),
+                b"",
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(legacy["data"].as_array().unwrap().len(), 2);
+        {
+            let store = app.store.lock().unwrap();
+            assert!(
+                device_push_persisted_state(&store) == before
+                    && auth_request_persisted_rows(&store) == requests,
+                "Rejected auth request changed persisted state."
+            );
+        }
+        let fallback = device_document(
+            auth_request_http(
+                &app,
+                Method::POST,
+                "/api/auth-requests",
+                HeaderMap::new(),
+                &auth_request_body("alice@example.test", "Fallback-Device"),
+                Some("iOS"),
+            )
+            .await,
+        )
+        .await;
+        assert!(fallback["requestDeviceType"] == "Unknown Browser");
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        let requests = auth_request_persisted_rows(&app.store.lock().unwrap());
+        app.store.lock().unwrap().db.execute_batch("CREATE TRIGGER reject_http_auth_request AFTER INSERT ON auth_requests BEGIN SELECT RAISE(ABORT,'injected auth request failure'); END;").unwrap();
+        let Err(error) = auth_request_http(
+            &app,
+            Method::POST,
+            "/api/auth-requests",
+            HeaderMap::new(),
+            &auth_request_body("alice@example.test", "Request-Device"),
+            Some("8"),
+        )
+        .await
+        else {
+            panic!("Injected auth-request write failure succeeded.")
+        };
+        assert_eq!(error.0, StatusCode::INTERNAL_SERVER_ERROR);
+        {
+            let store = app.store.lock().unwrap();
+            assert!(
+                device_push_persisted_state(&store) == before
+                    && auth_request_persisted_rows(&store) == requests
+            );
+        }
+    }
+    #[cfg(target_os = "linux")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn auth_request_http_records_actual_socket_peer_without_trusting_forwarded_headers() {
+        use std::io::{Read, Write};
+        let app = auth_request_fixture_app();
+        let router = Router::new().fallback(dispatch_http).with_state(app);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind("127.0.0.2:0".parse().unwrap()).unwrap();
+        let stream = socket.connect(address).await.unwrap().into_std().unwrap();
+        let response = tokio::task::spawn_blocking(move || {
+            let mut stream = stream;
+            stream.set_nonblocking(false).unwrap();
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+            stream.set_write_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+            let body = auth_request_body("alice@example.test", "Request-Device");
+            let headers = format!(
+                "POST /api/auth-requests HTTP/1.1\r\nHost: local.test\r\ndevice-type: 8\r\nContent-Type: application/json\r\nX-Real-IP: 198.51.100.99\r\nX-Forwarded-For: 198.51.100.99\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(headers.as_bytes()).unwrap();
+            stream.write_all(&body).unwrap();
+            let mut response = Vec::new();
+            stream.read_to_end(&mut response).unwrap();
+            response
+        }).await.unwrap();
+        server.abort();
+        let boundary = response
+            .windows(4)
+            .position(|part| part == b"\r\n\r\n")
+            .unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 200"));
+        let document: Value = serde_json::from_slice(&response[boundary + 4..]).unwrap();
+        assert!(
+            document["requestIpAddress"] == "127.0.0.2"
+                && document["origin"] == "https://origin.example.test"
+        );
+    }
 
     fn device_push_fixture_app() -> App {
         let app = device_fixture_app();

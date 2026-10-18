@@ -38,6 +38,9 @@ pub enum Route<'a> {
     UserKeyId,
     RevisionDate,
     Token,
+    AuthRequestCreate,
+    AuthRequests,
+    AuthRequestGet(&'a str),
     Sync,
     KnownDevice,
     Devices,
@@ -86,6 +89,7 @@ impl Route<'_> {
                 | Self::Prelogin
                 | Self::Register
                 | Self::Token
+                | Self::AuthRequestCreate
                 | Self::KnownDevice
                 | Self::DevicePushClear(_)
                 | Self::AttachmentDownload(_, _)
@@ -124,6 +128,8 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (Post, "/api/accounts/key-management/user-key-id") => Some(UserKeyId),
         (Get, "/api/accounts/revision-date") => Some(RevisionDate),
         (Post, "/identity/connect/token") => Some(Token),
+        (Post, "/api/auth-requests") => Some(AuthRequestCreate),
+        (Get, "/api/auth-requests" | "/api/auth-requests/pending") => Some(AuthRequests),
         (Get, "/api/sync") => Some(Sync),
         (Get, "/api/devices/knowndevice") => Some(KnownDevice),
         (Get, "/api/devices") => Some(Devices),
@@ -154,6 +160,11 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
             | "/api/ciphers/unarchive",
         ) => None,
         _ => {
+            if let Some(id) = path.strip_prefix("/api/auth-requests/") {
+                // UUID decoding/validation belongs to the authenticated adapter guard.
+                return (method == Get && !id.is_empty() && !id.contains('/'))
+                    .then_some(AuthRequestGet(id));
+            }
             if let Some(identifier) = path.strip_prefix("/api/devices/identifier/") {
                 // The adapter percent-decodes and applies upstream IdFromParam.
                 // Capture invalid values too so that guard can return 422 rather than 404.
@@ -260,6 +271,55 @@ fn valid_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn auth_request_creation_and_discovery_routes_keep_public_and_authenticated_guards_distinct() {
+        for (method, path, expected, authenticated) in [
+            (
+                Method::Post,
+                "/api/auth-requests",
+                Route::AuthRequestCreate,
+                false,
+            ),
+            (Method::Get, "/api/auth-requests", Route::AuthRequests, true),
+            (
+                Method::Get,
+                "/api/auth-requests/pending/?ignored=true",
+                Route::AuthRequests,
+                true,
+            ),
+            (
+                Method::Get,
+                "/api/auth-requests/ABCdef-123",
+                Route::AuthRequestGet("ABCdef-123"),
+                true,
+            ),
+            (
+                Method::Get,
+                "/api/auth-requests/invalid%2Fid",
+                Route::AuthRequestGet("invalid%2Fid"),
+                true,
+            ),
+        ] {
+            assert_eq!(classify(method, path), Some(expected));
+            assert_eq!(expected.requires_authentication(), authenticated);
+        }
+        for path in ["/api/auth-requests/pending", "/api/auth-requests/id"] {
+            for method in [Method::Post, Method::Put, Method::Delete, Method::Options] {
+                assert!(classify(method, path).is_none());
+            }
+        }
+        for method in [Method::Put, Method::Delete, Method::Options] {
+            assert!(classify(method, "/api/auth-requests").is_none());
+        }
+        for path in [
+            "/api/auth-requests//",
+            "/api/auth-requests/id/response",
+            "/api/auth-requests/id/extra",
+        ] {
+            assert!(classify(Method::Get, path).is_none());
+        }
+    }
+
     #[test]
     fn device_push_aliases_keep_session_updates_authenticated_and_public_clears_separate() {
         for method in [Method::Post, Method::Put] {

@@ -198,13 +198,15 @@ BW_E2E_SERVER=http://127.0.0.1:8001 cargo run --locked \
 ```
 
 By default the binary runs folders, account keys, profile/avatar, equivalent
-domains, devices, then device tokens: 48 cases. `--suite personal` selects the first four groups;
-`--suite devices` selects discovery; `--suite device-tokens` selects token routes.
+domains, devices, device tokens, then authentication requests: 56 cases. `--suite personal` selects the first four groups;
+`--suite devices` selects discovery; `--suite device-tokens` selects token routes;
+`--suite auth-requests` selects authentication-request creation and reads.
 Individual selectors are `folders`,
 `account-keys`, `profile`, and `domains`; `--suite all` is the default.
 Invalid arguments return exit code 2 without echoing supplied values.
 `BW_FOLDER_RECEIPT`, `BW_ACCOUNT_KEYS_RECEIPT`, `BW_PROFILE_RECEIPT`,
-`BW_DOMAINS_RECEIPT`, `BW_DEVICES_RECEIPT`, and `BW_DEVICE_TOKENS_RECEIPT`
+`BW_DOMAINS_RECEIPT`, `BW_DEVICES_RECEIPT`, `BW_DEVICE_TOKENS_RECEIPT`,
+and `BW_AUTH_REQUESTS_RECEIPT`
 optionally name new private result
 files for their respective groups. Existing paths are
 rejected; files are created with mode 0600 and contain authored case names,
@@ -214,7 +216,7 @@ requests: five login attempts (four successful and one deliberately rejected)
 and one refresh. Run these selections in separate fresh disposable reference
 processes to stay within its unchanged default ten-login limit. Use another
 fresh reference process for the complete CLI comparison. The adapter's CI job
-runs all 48 cases together; do not run that combined selection against one
+runs all 56 cases together; do not run that combined selection against one
 reference process with default limits.
 Other HTTP and persistence groups still use their
 existing JavaScript tools.
@@ -292,7 +294,7 @@ The receipt distinguishes successful logins, attempted logins, identity requests
 and refresh requests. Their combined total with the personal groups is 40 cases
 and 1616 requests, measured in separate reference processes. The token group
 adds eight cases and 383 requests with three successful password logins, making
-the full local run 48 cases and 1999 requests. Select `--suite device-tokens` in
+the device-enabled subtotal 48 cases and 1999 requests. Select `--suite device-tokens` in
 a separate fresh reference process: its 28 valid public clears stay below the
 unchanged unauthenticated burst limit of 50; rejected path guards do not enter
 that handler. The adapter does not yet implement the reference rate controls.
@@ -300,8 +302,8 @@ that handler. The adapter does not yet implement the reference rate controls.
 Device identifiers in headers and login forms remain opaque. Authenticated
 lookup paths accept ASCII letters, digits and hyphens after percent-decoding;
 they are not UUID paths. List entries have ten fields and single responses
-seven. Pending-auth requests, trust/key setup, enabled push relay and notification
-lifecycles remain unimplemented by the adapter. The core exposes a borrowed
+seven. Approval of authentication requests, trust/key setup, enabled push relay
+and notification lifecycles remain unimplemented by the adapter. The core exposes a borrowed
 pending-auth projection without claiming that lifecycle.
 
 The token group checks POST/PUT update and clear aliases. Update paths have
@@ -324,6 +326,23 @@ outbound relay request. Enabled relay interoperability remains open.
 Login requests are included in the request counts; fixture registrations are
 excluded. These receipts do not establish captured CLI route traces or complete
 upstream API parity.
+
+The authentication-request group passes eight cases against both actual servers:
+273 requests, five successful logins and 33 decoded creation attempts. Run
+`--suite auth-requests` in its own fresh reference process. Its optional private
+receipt also records the decoded creation count; schema rejections do not enter
+the handler. The full local suite passes 56 cases and 2272 requests. Preserve
+separate reference processes rather than combining groups across default limits.
+
+This group checks public creation for existing owner/device/type pairs and the
+three authenticated read/list routes. It includes opaque non-UUID device IDs,
+optional raw device-type headers with fallback 14, eleven-field projections,
+created false versus pending null, positional/schema cases, owner/UUID guards,
+repeated creation and the latest pending two-field metadata in device lists.
+Access codes and internal identities never enter authentication-request responses.
+Actual peer IP and canonical advertised origin are adapter inputs; configurable
+trusted-proxy forwarding remains unimplemented. Approval, code-protected public
+polling, auth-request login, notification and expiry/rate controls remain open.
 
 ## Compare against upstream Vaultwarden
 

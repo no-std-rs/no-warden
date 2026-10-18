@@ -21,3 +21,4 @@ sha2 = "0.10"
 hmac = "0.12"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+url = "2"
