@@ -9,7 +9,9 @@ archive actions, API-key login followed by password unlock, and encrypted
 attachment round trips. Direct HTTP comparisons also cover personal folder,
 account encryption-key, profile/avatar, equivalent-domain, device-discovery,
 disabled-relay push-token, auth-request creation/decision/polling, and one-use
-access-code login contracts. The remaining
+access-code login contracts. Password verification and security-stamp renewal
+also pass eight direct HTTP cases against both servers, including owner session
+revocation and API-key/authentication-request recovery. The remaining
 surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden
 replacement. Client-side vault encryption stays with the client.
@@ -50,7 +52,8 @@ cache and never opens your existing vault. See [test tools](tools/README.md).
 CLI orchestration, private subprocess capture, encrypted account fixtures, and
 disposable loopback TLS. Its separate Rust HTTP binary checks folder, account-key,
 profile/avatar, equivalent-domain, device-discovery, disabled-relay push-token,
-auth-request creation/decision/polling/login, and modern registration APIs against
+auth-request creation/decision/polling/login, modern registration and account
+security APIs against
 a configured adapter or
 Vaultwarden release. Its comparisons include
 the complete pinned global-domain catalog, settings replacement, sync filtering,
@@ -73,13 +76,14 @@ bounded collections require no allocator. Opt-in `ImportStorage`,
 `CipherBulkStorage`, `IdentityStorage`, `AccountKeyStorage`,
 `AccountProfileStorage`, `DomainSettingsStorage`, `DeviceStorage`,
 `DevicePushStorage`, `AuthRequestStorage`, `AuthRequestResponseStorage`,
-`AuthRequestLoginStorage`, `RegistrationStorage`, and
+`AuthRequestLoginStorage`, `RegistrationStorage`, `AccountSecurityStorage`, and
 `AttachmentStorage` providers add
 batch operations,
 credential and account-key services, profile metadata and equivalent-domain updates, device discovery,
 registration after verified login, push-token ordering, pending auth-request
 creation/discovery, approval/code-protected polling, one-use access-code login,
-modern account verification/finish, and attachment transitions
+modern account verification/finish, password verification, security-stamp renewal,
+and attachment transitions
 without adding an allocator. See [architecture](docs/architecture.md) and
 [CI and review](docs/ci.md).
 

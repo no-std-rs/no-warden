@@ -562,3 +562,36 @@ error envelopes and
 transport-limit parity remain open. The adapter's encoded-body cap remains
 16 MiB, below upstream's 20-MB JSON limit. This provider does not complete the
 registration or upstream API parity goal.
+
+## Password verification and security-stamp renewal
+
+`AccountSecurityStorage` adds four opt-in hooks without changing existing
+`Storage` or `IdentityStorage` implementations. `VaultService::verify_password`
+requires the authenticated owner and a borrowed nonserializable `Secret`, verifies
+it, invokes the server-verifier upgrade hook, then obtains the applicable policy.
+The server's verifier cost is separate from client KDF parameters. Upgrade writes
+need not roll back if later policy lookup fails; the provider owns the upstream
+distinction between password-rebuild failure and best-effort user-save failure.
+`MasterPasswordPolicyResponse` explicitly serializes the optional seven-field
+policy and PascalCase `Object`; no policy yields only that discriminator.
+
+`reset_security_stamp` uses the existing exclusive password/protected-action OTP
+proof selection. Successful protected-action verification consumes a purpose-,
+account- and expiry-bound OTP; it is not an account TOTP. Consumption precedes
+reset, so an adapter must document whether it wraps both operations atomically.
+The core supplies no RNG, clock, stamp capacity, password implementation or heap.
+The standalone adapter rejects unsupported OTP proofs and uses current Argon2
+verifiers, making its upgrade hook a documented no-op. Organization and SSO policy
+aggregation and stale-verifier migration remain embedding-provider work.
+
+The adapter stores stamp authority in a private owner-keyed table. Existing
+accounts retain their former owner-ID stamp until renewal. Profile, sync and JWT
+issuance explicitly read private authority; unknown account-document fields
+cannot select it. One SQLite savepoint generates a UUID, advances owner revision,
+and removes all owner sessions and registered devices, including push rows and
+session bindings. Password/API credentials, client KDF, account keys, encrypted
+vaults, authentication requests and other owners survive. This gives stronger
+rollback than upstream's sequential refresh rotation, save, notification and
+device deletion. Notification delivery and remembered-2FA support remain open.
+An unused approved authentication request retains its original lifetime and
+peer-IP requirements and can authorize a new login after renewal.

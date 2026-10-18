@@ -5,6 +5,57 @@
 use crate::{bounded::BoundedList, identity::Secret};
 use serde::{Deserialize, Serialize};
 
+/// Password-only verification. This hash is the client server-authorization proof, not
+/// a plaintext master password. The PascalCase alias used by PasswordOrOtpRequest does
+/// not belong to this endpoint. Empty strings remain opaque provider-verified inputs.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretVerificationRequest<'a> {
+    #[serde(borrow)]
+    pub master_password_hash: Secret<'a>,
+}
+
+/// Known organization master-password policy fields. This is distinct from the local
+/// plaintext PasswordPolicy validator and from the server password-verifier cost policy.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MasterPasswordPolicy {
+    pub min_complexity: Option<u8>,
+    pub min_length: Option<u32>,
+    pub require_lower: bool,
+    pub require_upper: bool,
+    pub require_numbers: bool,
+    pub require_special: bool,
+    pub enforce_on_login: bool,
+}
+
+/// Verification returns an Object-only marker when no policy applies. A known policy
+/// emits all seven camelCase fields, including nullable numbers, plus PascalCase Object.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MasterPasswordPolicyResponse {
+    pub policy: Option<MasterPasswordPolicy>,
+}
+impl Serialize for MasterPasswordPolicyResponse {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut response = serializer.serialize_struct(
+            "MasterPasswordPolicyResponse",
+            if self.policy.is_some() { 8 } else { 1 },
+        )?;
+        if let Some(policy) = self.policy {
+            response.serialize_field("minComplexity", &policy.min_complexity)?;
+            response.serialize_field("minLength", &policy.min_length)?;
+            response.serialize_field("requireLower", &policy.require_lower)?;
+            response.serialize_field("requireUpper", &policy.require_upper)?;
+            response.serialize_field("requireNumbers", &policy.require_numbers)?;
+            response.serialize_field("requireSpecial", &policy.require_special)?;
+            response.serialize_field("enforceOnLogin", &policy.enforce_on_login)?;
+        }
+        response.serialize_field("Object", "masterPasswordPolicy")?;
+        response.end()
+    }
+}
+
 /// Public no-SMTP registration verification input. Names and emails remain opaque here;
 /// the verified claim's name length is checked only when registration is finished.
 #[derive(Deserialize)]
@@ -1345,6 +1396,72 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn password_verification_wire_requires_only_canonical_hash_and_redacts_opaque_proofs() {
+        let input = r#"{"masterPasswordHash":"private-proof雪","otp":{"ignored":true},"MasterPasswordHash":"also-ignored"}"#;
+        let request: SecretVerificationRequest<'_> = serde_json::from_str(input).unwrap();
+        assert!(request.master_password_hash.expose_secret() == "private-proof雪");
+        let pointer = request.master_password_hash.expose_secret().as_ptr() as usize;
+        assert!(
+            (input.as_ptr() as usize..input.as_ptr() as usize + input.len()).contains(&pointer)
+        );
+        assert!(!std::format!("{request:?}").contains("private-proof"));
+        for input in [r#"{"masterPasswordHash":""}"#, r#"[""]"#] {
+            let request: SecretVerificationRequest<'_> = serde_json::from_str(input).unwrap();
+            assert!(request.master_password_hash.expose_secret().is_empty());
+        }
+        for input in [
+            "{}",
+            "[]",
+            r#"{"otp":"proof"}"#,
+            r#"{"MasterPasswordHash":"proof"}"#,
+            r#"{"masterPasswordHash":null}"#,
+            r#"{"masterPasswordHash":1}"#,
+            r#"{"masterPasswordHash":"one","masterPasswordHash":"two"}"#,
+            r#"["proof","surplus"]"#,
+        ] {
+            assert!(serde_json::from_str::<SecretVerificationRequest<'_>>(input).is_err());
+        }
+    }
+
+    #[test]
+    fn password_policy_response_keeps_pascal_object_and_distinguishes_absent_from_nullable_fields()
+    {
+        let empty = serde_json::to_value(MasterPasswordPolicyResponse::default()).unwrap();
+        assert_eq!(empty, serde_json::json!({"Object":"masterPasswordPolicy"}));
+        let nullable = serde_json::to_value(MasterPasswordPolicyResponse {
+            policy: Some(MasterPasswordPolicy::default()),
+        })
+        .unwrap();
+        assert_eq!(
+            nullable,
+            serde_json::json!({"minComplexity":null,"minLength":null,"requireLower":false,"requireUpper":false,"requireNumbers":false,"requireSpecial":false,"enforceOnLogin":false,"Object":"masterPasswordPolicy"})
+        );
+        let policy = MasterPasswordPolicy {
+            min_complexity: Some(u8::MAX),
+            min_length: Some(u32::MAX),
+            require_lower: true,
+            require_upper: false,
+            require_numbers: true,
+            require_special: false,
+            enforce_on_login: true,
+        };
+        let response = serde_json::to_value(MasterPasswordPolicyResponse {
+            policy: Some(policy),
+        })
+        .unwrap();
+        assert_eq!(response.as_object().unwrap().len(), 8);
+        assert_eq!(response["minComplexity"], u8::MAX);
+        assert_eq!(response["minLength"], u32::MAX);
+        assert!(response["requireLower"] == true && response["requireUpper"] == false);
+        assert!(
+            response["requireNumbers"] == true
+                && response["requireSpecial"] == false
+                && response["enforceOnLogin"] == true
+        );
+        assert!(response.get("object").is_none() && response.get("policy").is_none());
+    }
 
     #[test]
     fn registration_verification_input_borrows_raw_email_and_defers_name_limits() {

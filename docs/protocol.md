@@ -910,3 +910,32 @@ Settings writes atomically replace both arrays and advance the account revision,
 including repeated writes. They preserve unrelated account and vault data and
 other accounts. Upstream also sends a `SyncSettings` notification; notification
 transport remains a separate tracked requirement here.
+
+### Account proof and security-stamp endpoints
+
+`POST /api/accounts/verify-password` requires an authenticated device and one
+required camelCase `masterPasswordHash` string; `MasterPasswordHash` is not an
+alias here. Its personal no-policy response is exactly
+`{"Object":"masterPasswordPolicy"}`. Optional typed policy fields use camelCase.
+Password verification can upgrade the server's internal verifier without changing
+client KDF settings or the security stamp; the standalone adapter currently
+creates only current-policy verifiers.
+
+`POST /api/accounts/security-stamp` uses the shared optional
+`masterPasswordHash` (including `MasterPasswordHash` alias) and `otp` fields,
+requiring exactly one valid proof. Success returns empty 200 and invalidates
+existing owner sessions and devices, including the caller. It preserves the API
+secret and pending/approved authentication requests. Such an approved request
+retains its original deadline, peer-IP check and one-use requirement. The adapter
+projects the renewed private stamp into JWT `sstamp`, profile and sync.
+
+The contracts come from pinned
+[account handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1084),
+[password verification](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1445),
+[proof and policy models](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/mod.rs#L49),
+[user stamp reset](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/user.rs#L226)
+and [direct device deletion](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/device.rs#L174).
+The relevant handlers/hooks match Vaultwarden `1.37.4` release commit
+`7c188967e7a467b19b2757bc3326f9cf3ccae327`; its protected-action enum refactor
+preserves validation behavior. Organization/SSO policies, successful protected
+OTP, remembered 2FA, notifications and complete failure semantics remain partial.

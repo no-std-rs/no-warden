@@ -104,7 +104,7 @@ pub fn prelogin(account: &Value, _modern: bool) -> Value {
 }
 
 /// Personal-account profile and encrypted account keys.
-pub fn profile(account: &Value) -> Value {
+pub fn profile(account: &Value, security_stamp: &str) -> Value {
     json!({
         "_status": 0,
         "id": account["id"],
@@ -118,7 +118,7 @@ pub fn profile(account: &Value) -> Value {
         "key": account["key"],
         "privateKey": account["keys"]["encryptedPrivateKey"],
         "accountKeys": account_keys(account),
-        "securityStamp": account["id"],
+        "securityStamp": security_stamp,
         "organizations": [],
         "organizationsNew": [],
         "providers": [],
@@ -217,7 +217,8 @@ mod tests {
             (json!(["legacy"]), Value::Null),
         ] {
             let account = json!({"id":"alice","email":"alice@example.test","name":"","avatarColor":avatar,"untrustedExtension":"private"});
-            let response = profile(&account);
+            let response = profile(&account, "private-stamp");
+            assert!(response["securityStamp"] == "private-stamp");
             assert!(
                 response["name"] == "",
                 "Empty names must not fall back to email."

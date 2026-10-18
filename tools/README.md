@@ -199,19 +199,20 @@ BW_E2E_SERVER=http://127.0.0.1:8001 cargo run --locked \
 
 By default the binary runs folders, account keys, profile/avatar, equivalent
 domains, devices, device tokens, authentication requests, responses, login, then
-registration: 80 cases. `--suite personal` selects the first four groups;
+registration and account security: 88 cases. `--suite personal` selects the first four groups;
 `--suite devices` selects discovery; `--suite device-tokens` selects token routes;
 `--suite auth-requests` selects authentication-request creation and reads.
 `--suite auth-responses` selects approval, rejection and public response polling.
 `--suite auth-login` selects request-based password grants and consumption.
 `--suite registration` selects the two-step no-SMTP registration flow.
+`--suite account-security` selects password verification and security-stamp renewal.
 Individual selectors are `folders`,
 `account-keys`, `profile`, and `domains`; `--suite all` is the default.
 Invalid arguments return exit code 2 without echoing supplied values.
 `BW_FOLDER_RECEIPT`, `BW_ACCOUNT_KEYS_RECEIPT`, `BW_PROFILE_RECEIPT`,
 `BW_DOMAINS_RECEIPT`, `BW_DEVICES_RECEIPT`, `BW_DEVICE_TOKENS_RECEIPT`,
 `BW_AUTH_REQUESTS_RECEIPT`, `BW_AUTH_RESPONSES_RECEIPT`, `BW_AUTH_LOGIN_RECEIPT`,
-and `BW_REGISTRATION_RECEIPT`
+`BW_REGISTRATION_RECEIPT`, and `BW_ACCOUNT_SECURITY_RECEIPT`
 optionally name new private result
 files for their respective groups. Existing paths are
 rejected; files are created with mode 0600 and contain authored case names,
@@ -221,7 +222,7 @@ requests: five login attempts (four successful and one deliberately rejected)
 and one refresh. Run these selections in separate fresh disposable reference
 processes to stay within its unchanged default ten-login limit. Use another
 fresh reference process for the complete CLI comparison. The adapter's CI job
-runs all 80 cases together; do not run that combined selection against one
+runs all 88 cases together; do not run that combined selection against one
 reference process with default limits.
 Other HTTP and persistence groups still use their
 existing JavaScript tools.
@@ -498,4 +499,20 @@ At most 44 conservative public attempts and nine identity requests reach one
 peer's budget. The final official CLI `2026.10.0` baseline separately passed
 120 commands against each server.
 
-The combined local run passed all 80 cases with 3579 counted HTTP requests.
+The registration milestone combined local run passed all 80 cases with 3579 counted HTTP requests.
+
+The `account-security` selection uses a fresh reference process and two disposable
+accounts. Its eight cases cover required password verification, exact personal
+policy output, JSON/proof/authentication guards, stamp renewal, invalidated
+access/refresh tokens, owner-only device cleanup, preserved API-key credentials
+and authentication requests, and repeated positional renewal/recovery. It makes
+nine identity requests: eight successful grants and one rejected old refresh.
+Run it separately from the other reference groups and the CLI regression; no
+reference limits are changed. `BW_ACCOUNT_SECURITY_RECEIPT` records only case
+status and numeric counts in a new mode-0600 file. No CLI command or route trace
+is inferred from this direct HTTP selection.
+
+The expanded default local selection passes all 88 cases with 3871 counted HTTP
+requests, including real authentication-request expiry and modern registration.
+A fresh official Bitwarden CLI `2026.10.0` regression also passes all 120 commands
+against each server. It adds no account-security CLI command or captured route trace.
