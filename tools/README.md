@@ -85,8 +85,17 @@ subprocess environment. It checks wrong-secret rejection, API login's locked
 state, explicit password unlock, sync and decryption, and repeats the workflow
 after discarding the client cache. Finally it rotates the key over HTTP, checks
 that the CLI rejects the old secret, and unlocks and decrypts with the new key.
-The complete suite executes 90 real CLI commands. API login output alone is
+That baseline executes 90 real CLI commands. API login output alone is
 never treated as proof that the vault unlocked.
+
+The attachment extension preserves all 90 commands and adds 28. The official CLI
+uploads empty, all-byte-value, and 2 MiB plus 37-byte fixtures, including a quoted
+Unicode filename. Downloads go to private files and are compared byte for byte;
+binary contents never pass through text stdout capture. The test edits the
+parent item, trashes/restores it, discards the client cache, syncs and downloads
+all attachments again, then deletes them. The complete suite executes 118 real
+CLI commands. Fixture and downloaded files remain inside the existing private
+temporary directory and are removed in `finally`.
 
 The personal-import HTTP checks follow the pinned relationship semantics:
 existing owned folder IDs are reused, foreign or unknown IDs create fresh owned
@@ -123,6 +132,19 @@ new logins with the replaced secret. Profile and sync must never expose that
 secret. Valid protected-email OTP and disabled-account administration are not
 exercised by these password-account fixtures.
 
+The portable attachment HTTP group covers all 11 upstream route patterns:
+reservation, multipart upload, metadata, both legacy uploads, share replacement,
+four deletion aliases, and bearerless capability download. It checks pending
+slots, number-or-string sizes, inclusive one-MiB size leeway and mismatch
+cleanup, empty and large opaque payloads, metadata key/name updates, ownership
+and cipher binding, and missing/forged/misbound download capabilities. A valid
+download capability intentionally needs no account bearer. Reservation leaves
+revisions unchanged; upload and attachment deletion advance the account revision
+while retaining the cipher revision. Trash retains attachment data and permanent
+cipher deletion removes it. Organization sharing permissions and external
+object storage are outside this personal-vault fixture. Pinned Vaultwarden
+exposes no upload-renewal route.
+
 The persistence test starts its own standalone server three times on a free loopback
 port, using one temporary SQLite database. It verifies graceful shutdown,
 encrypted account and owner data, folders, active and trashed ciphers, revisions,
@@ -131,7 +153,11 @@ secure-note fixtures and verifies their exact stored content and folder links
 after restart. Bulk trash, restore, permanent deletion, archive annotations, and
 removal of those annotations must survive restarts too. The personal API key,
 its replacement after rotation, and previously issued API bearer sessions must
-survive both restarts; the replaced key must remain rejected. Build `no-warden-server` first, or
+survive both restarts; the replaced key must remain rejected. Attachment metadata
+and bytes, an unexpired original download capability, and deletion/cascade
+cleanup are checked across restart too. Comparisons omit only regenerated
+attachment URL values and retain every stored metadata field. Capabilities and
+binary payloads never enter assertion output. Build `no-warden-server` first, or
 set `NO_WARDEN_BIN` to its binary path. The test stops its child processes and
 removes the temporary database on success or failure.
 
@@ -174,6 +200,10 @@ fresh disposable reference process for each group, preserving the database if
 desired, and another fresh process before the complete CLI comparison. This
 keeps upstream's default login rate-limit policy intact.
 
+Select `personal attachments` to run the portable attachment HTTP group against
+the upstream instance. Use a fresh disposable process after other login-heavy
+groups; the attachment group creates only two password-login fixtures.
+
 The initial compatibility baseline passed on 2026-10-18: the same 37 official
 CLI `2026.10.0` commands passed against both no-warden and upstream Vaultwarden
 `1.37.4`. The upstream binary came from the official
@@ -204,6 +234,16 @@ portable API-key HTTP groups passed all 14 tests upstream in isolated processes
 with unchanged rate-limit settings. The full standalone HTTP suite passed all
 52 tests, and keys, rotation, and API bearer sessions survived both graceful
 restarts.
+
+The attachment follow-up passed on 2026-10-18: all 118 official CLI commands
+passed against both no-warden and the same actual Vaultwarden `1.37.4` binary,
+including empty, all-byte, and 2 MiB + 37-byte fixtures, a Unicode filename,
+ordinary item editing, trash/restore, and fresh-cache downloads. The portable
+attachment HTTP group passed all nine tests upstream. The local full HTTP suite
+passed all 61 tests before the narrow missing-download-token status correction;
+the final focused attachment group then passed all nine tests on the corrected
+backend. Attachment metadata and bytes, an unexpired download capability, and
+deletion/cascade cleanup were verified across two graceful restarts.
 
 `seed-account.mjs` can also register a single explicit test account. Supply
 `BW_E2E_EMAIL`, `BW_E2E_PASSWORD`, and optionally `BW_E2E_SERVER` in the environment.

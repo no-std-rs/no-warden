@@ -108,6 +108,59 @@ The standalone Rust server provides a local SQLite implementation and the
 transport and cryptographic host services required to exercise real clients.
 Allocations in this host do not change the core's allocation-free contract.
 
+The opt-in `AttachmentStorage` provider separates metadata and lifecycle
+decisions from multipart parsing, encrypted byte transport, storage, randomness,
+clocks, and download-token verification. Read access permits attachment metadata retrieval;
+uploads, replacement, deletion, and metadata updates require write access.
+The default provider scope is personal ownership; embeddings can supply broader
+read/write permissions. Admin-named aliases grant no additional access.
+Encrypted file names, wrapped keys, and file contents remain opaque.
+`VaultService` exposes reservation, upload, legacy creation/replacement, deletion,
+read authorization, and metadata-update operations through `ValidatedAttachment`
+plans. The host stages the encrypted bytes before the provider commits a plan;
+the core neither parses multipart bodies nor owns a byte buffer.
+
+`AttachmentRequest` borrows the reservation's filename and key. Its size decoder
+accepts integers or strings and requires Serde's `deserialize_any`; `serde-json-core` 0.6
+consumers must use a suitable typed decoding adapter or construct the request
+directly. This restriction does not require allocation in the core. The
+bare-metal consumer constructs the request and serializes `AttachmentResponse`
+and `AttachmentUploadResponse` into caller-owned output buffers; that does not
+establish decoder support for the size union.
+
+The v2 flow first reserves metadata, then uploads the encrypted bytes. A pending
+reservation appears in cipher responses before the bytes exist. Reservation
+does not change account or cipher revisions; successful upload and deletion
+advance the account revision while preserving the cipher revision. Uploads accept
+an inclusive one-MiB difference from the declared size and record the measured
+size. A larger mismatch discards the reservation and any stored bytes. Legacy
+multipart uploads require an encrypted filename and key; legacy replacement
+creates a fresh attachment ID. The SQLite adapter commits metadata, BLOB contents,
+cleanup, and required revision changes together, a stronger guarantee than the
+upstream filesystem sequence. This guarantee covers the stored mutation;
+subsequent response or download-capability generation can fail after commit and
+return an error without reverting it, as in the upstream response path. Hard
+cipher deletion also removes attachments; trash and archive retain them.
+
+Cipher responses rebuild attachment lists from authoritative records rather
+than trusting an incoming `attachments` array. Ordinary `attachments2` metadata
+updates preserve file contents: missing IDs are skipped and an ID belonging to
+another cipher stops processing. The host applies these map rules; the core's
+`update_attachment_metadata` handles a single strict update. The core does not
+choose a map iteration order. Providers retain the surrounding cipher update's
+transaction requirements.
+
+Download URLs carry a 60-second capability bound to both cipher and attachment
+IDs. The host stores its digest and expiry and serves bytes without requiring a
+session bearer. Its expiry is strict; upstream uses a signed JWT with a 60-second
+lifetime and a further 30-second validation leeway. A missing token query returns
+422; an invalid supplied token or missing file returns 404. Filename metadata
+never selects a filesystem path. The core's declared-size ceiling is 525 MiB
+(550,502,400 bytes); the host's 16-MiB encoded-request cap also applies to
+multipart uploads. These are separate from upstream's 525,000,000-byte multipart
+file limit. Quota configuration and remote object-storage policies require
+additional adapter work.
+
 The host decodes JSON into owned values, then borrows the decoded strings for
 core validation. That accepts ordinary JSON escape sequences without requiring
 allocation in the core. It keeps unknown encrypted fields when saving items.

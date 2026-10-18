@@ -55,13 +55,26 @@ pub enum Route<'a> {
     CipherDelete(&'a str),
     CipherArchive(&'a str),
     CipherUnarchive(&'a str),
+    AttachmentReserve(&'a str),
+    AttachmentUpload(&'a str, &'a str),
+    AttachmentLegacy(&'a str),
+    AttachmentLegacyReplace(&'a str, &'a str),
+    AttachmentGet(&'a str, &'a str),
+    AttachmentDelete(&'a str, &'a str),
+    AttachmentDownload(&'a str, &'a str),
 }
 
 impl Route<'_> {
+    /// Whether the adapter must verify a bearer. Attachment downloads instead require
+    /// the scoped capability checked by `VaultService::authorize_attachment_download`.
     pub const fn requires_authentication(self) -> bool {
         !matches!(
             self,
-            Self::Config | Self::Prelogin | Self::Register | Self::Token
+            Self::Config
+                | Self::Prelogin
+                | Self::Register
+                | Self::Token
+                | Self::AttachmentDownload(_, _)
         )
     }
 }
@@ -73,6 +86,11 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
     use Route::*;
     let path = uri.split_once('?').map_or(uri, |(path, _)| path);
     let path = path.strip_suffix('/').unwrap_or(path);
+    if let Some(tail) = path.strip_prefix("/attachments/") {
+        let (cipher, attachment) = tail.split_once('/')?;
+        return (method == Get && valid_segment(cipher) && valid_segment(attachment))
+            .then_some(AttachmentDownload(cipher, attachment));
+    }
     match (method, path) {
         (Get, "/api/config") => Some(Config),
         (
@@ -136,6 +154,35 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                 if !valid_segment(id) {
                     return None;
                 }
+                if action == "attachment" || action == "attachment-admin" {
+                    return (method == Post).then_some(AttachmentLegacy(id));
+                }
+                if let Some(attachment) = action.strip_prefix("attachment/") {
+                    if attachment == "v2" {
+                        return (method == Post).then_some(AttachmentReserve(id));
+                    }
+                    if let Some((attachment, suffix)) = attachment.split_once('/') {
+                        if !valid_segment(attachment) {
+                            return None;
+                        }
+                        return match (method, suffix) {
+                            (Post, "share") => Some(AttachmentLegacyReplace(id, attachment)),
+                            (Post, "delete" | "delete-admin") | (Delete, "admin") => {
+                                Some(AttachmentDelete(id, attachment))
+                            }
+                            _ => None,
+                        };
+                    }
+                    if !valid_segment(attachment) {
+                        return None;
+                    }
+                    return match method {
+                        Get => Some(AttachmentGet(id, attachment)),
+                        Post => Some(AttachmentUpload(id, attachment)),
+                        Delete => Some(AttachmentDelete(id, attachment)),
+                        _ => None,
+                    };
+                }
                 return match (method, action) {
                     (Put, "delete") => Some(CipherSoftDelete(id)),
                     (Post, "delete") => Some(CipherDelete(id)),
@@ -170,6 +217,105 @@ fn valid_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn attachment_routes_keep_admin_aliases_and_scoped_download_authentication_distinct() {
+        use Method::*;
+        use Route::*;
+        let cases = [
+            (
+                Post,
+                "/api/ciphers/cipher/attachment/v2",
+                AttachmentReserve("cipher"),
+            ),
+            (
+                Post,
+                "/api/ciphers/cipher/attachment/file",
+                AttachmentUpload("cipher", "file"),
+            ),
+            (
+                Get,
+                "/api/ciphers/cipher/attachment/file",
+                AttachmentGet("cipher", "file"),
+            ),
+            (
+                Post,
+                "/api/ciphers/cipher/attachment",
+                AttachmentLegacy("cipher"),
+            ),
+            (
+                Post,
+                "/api/ciphers/cipher/attachment-admin",
+                AttachmentLegacy("cipher"),
+            ),
+            (
+                Post,
+                "/api/ciphers/cipher/attachment/file/share",
+                AttachmentLegacyReplace("cipher", "file"),
+            ),
+            (
+                Post,
+                "/api/ciphers/cipher/attachment/file/delete",
+                AttachmentDelete("cipher", "file"),
+            ),
+            (
+                Post,
+                "/api/ciphers/cipher/attachment/file/delete-admin",
+                AttachmentDelete("cipher", "file"),
+            ),
+            (
+                Delete,
+                "/api/ciphers/cipher/attachment/file",
+                AttachmentDelete("cipher", "file"),
+            ),
+            (
+                Delete,
+                "/api/ciphers/cipher/attachment/file/admin",
+                AttachmentDelete("cipher", "file"),
+            ),
+            (
+                Get,
+                "/attachments/cipher/file?token=not-logged",
+                AttachmentDownload("cipher", "file"),
+            ),
+        ];
+        for (method, path, expected) in cases {
+            assert_eq!(classify(method, path), Some(expected));
+            assert_eq!(
+                expected.requires_authentication(),
+                !matches!(expected, AttachmentDownload(_, _))
+            );
+        }
+        for path in [
+            "/api/ciphers/cipher/attachment",
+            "/api/ciphers/cipher/attachment-admin",
+            "/api/ciphers/cipher/attachment/v2",
+            "/api/ciphers/cipher/attachment/file",
+            "/api/ciphers/cipher/attachment/file/share",
+            "/api/ciphers/cipher/attachment/file/delete",
+            "/api/ciphers/cipher/attachment/file/delete-admin",
+            "/api/ciphers/cipher/attachment/file/admin",
+            "/attachments/cipher/file?token=not-logged",
+        ] {
+            for method in [Get, Post, Put, Delete, Options] {
+                if !cases
+                    .iter()
+                    .any(|(allowed, known, _)| method == *allowed && path == *known)
+                {
+                    assert_eq!(classify(method, path), None);
+                }
+            }
+        }
+        for path in [
+            "/attachments/../file",
+            "/attachments/cipher/../file",
+            "/attachments/cipher/a%2fb",
+            "/api/ciphers/cipher/attachment/../delete",
+            "/api/ciphers/cipher/attachment/file/delete/extra",
+        ] {
+            assert_eq!(classify(Get, path), None);
+            assert_eq!(classify(Post, path), None);
+        }
+    }
     #[test]
     fn api_key_management_is_authenticated_and_post_only() {
         for (path, expected) in [

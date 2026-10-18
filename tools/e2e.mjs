@@ -2,7 +2,7 @@
 /** Exercise the real, pinned Bitwarden CLI against any compatible test server. */
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fork } from "node:child_process";
@@ -374,7 +374,57 @@ try {
   assert(rotatedItem.login.password === importItems[0].login.password, "Rotated API-key login must preserve decryptability");
   run(["logout"]);
   assert.equal(commands, 90, "API-key authentication must retain the original 66 and exercise all 90 CLI commands");
-  console.log(`PASS: ${commands} real CLI commands; original 66 plus API-key login, password unlock, fresh-cache decryption, and key rotation verified.`);
+
+  stage("Upload and download empty, arbitrary-byte, and multi-megabyte encrypted attachments");
+  delete env.BW_SESSION;
+  login();
+  const attachments = [
+    { name: "Empty attachment.bin", bytes: Buffer.alloc(0) },
+    { name: 'Attachment "quoted" café 🔐.bin', bytes: Buffer.from(Array.from({ length: 256 }, (_, index) => index)) },
+    { name: "Large attachment.bin", bytes: randomBytes(2 * 1024 * 1024 + 37) },
+  ];
+  let attachedItem;
+  for (const fixture of attachments) {
+    const input = join(outputDirectory, fixture.name);
+    writeFileSync(input, fixture.bytes, { mode: 0o600 });
+    attachedItem = json(["create", "attachment", "--file", input, "--itemid", archiveItem.id]);
+    const attachment = attachedItem.attachments.find(candidate => candidate.fileName === fixture.name);
+    assert(attachment?.id, "The uploaded filename must decrypt and identify its attachment");
+    fixture.id = attachment.id;
+  }
+  function downloadAttachment(fixture, prefix) {
+    const destination = join(outputDirectory, `${prefix}-${fixture.id}.bin`);
+    run(["get", "attachment", fixture.id, "--itemid", archiveItem.id, "--output", destination]);
+    assert(readFileSync(destination).equals(fixture.bytes), "Downloaded attachment must match every original byte");
+  }
+  for (const fixture of attachments) downloadAttachment(fixture, "initial");
+  json(["edit", "item", archiveItem.id, encode({ ...attachedItem, notes: "Attachment lifecycle edit" })]);
+  run(["sync"]);
+  assert.equal(json(["get", "item", archiveItem.id]).attachments.length, 3);
+  run(["delete", "item", archiveItem.id]);
+  const trashedAttachments = json(["list", "items", "--trash"]).find(candidate => candidate.id === archiveItem.id);
+  assert.equal(trashedAttachments.attachments.length, 3);
+  run(["restore", "item", archiveItem.id]);
+  run(["logout"]);
+  delete env.BW_SESSION;
+  rmSync(appdata, { recursive: true, force: true });
+  run(["config", "server", clientServer]);
+  login();
+  run(["sync"]);
+  const freshAttachments = json(["get", "item", archiveItem.id]);
+  assert.equal(freshAttachments.attachments.length, 3);
+  for (const fixture of attachments) {
+    assert(freshAttachments.attachments.some(candidate => candidate.id === fixture.id && candidate.fileName === fixture.name),
+      "Fresh-cache attachment metadata must decrypt after editing and trash/restore");
+    downloadAttachment(fixture, "fresh");
+  }
+  for (const fixture of attachments) run(["delete", "attachment", fixture.id, "--itemid", archiveItem.id]);
+  run(["sync"]);
+  assert.equal(json(["get", "item", archiveItem.id]).attachments?.length ?? 0, 0);
+  run(["get", "attachment", attachments[0].id, "--itemid", archiveItem.id, "--output", join(outputDirectory, "deleted.bin")], { failure: true });
+  run(["logout"]);
+  assert.equal(commands, 118, "Attachment conformance must retain all 90 baseline commands and execute all 118 CLI commands");
+  console.log(`PASS: ${commands} real CLI commands; original 90 plus binary attachments, item edits, trash/restore, fresh-cache downloads, and deletion verified.`);
 } finally {
   proxy?.kill();
   rmSync(appdata, { recursive: true, force: true });
