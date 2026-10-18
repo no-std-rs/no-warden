@@ -41,7 +41,7 @@ against the standalone host and official Vaultwarden 1.37.4.
 | Personal `client_credentials` at `POST /identity/connect/token` | `user.<id>`, exact `api` scope, access token without refresh token | Real CLI API login, password unlock and decryption; core and HTTP comparison with upstream |
 | `POST /api/accounts/key-management/user-key-id` | One-time key-ID migration | SDK login and HTTP |
 | Profile, revision date, sync | Personal account and opaque encrypted vault | CLI and HTTP |
-| Folder CRUD | Encrypted names, owner isolation, clear references on deletion | CLI, HTTP, storage tests |
+| Folder CRUD and POST aliases | Opaque names, four-field responses, owner isolation, clear references without changing cipher revisions | CLI baseline; core/host tests and the focused HTTP comparison described below |
 | Cipher CRUD | Opaque ciphertext and unknown JSON fields | CLI, HTTP, storage tests |
 | Personal v2 attachment reservation and multipart upload | Opaque encrypted metadata and bytes; declared/measured size checks | Core, real CLI on both servers, matching HTTP |
 | Legacy attachment upload, replacement, and delete aliases | Same personal write checks; fresh replacement IDs; transactional cleanup | Core, local/upstream HTTP and restart checks |
@@ -89,6 +89,64 @@ They do not prove that a real client can decrypt a blob or use stored passkey
 credentials.
 User-key-ID migration is a one-time identifier backfill, not a key-rotation
 implementation.
+
+The folder chunk corrects the behavior of the seven existing
+[pinned folder routes](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/folders.rs#L14-L110).
+The upstream request model accepts any string `name`, including empty strings,
+Unicode, future encryption formats, and names larger than one MiB. These name
+cases already pass the direct Rust HTTP comparison against both the adapter and
+Vaultwarden 1.37.4. A supplied body `id` may be a string, null, or absent; it does
+not choose the created folder ID or replace the update path ID. Missing or
+wrong-typed known fields and duplicate known fields are rejected before mutation.
+The owned host decoder handles JSON escapes before borrowing
+`FolderWriteRequest`; unknown request fields remain private in local storage.
+
+The core's existing `create_folder` and `update_folder` methods retain the
+strict `FolderNamePolicy::Encrypted` default. Embeddings can explicitly choose
+`FolderNamePolicy::Opaque` through the corresponding `_with_policy` methods;
+this mode does not interpret the name or impose an encrypted-field size limit.
+The adapter selects it only for folder CRUD. Personal imports retain their
+existing strict validation. HTTP transport limits remain an adapter policy,
+outside the `no_std`, allocation-free core.
+
+All folder response surfaces—create, update, get, list, and sync—project exactly
+`id`, `name`, `revisionDate`, and `object: "folder"`, following the
+[pinned folder model](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/folder.rs#L52-L62).
+Stored extensions are preserved internally and are not echoed as response fields.
+A valid but missing or foreign folder UUID returns 400 with `Invalid folder`;
+malformed UUID paths return 422, matching [Rocket’s generated path guard](https://github.com/rwf2/Rocket/blob/v0.5.1/core/codegen/src/attribute/route/mod.rs#L130-L143). The
+[upstream UUID path guard](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/macros/src/lib.rs#L15-L27)
+validates syntax without normalizing spelling or case. The
+[Rocket JSON guard](https://api.rocket.rs/v0.5/src/rocket/serde/json.rs.html#196-210)
+distinguishes schema errors classified as data errors (422) from syntax/end-of-input
+errors (400); local diagnostics do not include supplied names or response bodies.
+Both DELETE and POST-delete aliases return an empty 200 response, matching
+upstream's `EmptyResult` and
+[Rocket's default empty response](https://api.rocket.rs/v0.5/rocket/struct.Response.html#method.new).
+
+Deleting a folder advances the account revision and clears its associations,
+without changing retained cipher revisions, as the
+[upstream deletion model](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/folder.rs#L101-L110)
+shows. A storage regression compares active and trashed cipher documents and
+columns before and after deletion, along with opaque fields, archive annotations,
+attachment metadata, every encrypted attachment byte, and existing download
+grants. Loose items and a foreign account's folder and cipher remain unchanged.
+Injected account-revision failures roll the local mutation back atomically;
+parser and ownership failures also preserve persisted state.
+
+All eight Rust folder cases pass against the adapter and official Vaultwarden
+`1.37.4`: 220 HTTP requests and two password logins per run, covering all seven
+folder route patterns. These runs verify projection, opaque names, ignored body
+IDs, positional inputs, JSON rejections, ownership, UUID guards, deletion effects,
+and unauthenticated access. The 118-command CLI result above is the previously
+verified baseline against both servers; the required client job reruns it with
+this chunk.
+Folder notifications and WebSocket/push behavior, complete error envelopes,
+content-type handling, and transport-limit parity remain open. In particular,
+the adapter's 16-MiB request cap differs from upstream's
+[20-MB JSON limit](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/main.rs#L575-L578).
+These folder corrections do not set a full-parity flag or complete the full API
+delivery goal.
 
 The attachment chunk follows the pinned
 [v2 and legacy handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L1127-L1496).

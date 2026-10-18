@@ -179,6 +179,25 @@ binary payloads never enter assertion output. Build `no-warden-server` first, or
 set `NO_WARDEN_BIN` to its binary path. The test stops its child processes and
 removes the temporary database on success or failure.
 
+## Rust folder HTTP contracts
+
+The portable folder checks use the Rust fixture library and two disposable
+accounts. They exercise the existing seven folder routes, JSON decoding and
+ownership boundaries, response projections, and cipher preservation on folder
+deletion:
+
+```sh
+cargo run --locked -p no-warden-conformance --bin no-warden-http-conformance
+BW_E2E_SERVER=http://127.0.0.1:8001 cargo run --locked \
+  -p no-warden-conformance --bin no-warden-http-conformance
+```
+
+`BW_FOLDER_RECEIPT` optionally names a new private result file. These HTTP
+checks make two fixture logins; use a fresh disposable reference process before
+this group and again before the complete CLI comparison. Its default login
+limits remain unchanged. Other HTTP and persistence groups still use their
+existing JavaScript tools.
+
 ## Compare against upstream Vaultwarden
 
 The same CLI suite runs unchanged against a disposable upstream Vaultwarden

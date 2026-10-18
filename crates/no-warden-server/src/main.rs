@@ -16,14 +16,15 @@ use axum::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use no_warden::{
-    ApiError, VaultService,
+    ApiError, ErrorKind, VaultService,
     bulk::CipherBulkOperation,
     identity::{AuthorizedApiKeyGrant, Secret},
     import::ImportView,
     route::{self, Route},
+    validation::FolderNamePolicy,
     wire::{
         CipherRequest, ClientCredentialsRequest, FolderRelationship, FolderRequest,
-        ImportFolderRequest, PasswordOrOtpRequest, RegisterRequest,
+        FolderWriteRequest, ImportFolderRequest, PasswordOrOtpRequest, RegisterRequest,
     },
 };
 use rand::{RngCore, rngs::OsRng};
@@ -89,6 +90,47 @@ fn invalid_grant() -> Failure {
 fn missing() -> Failure {
     Failure(StatusCode::NOT_FOUND, "Resource not found")
 }
+fn invalid_folder() -> Failure {
+    Failure(StatusCode::BAD_REQUEST, "Invalid folder")
+}
+fn folder_api_error(error: ApiError) -> Failure {
+    if error.kind == ErrorKind::NotFound {
+        invalid_folder()
+    } else {
+        error.into()
+    }
+}
+
+// Decode owned strings before borrowing the core DTO, so JSON escapes are
+// accepted. Parsing the raw request first also preserves duplicate-field errors
+// which would be lost by decoding a Value alone.
+#[derive(Deserialize)]
+struct FolderInput {
+    name: String,
+    #[serde(default)]
+    id: Option<String>,
+}
+
+fn folder_json_error(error: serde_json::Error) -> Failure {
+    match error.classify() {
+        serde_json::error::Category::Data => {
+            Failure(StatusCode::UNPROCESSABLE_ENTITY, "Invalid request")
+        }
+        _ => invalid(),
+    }
+}
+
+fn parse_folder_input(body: &[u8]) -> Result<(FolderInput, Value), Failure> {
+    let input: FolderInput = serde_json::from_slice(body).map_err(folder_json_error)?;
+    let mut document: Value = serde_json::from_slice(body).map_err(folder_json_error)?;
+    // Serde's derived struct decoder also accepts positional arrays. Keep the
+    // internal storage representation an object for every accepted input shape.
+    if !document.is_object() {
+        document = json!({"name": input.name, "id": input.id});
+    }
+    Ok((input, document))
+}
+
 fn json_response(value: Value) -> Response {
     Json(value).into_response()
 }
@@ -144,6 +186,12 @@ async fn dispatch(
     }
     let method = route::Method::parse(method.as_str()).ok_or_else(missing)?;
     let route = route::classify(method, uri.path()).ok_or_else(missing)?;
+    if let Route::FolderGet(id) | Route::FolderUpdate(id) | Route::FolderDelete(id) = route {
+        // Upstream's FromParam validates UUID syntax but keeps its original
+        // spelling. In particular, an upper-case UUID must not alias another ID.
+        uuid::Uuid::parse_str(id)
+            .map_err(|_| Failure(StatusCode::UNPROCESSABLE_ENTITY, "Invalid folder ID"))?;
+    }
     if route == Route::Config {
         return Ok(json_response(protocol::config(&app.base)));
     }
@@ -456,52 +504,58 @@ async fn dispatch(
             Ok(json_response(json!(millis)))
         }
         Route::Sync => Ok(json_response(json!({
-            "object":"sync","profile":protocol::profile(&account),"folders":store.items(&owner,"folder")?,
+            "object":"sync","profile":protocol::profile(&account),"folders":store.items(&owner,"folder")?.iter().map(protocol::folder).collect::<Vec<_>>(),
             "ciphers":store.items(&owner,"cipher")?,"collections":[],"policies":[],"sends":[],
             "domains":{"object":"domains","equivalentDomains":[],"globalEquivalentDomains":[]},
             "userDecryption":protocol::user_decryption(&account)
         }))),
-        Route::Folders | Route::Ciphers => {
-            let kind = if route == Route::Folders {
-                "folder"
-            } else {
-                "cipher"
-            };
-            Ok(json_response(
-                json!({"object":"list","data":store.items(&owner,kind)?,"continuationToken":null}),
-            ))
+        Route::Folders => Ok(json_response(
+            json!({"object":"list","data":store.items(&owner,"folder")?.iter().map(protocol::folder).collect::<Vec<_>>(),"continuationToken":null}),
+        )),
+        Route::Ciphers => Ok(json_response(
+            json!({"object":"list","data":store.items(&owner,"cipher")?,"continuationToken":null}),
+        )),
+        Route::FolderGet(id) => {
+            let document = store
+                .item(&owner, id, "folder")?
+                .ok_or_else(invalid_folder)?;
+            Ok(json_response(protocol::folder(&document)))
         }
-        Route::FolderGet(id) | Route::CipherGet(id) => {
-            let kind = if matches!(route, Route::FolderGet(_)) {
-                "folder"
-            } else {
-                "cipher"
-            };
-            Ok(json_response(
-                store.item(&owner, id, kind)?.ok_or_else(missing)?,
-            ))
-        }
+        Route::CipherGet(id) => Ok(json_response(
+            store.item(&owner, id, "cipher")?.ok_or_else(missing)?,
+        )),
         Route::FolderCreate | Route::FolderUpdate(_) => {
-            let document: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
-            let request = FolderRequest::deserialize(&document).map_err(|_| invalid())?;
-            store.pending = document.clone();
+            let (input, document) = parse_folder_input(&body)?;
+            let write = FolderWriteRequest {
+                name: &input.name,
+                id: input.id.as_deref(),
+            };
+            let request = FolderRequest { name: write.name };
+            store.pending = document;
             let id = match route {
                 Route::FolderUpdate(id) => id.to_owned(),
                 _ => uuid::Uuid::new_v4().to_string(),
             };
             let mut service = VaultService::new(&mut *store);
             if matches!(route, Route::FolderUpdate(_)) {
-                service.update_folder(&owner, &id, &request)?;
+                service
+                    .update_folder_with_policy(&owner, &id, &request, FolderNamePolicy::Opaque)
+                    .map_err(folder_api_error)?;
             } else {
-                service.create_folder(&owner, &id, &request)?;
+                service
+                    .create_folder_with_policy(&owner, &id, &request, FolderNamePolicy::Opaque)
+                    .map_err(folder_api_error)?;
             }
-            Ok(json_response(
-                store.item(&owner, &id, "folder")?.ok_or_else(missing)?,
-            ))
+            let document = store
+                .item(&owner, &id, "folder")?
+                .ok_or_else(invalid_folder)?;
+            Ok(json_response(protocol::folder(&document)))
         }
         Route::FolderDelete(id) => {
-            VaultService::new(&mut *store).delete_folder(&owner, id)?;
-            Ok(StatusCode::NO_CONTENT.into_response())
+            VaultService::new(&mut *store)
+                .delete_folder(&owner, id)
+                .map_err(folder_api_error)?;
+            Ok(StatusCode::OK.into_response())
         }
         Route::CipherCreate | Route::CipherCreateWrapped | Route::CipherUpdate(_) => {
             let document: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
@@ -714,6 +768,244 @@ fn issue_token_grant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folder_input_preserves_json_error_categories_and_duplicate_fields() {
+        for (body, expected) in [
+            (b"".as_slice(), StatusCode::BAD_REQUEST),
+            (b"{".as_slice(), StatusCode::BAD_REQUEST),
+            (
+                br#"{"name":"unterminated}"#.as_slice(),
+                StatusCode::BAD_REQUEST,
+            ),
+            (br#"{"name":"\uD800"}"#.as_slice(), StatusCode::BAD_REQUEST),
+            (
+                br#"{"name":"ok"} trailing"#.as_slice(),
+                StatusCode::BAD_REQUEST,
+            ),
+            (b"{}".as_slice(), StatusCode::UNPROCESSABLE_ENTITY),
+            (b"[]".as_slice(), StatusCode::UNPROCESSABLE_ENTITY),
+            (b"null".as_slice(), StatusCode::UNPROCESSABLE_ENTITY),
+            (
+                br#"{"name":null}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                br#"{"name":7}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                br#"{"name":false}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                br#"{"name":[]}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                br#"{"name":"ok","id":7}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                br#"{"name":"ok","id":false}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                br#"{"name":"ok","id":[]}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                br#"{"name":"ok","id":{}}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                br#"{"name":"first","name":"second"}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                br#"{"name":"first","na\u006de":"second"}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                br#"{"name":"ok","id":null,"id":null}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+        ] {
+            let failure = parse_folder_input(body)
+                .err()
+                .expect("Invalid folder input was accepted.");
+            assert_eq!(failure.0, expected);
+            assert_eq!(failure.1, "Invalid request");
+        }
+    }
+
+    #[test]
+    fn folder_input_decodes_escapes_and_accepts_opaque_names_and_ignored_string_ids() {
+        let (input, document) = parse_folder_input(br#"{"name":"quoted \" \\ caf\u00e9 \ud83d\udd10","id":"not a UUID","privateExtension":{"nested":[1,null,true]}}"#)
+            .unwrap_or_else(|_| panic!("Escaped folder input was rejected."));
+        assert!(input.name == "quoted \" \\ café 🔐");
+        assert!(input.id.as_deref() == Some("not a UUID"));
+        assert!(document["name"] == input.name);
+        assert!(document["privateExtension"] == json!({"nested":[1,null,true]}));
+        for body in [
+            br#"{"name":""}"#.as_slice(),
+            br#"{"name":"future-encryption-format","id":null}"#.as_slice(),
+            br#"{"name":"opaque name","id":""}"#.as_slice(),
+            br#"["positional name",null]"#.as_slice(),
+        ] {
+            let (input, document) = parse_folder_input(body)
+                .unwrap_or_else(|_| panic!("Valid folder input was rejected."));
+            assert!(document.is_object());
+            assert!(document["name"] == input.name);
+        }
+    }
+
+    #[tokio::test]
+    async fn folder_http_errors_preserve_persisted_state_and_owner_isolation() {
+        const FOLDER_ID: &str = "f0c3f062-6368-4d80-8ec9-c9b8cc209749";
+        let app = App {
+            store: Arc::new(Mutex::new(Store::open(":memory:").unwrap())),
+            base: "http://127.0.0.1".into(),
+            signing_key: [1; 32],
+        };
+        {
+            let mut store = app.store.lock().unwrap();
+            for owner in ["alice", "bob"] {
+                store.db.execute(
+                    "INSERT INTO accounts(id,email,document,password,revision) VALUES(?1,?2,?3,'test',?4)",
+                    params![owner, format!("{owner}@example.test"), json!({"id":owner}).to_string(), store::now()],
+                ).unwrap();
+                store.db.execute(
+                    "INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES(?1,?2,?3,?4,0)",
+                    params![digest(&format!("fixture-folder-{owner}")), format!("unused-fixture-refresh-{owner}"), owner, chrono::Utc::now().timestamp() + 3_600],
+                ).unwrap();
+            }
+            store.pending =
+                json!({"name":"initial opaque name","privateExtension":{"preserved":true}});
+            VaultService::new(&mut *store)
+                .create_folder_with_policy(
+                    "alice",
+                    FOLDER_ID,
+                    &FolderRequest {
+                        name: "initial opaque name",
+                    },
+                    FolderNamePolicy::Opaque,
+                )
+                .unwrap();
+            store
+                .db
+                .execute_batch(
+                    "CREATE TRIGGER reject_folder_revision BEFORE UPDATE OF revision ON accounts
+                 BEGIN SELECT RAISE(ABORT,'injected folder revision failure'); END;",
+                )
+                .unwrap();
+        }
+        let persisted = || {
+            let store = app.store.lock().unwrap();
+            store.db.prepare("SELECT 'account:'||id||':'||document||':'||revision FROM accounts UNION ALL SELECT 'item:'||id||':'||owner||':'||document||':'||deleted||':'||revision||':'||created FROM items ORDER BY 1")
+                .unwrap().query_map([], |row| row.get::<_, String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
+        };
+        let before = persisted();
+        let update_path = format!("/api/folders/{FOLDER_ID}");
+        for (owner, method, path, body, status, message) in [
+            (
+                "alice",
+                Method::POST,
+                "/api/folders",
+                b"{".as_slice(),
+                StatusCode::BAD_REQUEST,
+                "Invalid request",
+            ),
+            (
+                "alice",
+                Method::PUT,
+                update_path.as_str(),
+                br#"{"name":7}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Invalid request",
+            ),
+            (
+                "alice",
+                Method::PUT,
+                update_path.as_str(),
+                br#"{"name":"one","name":"two"}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Invalid request",
+            ),
+            (
+                "alice",
+                Method::POST,
+                "/api/folders",
+                br#"{"name":""}"#.as_slice(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Storage operation failed.",
+            ),
+            (
+                "alice",
+                Method::PUT,
+                update_path.as_str(),
+                br#"{"name":"changed opaque name"}"#.as_slice(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Storage operation failed.",
+            ),
+            (
+                "bob",
+                Method::PUT,
+                update_path.as_str(),
+                br#"{"name":"foreign update"}"#.as_slice(),
+                StatusCode::BAD_REQUEST,
+                "Invalid folder",
+            ),
+            (
+                "bob",
+                Method::DELETE,
+                update_path.as_str(),
+                b"".as_slice(),
+                StatusCode::BAD_REQUEST,
+                "Invalid folder",
+            ),
+            (
+                "bob",
+                Method::GET,
+                update_path.as_str(),
+                b"".as_slice(),
+                StatusCode::BAD_REQUEST,
+                "Invalid folder",
+            ),
+            (
+                "alice",
+                Method::GET,
+                "/api/folders/not-a-uuid",
+                b"".as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Invalid folder ID",
+            ),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                "authorization",
+                format!("Bearer fixture-folder-{owner}").parse().unwrap(),
+            );
+            let result = dispatch(
+                State(app.clone()),
+                method,
+                path.parse().unwrap(),
+                headers,
+                Bytes::copy_from_slice(body),
+            )
+            .await;
+            let failure = match result {
+                Ok(_) => panic!("A rejected folder request succeeded."),
+                Err(failure) => failure,
+            };
+            assert_eq!(failure.0, status);
+            assert_eq!(failure.1, message);
+            assert!(
+                persisted() == before,
+                "A rejected folder request changed persisted state."
+            );
+        }
+    }
 
     #[test]
     fn api_key_issuance_has_only_access_authority_and_rotation_keeps_sessions() {

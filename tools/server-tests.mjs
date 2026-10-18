@@ -236,11 +236,11 @@ await test("standalone adapter enforces authentication, isolation, and JSON pres
     const bobFolder = ok(await request("/api/folders", {
       method: "POST", token: bobToken, body: { name: bob.registration.key },
     }), "Bob folder");
-    denied(await request(`/api/folders/${bobFolder.id}`, { token: aliceToken }), "cross-user folder read", [403, 404]);
+    denied(await request(`/api/folders/${bobFolder.id}`, { token: aliceToken }), "cross-user folder read", [400]);
     denied(await request(`/api/folders/${bobFolder.id}`, {
       method: "PUT", token: aliceToken, body: { name: alice.registration.key },
-    }), "cross-user folder edit", [403, 404]);
-    denied(await request(`/api/folders/${bobFolder.id}`, { method: "DELETE", token: aliceToken }), "cross-user folder delete", [403, 404]);
+    }), "cross-user folder edit", [400]);
+    denied(await request(`/api/folders/${bobFolder.id}`, { method: "DELETE", token: aliceToken }), "cross-user folder delete", [400]);
     for (const overrides of [
       { folderId: randomUUID() }, { folderId: bobFolder.id }, { organizationId: randomUUID() },
     ]) {
@@ -420,17 +420,17 @@ await test("standalone adapter enforces authentication, isolation, and JSON pres
     }), "folder alias fixture");
     denied(await request(`/api/folders/${folder.id}`, {
       method: "POST", token: aliceToken, body: { name: alice.registration.key },
-    }), "cross-user POST folder update", [403, 404]);
+    }), "cross-user POST folder update", [400]);
     denied(await request(`/api/folders/${folder.id}/delete`, {
       method: "POST", token: aliceToken,
-    }), "cross-user POST folder delete", [403, 404]);
+    }), "cross-user POST folder delete", [400]);
     assert.deepEqual(ok(await request(`/api/folders/${folder.id}`, { token: bobToken }), "folder after rejected aliases"), folder);
     const updated = ok(await request(`/api/folders/${folder.id}`, {
       method: "POST", token: bobToken, body: { name: bob.registration.keys.encryptedPrivateKey },
     }), "owner POST folder update");
     assert.equal(updated.name, bob.registration.keys.encryptedPrivateKey);
     ok(await request(`/api/folders/${folder.id}/delete`, { method: "POST", token: bobToken }), "owner POST folder delete");
-    denied(await request(`/api/folders/${folder.id}`, { token: bobToken }), "deleted aliased folder", [404]);
+    denied(await request(`/api/folders/${folder.id}`, { token: bobToken }), "deleted aliased folder", [400]);
     const sync = ok(await request("/api/sync", { token: bobToken }), "folder alias sync");
     assert.equal(sync.folders.some(candidate => candidate.id === folder.id), false);
   });

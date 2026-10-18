@@ -30,7 +30,7 @@ test("source enumeration includes the runtime and real-client checks", () => {
   const hashes = sourceHashes();
   assert(Object.hasOwn(hashes, "crates/no-warden/src/lib.rs"));
   assert(Object.hasOwn(hashes, "crates/no-warden-conformance/src/cli.rs"));
-  for (const file of ["fixture.rs", "capture.rs", "transport.rs"]) assert(Object.hasOwn(hashes, `crates/no-warden-conformance/src/${file}`));
+  for (const file of ["fixture.rs", "capture.rs", "transport.rs", "folders.rs", "bin/no-warden-http-conformance.rs"]) assert(Object.hasOwn(hashes, `crates/no-warden-conformance/src/${file}`));
   assert(Object.hasOwn(hashes, "crates/no-warden-conformance/Cargo.toml"));
   assert(Object.hasOwn(hashes, "tools/e2e.sh"));
   assert(Object.hasOwn(hashes, "tools/seed-account.mjs"));
@@ -52,6 +52,15 @@ for (const field of ["http_positive_tested", "http_negative_tested", "http_teste
 test("changing a transitive CLI helper invalidates the coverage snapshot", () => {
   for (const file of ["tools/e2e.sh", "tools/seed-account.mjs", "crates/no-warden-conformance/src/fixture.rs", "crates/no-warden-conformance/src/capture.rs", "crates/no-warden-conformance/src/transport.rs"]) {
     const hashes = sourceHashes();
+    hashes[file] = "0".repeat(64);
+    assert.throws(() => validateCoverage(snapshot, hashes), /sources changed/);
+  }
+});
+
+test("changing the Rust folder cases or HTTP entry point invalidates coverage evidence", () => {
+  for (const file of ["crates/no-warden-conformance/src/folders.rs", "crates/no-warden-conformance/src/bin/no-warden-http-conformance.rs"]) {
+    const hashes = sourceHashes();
+    assert(Object.hasOwn(hashes, file), "Folder HTTP evidence must be enumerated recursively");
     hashes[file] = "0".repeat(64);
     assert.throws(() => validateCoverage(snapshot, hashes), /sources changed/);
   }

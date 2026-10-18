@@ -6,6 +6,18 @@ use crate::{
 
 pub const MAX_ENCRYPTED_FIELD_BYTES: usize = 1_048_576;
 
+/// Folder-name validation selected by the embedding application.
+///
+/// Existing callers retain encrypted-envelope validation. A protocol adapter that must
+/// preserve arbitrary upstream folder names can explicitly choose `Opaque`; transport
+/// and storage limits then belong to that adapter rather than this name validator.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum FolderNamePolicy {
+    #[default]
+    Encrypted,
+    Opaque,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct KdfPolicy {
     pub minimum_pbkdf2_iterations: u32,
@@ -196,8 +208,22 @@ pub fn validate_registration(
 }
 
 pub fn validate_folder(request: &FolderRequest<'_>) -> Result<(), ApiError> {
-    validate_encrypted_string(request.name)
-        .map_err(|_| ApiError::invalid("name", "An encrypted folder name is required."))
+    validate_folder_with_policy(request, FolderNamePolicy::Encrypted)
+}
+
+/// Validate a folder name without decrypting or modifying it.
+///
+/// `Opaque` accepts every string, including empty strings and future encrypted formats,
+/// without an intrinsic byte limit. It does not change cipher or import validation.
+pub fn validate_folder_with_policy(
+    request: &FolderRequest<'_>,
+    policy: FolderNamePolicy,
+) -> Result<(), ApiError> {
+    match policy {
+        FolderNamePolicy::Encrypted => validate_encrypted_string(request.name)
+            .map_err(|_| ApiError::invalid("name", "An encrypted folder name is required.")),
+        FolderNamePolicy::Opaque => Ok(()),
+    }
 }
 
 pub fn validate_cipher(request: &CipherRequest<'_>) -> Result<(), ApiError> {
@@ -451,6 +477,18 @@ mod tests {
     use super::*;
     use serde::Deserialize;
     pub(crate) const ENCRYPTED: &str = "2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+    #[test]
+    fn opaque_folder_names_are_opt_in_and_have_no_encrypted_field_limit() {
+        assert_eq!(FolderNamePolicy::default(), FolderNamePolicy::Encrypted);
+        assert!(validate_folder(&FolderRequest { name: ENCRYPTED }).is_ok());
+        let oversized = "x".repeat(MAX_ENCRYPTED_FIELD_BYTES + 1);
+        for name in ["", "café 🔐", "future-envelope:v42:anything", &oversized] {
+            let request = FolderRequest { name };
+            assert_eq!(validate_folder(&request).unwrap_err().field, Some("name"));
+            assert!(validate_folder_with_policy(&request, FolderNamePolicy::Opaque).is_ok());
+        }
+    }
 
     #[test]
     fn encrypted_values_require_well_formed_envelopes() {

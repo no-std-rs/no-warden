@@ -268,16 +268,27 @@ Sources: [Vaultwarden profile](https://github.com/dani-garcia/vaultwarden/blob/5
 | --- | --- |
 | `GET /api/folders` | List response |
 | `GET /api/folders/{id}` | One owned folder |
-| `POST /api/folders` | Create from encrypted `name` |
-| `PUT /api/folders/{id}` | Replace encrypted `name` |
+| `POST /api/folders` | Create from opaque string `name` |
+| `PUT /api/folders/{id}` | Replace opaque string `name` |
 | `POST /api/folders/{id}` | Update alias |
 | `DELETE /api/folders/{id}` | Delete folder, retain its ciphers |
 | `POST /api/folders/{id}/delete` | Delete alias |
 
-A folder response has `id`, `name`, `revisionDate`, and `object: "folder"`.
+A folder response has exactly `id`, `name`, `revisionDate`, and
+`object: "folder"`. Clients normally encrypt `name`; upstream accepts any string,
+including empty strings. The optional body `id` accepts a string or null and is
+ignored during CRUD: creation generates an ID, and updates use the route ID.
+Unknown request fields do not enter responses.
+
+Malformed JSON returns 400; semantic decoding errors, including missing names,
+wrong field types, and duplicate known fields, return 422. Folder UUID path
+syntax is validated without normalizing its spelling. A malformed path ID
+returns 422; a valid but absent or foreign folder ID returns 400. Both delete
+aliases return an empty 200 response.
 A list response is `{"data":[...],"object":"list","continuationToken":null}`.
-Deleting a folder clears its association without deleting the stored vault
-items. IDs belonging to another account must not be usable by the caller. The
+Deleting a folder clears its association and advances the account revision
+without deleting vault items or changing their cipher revisions, archive state,
+encrypted fields, or attachment bytes. IDs belonging to another account must not be usable by the caller. The
 core classifies both legacy POST aliases in the table, as well as PUT updates
 and DELETE removal.
 

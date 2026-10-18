@@ -5,7 +5,7 @@
 //! for an entire service operation so ownership checks and mutations remain atomic.
 use crate::{
     ApiError, ErrorKind,
-    validation::{self, KdfPolicy},
+    validation::{self, FolderNamePolicy, KdfPolicy},
     wire::{CipherCreateRequest, CipherRequest, FolderRequest, RegisterRequest},
 };
 
@@ -28,9 +28,11 @@ pub struct ItemMetadata<'a> {
 /// Persistence boundary. Ciphertext must be preserved verbatim.
 ///
 /// Account email lookup must use ASCII case-insensitive comparison. Deleting a folder must
-/// clear that folder reference on its owner's ciphers. The application supplies globally
-/// unique identifiers, revision timestamps, durability, and transactions. Adapters supporting
-/// conditional updates must check `last_known_revision_date` before replacing a cipher.
+/// clear that folder reference on its owner's ciphers and advance the account revision,
+/// while preserving cipher revisions, encrypted payloads, and attachment bytes. The
+/// application supplies globally unique identifiers, revision timestamps, durability,
+/// and transactions. Adapters supporting conditional updates must check
+/// `last_known_revision_date` before replacing a cipher.
 pub trait Storage {
     type Error;
 
@@ -194,9 +196,20 @@ impl<S: Storage> VaultService<S> {
         id: &str,
         request: &FolderRequest<'_>,
     ) -> Result<(), ApiError> {
+        self.create_folder_with_policy(owner, id, request, FolderNamePolicy::Encrypted)
+    }
+
+    /// Create a folder using an explicit name policy, retaining ownership and ID checks.
+    pub fn create_folder_with_policy(
+        &mut self,
+        owner: &str,
+        id: &str,
+        request: &FolderRequest<'_>,
+        policy: FolderNamePolicy,
+    ) -> Result<(), ApiError> {
         require_owner(owner)?;
         validate_id(id)?;
-        validation::validate_folder(request)?;
+        validation::validate_folder_with_policy(request, policy)?;
         if self
             .storage
             .folder_metadata(id)
@@ -216,8 +229,19 @@ impl<S: Storage> VaultService<S> {
         id: &str,
         request: &FolderRequest<'_>,
     ) -> Result<(), ApiError> {
+        self.update_folder_with_policy(owner, id, request, FolderNamePolicy::Encrypted)
+    }
+
+    /// Update an owned folder using an explicit name policy; the name stays verbatim.
+    pub fn update_folder_with_policy(
+        &mut self,
+        owner: &str,
+        id: &str,
+        request: &FolderRequest<'_>,
+        policy: FolderNamePolicy,
+    ) -> Result<(), ApiError> {
         require_owner(owner)?;
-        validation::validate_folder(request)?;
+        validation::validate_folder_with_policy(request, policy)?;
         self.check_folder(owner, id)?;
         self.storage
             .save_folder(owner, id, request)
@@ -443,6 +467,7 @@ mod tests {
         current_key: Option<&'static str>,
         received_revision: Option<String>,
         folder: Option<(String, String)>,
+        folder_name: Option<String>,
         cipher: Option<(String, String, bool)>,
         writes: usize,
         reads: usize,
@@ -482,14 +507,19 @@ mod tests {
             &mut self,
             owner: &str,
             id: &str,
-            _: &FolderRequest<'_>,
+            request: &FolderRequest<'_>,
         ) -> Result<(), Failure> {
+            if let Some(error) = self.fail_save {
+                return Err(error);
+            }
             self.folder = Some((id.to_string(), owner.to_string()));
+            self.folder_name = Some(request.name.to_string());
             self.writes += 1;
             Ok(())
         }
         fn delete_folder(&mut self, _: &str, _: &str) -> Result<(), Failure> {
             self.folder = None;
+            self.folder_name = None;
             self.writes += 1;
             Ok(())
         }
@@ -619,6 +649,160 @@ mod tests {
                 .kind,
             ErrorKind::Unauthorized
         );
+    }
+
+    #[test]
+    fn default_folder_operations_reject_non_envelopes_before_provider_access() {
+        let mut service = VaultService::new(Memory::default());
+        for name in ["", "café 🔐", "future-envelope:v42:anything"] {
+            let request = FolderRequest { name };
+            assert_eq!(
+                service
+                    .create_folder("alice", "folder", &request)
+                    .unwrap_err()
+                    .field,
+                Some("name")
+            );
+            assert_eq!(
+                service
+                    .update_folder("alice", "folder", &request)
+                    .unwrap_err()
+                    .field,
+                Some("name")
+            );
+        }
+        assert_eq!(service.storage().reads, 0);
+        assert_eq!(service.storage().writes, 0);
+    }
+
+    #[test]
+    fn opaque_folder_operations_preserve_empty_unicode_and_future_format_names() {
+        for name in ["", "café \"quoted\" 🔐", "future-envelope:v42:anything"] {
+            let mut storage = Memory::default();
+            let mut service = VaultService::new(&mut storage);
+            service
+                .create_folder_with_policy(
+                    "alice",
+                    "folder",
+                    &FolderRequest { name },
+                    FolderNamePolicy::Opaque,
+                )
+                .unwrap();
+            assert_eq!(service.storage().folder_name.as_deref(), Some(name));
+            service
+                .update_folder_with_policy(
+                    "alice",
+                    "folder",
+                    &FolderRequest {
+                        name: "replacement:🔑",
+                    },
+                    FolderNamePolicy::Opaque,
+                )
+                .unwrap();
+            assert_eq!(
+                service.storage().folder_name.as_deref(),
+                Some("replacement:🔑")
+            );
+            assert_eq!(service.storage().folder.as_ref().unwrap().1, "alice");
+            assert_eq!(service.storage().writes, 2);
+        }
+    }
+
+    #[test]
+    fn opaque_folder_policy_keeps_authentication_ids_conflicts_and_ownership_checks() {
+        let request = FolderRequest { name: "" };
+        let mut service = VaultService::new(Memory::default());
+        for id in ["", "../folder", "not/a/folder"] {
+            assert_eq!(
+                service
+                    .create_folder_with_policy("alice", id, &request, FolderNamePolicy::Opaque)
+                    .unwrap_err()
+                    .field,
+                Some("id")
+            );
+        }
+        assert_eq!(
+            service
+                .create_folder_with_policy("", "folder", &request, FolderNamePolicy::Opaque)
+                .unwrap_err()
+                .kind,
+            ErrorKind::Unauthorized
+        );
+        assert_eq!(
+            service
+                .update_folder_with_policy("", "folder", &request, FolderNamePolicy::Opaque)
+                .unwrap_err()
+                .kind,
+            ErrorKind::Unauthorized
+        );
+        assert_eq!(service.storage().reads, 0);
+        service
+            .create_folder_with_policy("alice", "folder", &request, FolderNamePolicy::Opaque)
+            .unwrap();
+        assert_eq!(
+            service
+                .create_folder_with_policy("bob", "folder", &request, FolderNamePolicy::Opaque)
+                .unwrap_err()
+                .kind,
+            ErrorKind::Conflict
+        );
+        for (owner, id) in [("bob", "folder"), ("alice", "missing")] {
+            assert_eq!(
+                service
+                    .update_folder_with_policy(owner, id, &request, FolderNamePolicy::Opaque)
+                    .unwrap_err()
+                    .kind,
+                ErrorKind::NotFound
+            );
+        }
+        assert_eq!(service.storage().folder_name.as_deref(), Some(""));
+        assert_eq!(service.storage().writes, 1);
+    }
+
+    #[test]
+    fn opaque_folder_provider_errors_preserve_existing_data_and_typed_failures() {
+        for (failure, expected) in [
+            (Failure::Backend, ErrorKind::Storage),
+            (Failure::Stale, ErrorKind::Conflict),
+        ] {
+            let mut storage = Memory {
+                fail_save: Some(failure),
+                ..Memory::default()
+            };
+            let mut service = VaultService::new(&mut storage);
+            let request = FolderRequest {
+                name: "future-envelope:v42:anything",
+            };
+            assert_eq!(
+                service
+                    .create_folder_with_policy(
+                        "alice",
+                        "folder",
+                        &request,
+                        FolderNamePolicy::Opaque
+                    )
+                    .unwrap_err()
+                    .kind,
+                expected
+            );
+            assert!(service.storage().folder.is_none());
+            service.storage_mut().folder = Some(("folder".into(), "alice".into()));
+            service.storage_mut().folder_name = Some("original".into());
+            assert_eq!(
+                service
+                    .update_folder_with_policy(
+                        "alice",
+                        "folder",
+                        &request,
+                        FolderNamePolicy::Opaque
+                    )
+                    .unwrap_err()
+                    .kind,
+                expected
+            );
+            assert_eq!(service.storage().folder_name.as_deref(), Some("original"));
+            assert_eq!(service.storage().writes, 0);
+        }
     }
 
     #[test]
