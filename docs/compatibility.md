@@ -73,7 +73,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Provider conflict errors | `Storage::map_error` can preserve an HTTP 409 conflict | Core provider tests |
 
 The allocation-free core's models include login, secure note, card, identity,
-and SSH-key items, plus optional opaque blob data. Its 159 unit tests cover the
+and SSH-key items, plus optional opaque blob data. Its 167 unit tests cover the
 typed fields, bounded collections and import decoding, validation, ownership,
 lifecycle rules, folder mapping, the atomic import and bulk provider contracts,
 API-key proof selection and authorization, and attachment lifecycle and provider
@@ -97,7 +97,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 351 active workspace unit tests pass: 159 core, 127 host and 65 support,
+All 373 active workspace unit tests pass: 167 core, 136 host and 70 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -695,7 +695,38 @@ authentication-request creations and three response polls. The selected group
 uses a fresh reference with unchanged rate limits. These direct HTTP checks add
 no official CLI command or captured CLI-route claim.
 
-The expanded default local selection passes all 88 cases with 3871 counted HTTP
+The account-security milestone passed all 88 cases with 3871 counted HTTP
 requests, including real authentication-request expiry and modern registration.
 A fresh official Bitwarden CLI `2026.10.0` regression also passes all 120 commands
 against each server. It adds no account-security CLI command or captured route trace.
+
+## Nested KDF transitions
+
+The allocation-free provider verifies the old hash before complete nested KDF
+and salt checks, then applies signed upstream policy and passes an opaque
+credential-transition plan to storage. The adapter commits verifier, wrapped
+key, client KDF, private stamp, revision and session revocation atomically. It
+preserves devices/push rows, API credentials, requests and encrypted vaults.
+Seven rollback stages, deferred commit, reopen and stale-proof concurrency use
+separate SQL tests; they establish stronger rollback than upstream sequential
+mutations, rather than proving identical failure behavior.
+
+The exact nested schema has no legacy flattened fallback. The pinned source
+normalizes stored email with trim/lowercase while release 1.37.4 compares it
+exactly; normal tested lowercase accounts agree. Notification delivery, remembered
+2FA, existing password-route stamp exceptions, versioned salt edge cases and
+complete account/KDF/identity parity remain open.
+
+All eight selected KDF HTTP cases pass against both actual servers: 343 tracked
+requests each, including nine identity requests (eight successful grants and one
+rejected old refresh), two authentication-request creations and four public polls.
+The separate official CLI `2026.10.0` selection passes nine commands on each
+server after a genuine HTTP PBKDF2 600,000-to-700,000 transition: fresh-cache
+login, lock/unlock, sync and decryption of the preexisting item. Its direct seven
+HTTP requests and one password grant exclude registration bootstrap and all
+CLI-internal requests. No CLI-posted KDF endpoint or captured route is inferred.
+
+The current default local selection passes all 96 cases with 4214 tracked HTTP
+requests, including the real authentication-request expiry fixture.
+The unchanged official CLI `2026.10.0` baseline also passes all 120 commands
+against each server, separately from the nine-command KDF proof.

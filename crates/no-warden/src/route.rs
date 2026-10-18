@@ -33,6 +33,7 @@ pub enum Route<'a> {
     AccountRotateApiKey,
     AccountVerifyPassword,
     AccountSecurityStamp,
+    AccountKdfChange,
     AccountKeysGet,
     AccountKeysInitialize,
     UserPublicKey(&'a str),
@@ -135,6 +136,7 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (Post, "/api/accounts/rotate-api-key") => Some(AccountRotateApiKey),
         (Post, "/api/accounts/verify-password") => Some(AccountVerifyPassword),
         (Post, "/api/accounts/security-stamp") => Some(AccountSecurityStamp),
+        (Post, "/api/accounts/kdf") => Some(AccountKdfChange),
         (Get, "/api/accounts/keys") => Some(AccountKeysGet),
         (Post, "/api/accounts/keys") => Some(AccountKeysInitialize),
         (Get, "/api/accounts/profile") => Some(Profile),
@@ -532,6 +534,7 @@ mod tests {
                 "/api/accounts/security-stamp",
                 Route::AccountSecurityStamp,
             ),
+            (Method::Post, "/api/accounts/kdf", Route::AccountKdfChange),
         ] {
             assert_eq!(classify(method, path), Some(expected));
             assert!(expected.requires_authentication());
@@ -549,6 +552,7 @@ mod tests {
         for path in [
             "/api/accounts/verify-password",
             "/api/accounts/security-stamp",
+            "/api/accounts/kdf",
         ] {
             for method in [Method::Get, Method::Put, Method::Delete, Method::Options] {
                 assert!(classify(method, path).is_none());

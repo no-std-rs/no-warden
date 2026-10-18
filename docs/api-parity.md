@@ -39,11 +39,11 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 80 routed patterns, 45 with typed requests, 68 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 81 routed patterns, 46 with typed requests, 69 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 77 partial and 217 unimplemented. Query/rank/configuration
+status: 78 partial and 216 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
@@ -54,8 +54,8 @@ responses, and attachment responses. Bulk cipher lists use the generic `ListResp
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 72 patterns, negative
-HTTP evidence for 71, 149 named HTTP cases, and 31 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 73 patterns, negative
+HTTP evidence for 72, 157 named HTTP cases, and 31 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -755,5 +755,36 @@ exercise existing-bearer and old-refresh rejection, private stamp projections,
 device cleanup, preserved credentials/requests and owner isolation. They add no
 captured CLI-route evidence or full-parity status.
 
-The expanded default local selection passes all 88 cases with 3871 counted HTTP
+The account-security milestone passed all 88 cases with 3871 counted HTTP
 requests, including real authentication-request expiry and modern registration.
+
+## Nested client KDF transition subset
+
+`POST /api/accounts/kdf` adds a distinct nested borrowed request and opt-in
+`AccountKdfStorage` contract. Old proof verification precedes full KDF equality,
+exact salts and signed policy, then a private validated plan reaches the provider.
+The adapter rechecks old proof inside the transaction before changing the server
+verifier, wrapped user key, client KDF, private stamp, revision and session
+authority. It retains device/push registrations, API credentials, authentication
+requests, asymmetric keys, encrypted vault data and foreign state.
+
+Core/provider and host tests cover rejection ordering, error boundaries,
+rollback, deferred commit, durable reopen and stale-proof concurrency. The
+provider makes atomic rollback stronger than upstream's sequential timing.
+Pinned-source and release salt comparison differ; ordinary lowercase comparison
+accounts do not close that variant. Notifications, remembered 2FA, preexisting
+stamp exceptions and all broader account/key/password contracts remain open.
+The source-accepted empty wrapped-key variant also corrects password-grant
+omission versus API-key retention of a top-level empty `Key`.
+
+All eight selected KDF HTTP cases pass against both actual servers: 343 tracked
+requests each, including nine identity requests (eight successful grants and one
+rejected old refresh), two authentication-request creations and four public polls.
+The separate official CLI `2026.10.0` selection passes nine commands on each
+server after a genuine HTTP PBKDF2 600,000-to-700,000 transition: fresh-cache
+login, lock/unlock, sync and decryption of the preexisting item. Its direct seven
+HTTP requests and one password grant exclude registration bootstrap and all
+CLI-internal requests. No CLI-posted KDF endpoint or captured route is inferred.
+
+The current default local selection passes all 96 cases with 4214 tracked HTTP
+requests, including the real authentication-request expiry fixture.

@@ -939,3 +939,30 @@ The relevant handlers/hooks match Vaultwarden `1.37.4` release commit
 `7c188967e7a467b19b2757bc3326f9cf3ccae327`; its protected-action enum refactor
 preserves validation behavior. Organization/SSO policies, successful protected
 OTP, remembered 2FA, notifications and complete failure semantics remain partial.
+
+### Client KDF changes
+
+`POST /api/accounts/kdf` accepts exactly required `authenticationData`,
+`unlockData` and old `masterPasswordHash`. Authentication data is ordered
+`salt`, `kdf`, `masterPasswordAuthenticationHash`, with `Salt`, `Kdf` and
+`MasterPasswordAuthenticationHash` aliases. Unlock data is ordered `salt`, `kdf`,
+`masterKeyWrappedUserKey`, with canonical names only. KDF values reuse the signed
+`kdf`/`kdfIterations`/optional memory/parallelism fields and their existing aliases.
+Flattened legacy credentials do not replace these required nested objects.
+
+After old-proof verification, both complete KDF values and salts must match.
+PBKDF2 requires at least 100,000 iterations; Argon2 requires positive iterations,
+15–1024 MiB and parallelism 1–16. Other signed identifiers remain opaque, and
+non-Argon memory/parallelism clear to null. Success returns empty 200, changes the
+wrapped key/proof/KDF/stamp/revision and invalidates old sessions while preserving
+devices, API secrets, auth requests and encrypted vaults.
+
+Sources: pinned
+[KDF endpoint and nested checks](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L690)
+and [password/stamp transition](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/user.rs#L201).
+The pin normalizes stored email with trim/lowercase; release 1.37.4's nested check
+compares stored email exactly. Ordinary tested lowercase accounts agree; other
+versioned salt variants remain explicit. Password/auth-request grants omit a
+top-level empty `Key`, while API-key grants retain it, as shown in the pinned
+[password response](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L592)
+and [API-key response](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L726).

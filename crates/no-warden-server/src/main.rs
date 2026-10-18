@@ -1,6 +1,7 @@
 //! Local conformance host. Production deployment requires the work in ROADMAP.md.
 #![forbid(unsafe_code)]
 
+mod account_kdf;
 mod account_security;
 mod attachments;
 mod auth_requests;
@@ -534,6 +535,13 @@ async fn dispatch_with_peer(
     let owner = owner.ok_or_else(unauthorized)?;
     let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
     match route {
+        Route::AccountKdfChange => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let input = account_kdf::parse(&body)?;
+            VaultService::new(&mut *store).change_kdf(&owner, &input.request())?;
+            Ok(StatusCode::OK.into_response())
+        }
         Route::AccountVerifyPassword => {
             devices::access_binding(&store.db, &digest(bearer), &owner)?
                 .ok_or_else(unauthorized)?;
@@ -1543,6 +1551,349 @@ mod tests {
                 && account["kdfIterations"] == -2
                 && account["kdfMemory"].is_null()
                 && account["masterPasswordHint"].is_null()
+        );
+    }
+
+    fn account_kdf_document(
+        old: &str,
+        new: &str,
+        key: &str,
+        kdf: no_warden::wire::RegistrationKdf,
+    ) -> Value {
+        let kdf = json!({"kdf":kdf.kdf,"kdfIterations":kdf.kdf_iterations,"kdfMemory":kdf.kdf_memory,"kdfParallelism":kdf.kdf_parallelism});
+        json!({"authenticationData":{"salt":"alice@example.test","kdf":kdf,"masterPasswordAuthenticationHash":new},"unlockData":{"salt":"alice@example.test","kdf":kdf,"masterKeyWrappedUserKey":key},"masterPasswordHash":old,"id":"bob","owner":"bob","securityStamp":"forged","keys":{"publicKey":"forged"},"_password":"forged","apiKey":"forged","future":"ignored"})
+    }
+    #[tokio::test]
+    async fn account_kdf_http_authentication_schema_proof_and_salt_failures_are_nonmutating() {
+        let app = auth_request_fixture_app();
+        let kdf = no_warden::wire::RegistrationKdf {
+            kdf: 0,
+            kdf_iterations: 700_000,
+            kdf_memory: None,
+            kdf_parallelism: None,
+        };
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        for bearer in [None, Some("invalid"), Some("legacy-auth-access")] {
+            let Err(error) = device_request(
+                &app,
+                Method::POST,
+                "/api/accounts/kdf",
+                device_authorization(bearer),
+                b"{",
+            )
+            .await
+            else {
+                panic!("Unauthenticated or unbound KDF request succeeded.")
+            };
+            assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        }
+        for (body,status) in [
+            (b"{".as_slice(),StatusCode::BAD_REQUEST),
+            (b"{}",StatusCode::UNPROCESSABLE_ENTITY),
+            (br#"{"kdf":0,"kdfIterations":700000,"masterPasswordHash":"fixture-master-hash","newMasterPasswordHash":"new","key":"key"}"#,StatusCode::UNPROCESSABLE_ENTITY),
+        ] {
+            let Err(error)=device_request(&app,Method::POST,"/api/accounts/kdf",device_authorization(Some("device-fixture-alice")),body).await else {panic!("Invalid KDF schema accepted.")};
+            assert_eq!(error.0,status);
+        }
+        for phase in 0..5 {
+            let mut document =
+                account_kdf_document("fixture-master-hash", "new-proof", "new-key", kdf);
+            match phase {
+                0 => document["masterPasswordHash"] = json!("wrong"),
+                1 => document["authenticationData"]["salt"] = json!("ALICE@EXAMPLE.TEST"),
+                2 => document["unlockData"]["salt"] = json!(" alice@example.test "),
+                3 => document["unlockData"]["kdf"]["kdfIterations"] = json!(700_001),
+                _ => {
+                    document["authenticationData"]["kdf"]["kdfIterations"] = json!(99_999);
+                    document["unlockData"]["kdf"]["kdfIterations"] = json!(99_999);
+                }
+            }
+            let Err(error) = device_request(
+                &app,
+                Method::POST,
+                "/api/accounts/kdf",
+                device_authorization(Some("device-fixture-alice")),
+                document.to_string().as_bytes(),
+            )
+            .await
+            else {
+                panic!("Invalid KDF proof or settings accepted.")
+            };
+            assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        }
+        assert!(
+            device_push_persisted_state(&app.store.lock().unwrap()) == before,
+            "Rejected KDF request changed persisted authority."
+        );
+        assert!(
+            device_request(
+                &app,
+                Method::GET,
+                "/api/accounts/profile",
+                device_authorization(Some("device-fixture-alice")),
+                b""
+            )
+            .await
+            .is_ok()
+        );
+    }
+    #[tokio::test]
+    async fn account_kdf_http_transitions_revoke_sessions_preserve_devices_and_accept_opaque_new_proofs()
+     {
+        let (app, id) = auth_login_fixture();
+        let api_secret = {
+            let mut store = app.store.lock().unwrap();
+            store.db.execute("INSERT INTO device_push_tokens(owner,identifier,token) VALUES('alice','Request-Device','opaque-push')",[]).unwrap();
+            no_warden::identity::IdentityStorage::get_or_create_api_key(&mut *store, "alice")
+                .unwrap()
+                .api_key
+                .expose_secret()
+                .to_owned()
+        };
+        let requests = auth_request_persisted_rows(&app.store.lock().unwrap());
+        let retained = |store: &Store| {
+            device_push_persisted_state(store)
+                .into_iter()
+                .filter(|row| row.starts_with("device:") || row.starts_with("push:"))
+                .collect::<Vec<_>>()
+        };
+        let devices = retained(&app.store.lock().unwrap());
+        let login = |proof: &str| {
+            serde_urlencoded::to_string([
+                ("grant_type", "password"),
+                ("username", "alice@example.test"),
+                ("password", proof),
+                ("deviceIdentifier", "Request-Device"),
+                ("deviceName", "Ignored replacement"),
+                ("deviceType", "14"),
+            ])
+            .unwrap()
+        };
+        let api_login = || {
+            serde_urlencoded::to_string([
+                ("grant_type", "client_credentials"),
+                ("client_id", "user.alice"),
+                ("client_secret", api_secret.as_str()),
+                ("scope", "api"),
+                ("deviceIdentifier", "Request-Device"),
+                ("deviceName", "Ignored replacement"),
+                ("deviceType", "14"),
+            ])
+            .unwrap()
+        };
+        let argon = no_warden::wire::RegistrationKdf {
+            kdf: 1,
+            kdf_iterations: 1,
+            kdf_memory: Some(15),
+            kdf_parallelism: Some(16),
+        };
+        let first =
+            account_kdf_document("fixture-master-hash", "new-proof\0雪", "new-key\0雪", argon);
+        device_push_empty(
+            device_request(
+                &app,
+                Method::POST,
+                "/api/accounts/kdf",
+                device_authorization(Some("device-fixture-alice")),
+                first.to_string().as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        {
+            let store = app.store.lock().unwrap();
+            assert!(retained(&store) == devices && auth_request_persisted_rows(&store) == requests);
+            assert!(
+                store.account("id", "alice").unwrap().unwrap()["keys"]["publicKey"]
+                    == "preserved-public"
+            );
+        }
+        let Err(error) = device_request(
+            &app,
+            Method::GET,
+            "/api/accounts/profile",
+            device_authorization(Some("device-fixture-alice")),
+            b"",
+        )
+        .await
+        else {
+            panic!("KDF change retained old bearer authority.")
+        };
+        assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        let refresh = serde_urlencoded::to_string([
+            ("grant_type", "refresh_token"),
+            ("refresh_token", "device-fixture-refresh-alice"),
+        ])
+        .unwrap();
+        let Err(error) = device_request(
+            &app,
+            Method::POST,
+            "/identity/connect/token",
+            HeaderMap::new(),
+            refresh.as_bytes(),
+        )
+        .await
+        else {
+            panic!("KDF change retained old refresh authority.")
+        };
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        assert!(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                login("fixture-master-hash").as_bytes()
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            device_request(
+                &app,
+                Method::GET,
+                "/api/accounts/profile",
+                device_authorization(Some("device-fixture-bob")),
+                b""
+            )
+            .await
+            .is_ok()
+        );
+        for path in [
+            "/identity/accounts/prelogin",
+            "/identity/accounts/prelogin/password",
+        ] {
+            let data = device_document(
+                device_request(
+                    &app,
+                    Method::POST,
+                    path,
+                    HeaderMap::new(),
+                    br#"{"email":"alice@example.test"}"#,
+                )
+                .await,
+            )
+            .await;
+            assert!(
+                data["kdf"] == 1
+                    && data["kdfIterations"] == 1
+                    && data["kdfMemory"] == 15
+                    && data["kdfParallelism"] == 16
+            );
+        }
+        let tokens = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                login("new-proof\0雪").as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        assert!(tokens["Key"] == "new-key\0雪" && tokens["Kdf"] == 1);
+        let first_stamp = device_claims(&tokens)["sstamp"].clone();
+        let unknown = no_warden::wire::RegistrationKdf {
+            kdf: -7,
+            kdf_iterations: -8,
+            kdf_memory: Some(-9),
+            kdf_parallelism: Some(-10),
+        };
+        let second = account_kdf_document("new-proof\0雪", "", "", unknown);
+        let before_second = retained(&app.store.lock().unwrap());
+        device_push_empty(
+            device_request(
+                &app,
+                Method::POST,
+                "/api/accounts/kdf",
+                device_authorization(tokens["access_token"].as_str()),
+                second.to_string().as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        {
+            let store = app.store.lock().unwrap();
+            assert!(
+                retained(&store) == before_second
+                    && auth_request_persisted_rows(&store) == requests
+            );
+            let account = store.account("id", "alice").unwrap().unwrap();
+            assert!(
+                account["key"] == ""
+                    && account["kdf"] == -7
+                    && account["kdfIterations"] == -8
+                    && account["kdfMemory"].is_null()
+                    && account["kdfParallelism"].is_null()
+            );
+            assert!(
+                account.get("apiKey").is_none()
+                    && account.get("masterPasswordHash").is_none()
+                    && account.get("_password").is_none()
+            );
+        }
+        let empty = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                login("").as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        assert!(empty.get("Key").is_none() && empty["Kdf"] == -7 && empty["KdfIterations"] == -8);
+        assert!(
+            empty["UserDecryptionOptions"]["MasterPasswordUnlock"]["MasterKeyWrappedUserKey"] == ""
+        );
+        assert!(device_claims(&empty)["sstamp"] != first_stamp);
+        let api = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                api_login().as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        assert!(api.get("Key").is_some_and(|key| key == "") && api.get("refresh_token").is_none());
+        let sync = device_document(
+            device_request(
+                &app,
+                Method::GET,
+                "/api/sync",
+                device_authorization(empty["access_token"].as_str()),
+                b"",
+            )
+            .await,
+        )
+        .await;
+        assert!(
+            sync["profile"]["key"] == ""
+                && sync["profile"]["securityStamp"] == device_claims(&empty)["sstamp"]
+                && sync["userDecryption"]["masterPasswordUnlock"]["kdf"]["kdfType"] == -7
+        );
+        let keys = device_document(
+            device_request(
+                &app,
+                Method::GET,
+                "/api/accounts/keys",
+                device_authorization(empty["access_token"].as_str()),
+                b"",
+            )
+            .await,
+        )
+        .await;
+        assert!(keys["key"].is_null());
+        // An approved, unused code is independent of the changed master proof.
+        let auth_tokens = device_document(auth_login_http(&app, &auth_login_form(&id)).await).await;
+        assert!(
+            auth_tokens.get("Key").is_none()
+                && device_claims(&auth_tokens)["sstamp"] == device_claims(&empty)["sstamp"]
         );
     }
 

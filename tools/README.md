@@ -199,20 +199,23 @@ BW_E2E_SERVER=http://127.0.0.1:8001 cargo run --locked \
 
 By default the binary runs folders, account keys, profile/avatar, equivalent
 domains, devices, device tokens, authentication requests, responses, login, then
-registration and account security: 88 cases. `--suite personal` selects the first four groups;
+registration, account security and KDF changes: 96 cases. `--suite personal` selects the first four groups;
 `--suite devices` selects discovery; `--suite device-tokens` selects token routes;
 `--suite auth-requests` selects authentication-request creation and reads.
 `--suite auth-responses` selects approval, rejection and public response polling.
 `--suite auth-login` selects request-based password grants and consumption.
 `--suite registration` selects the two-step no-SMTP registration flow.
 `--suite account-security` selects password verification and security-stamp renewal.
+`--suite account-kdf` selects nested client-KDF changes.
+`--suite account-kdf-cli` separately verifies fresh-cache CLI decryption after an
+HTTP KDF change; it is excluded from `--suite all` and requires the locked CLI.
 Individual selectors are `folders`,
 `account-keys`, `profile`, and `domains`; `--suite all` is the default.
 Invalid arguments return exit code 2 without echoing supplied values.
 `BW_FOLDER_RECEIPT`, `BW_ACCOUNT_KEYS_RECEIPT`, `BW_PROFILE_RECEIPT`,
 `BW_DOMAINS_RECEIPT`, `BW_DEVICES_RECEIPT`, `BW_DEVICE_TOKENS_RECEIPT`,
 `BW_AUTH_REQUESTS_RECEIPT`, `BW_AUTH_RESPONSES_RECEIPT`, `BW_AUTH_LOGIN_RECEIPT`,
-`BW_REGISTRATION_RECEIPT`, and `BW_ACCOUNT_SECURITY_RECEIPT`
+`BW_REGISTRATION_RECEIPT`, `BW_ACCOUNT_SECURITY_RECEIPT`, and `BW_ACCOUNT_KDF_RECEIPT`
 optionally name new private result
 files for their respective groups. Existing paths are
 rejected; files are created with mode 0600 and contain authored case names,
@@ -222,7 +225,7 @@ requests: five login attempts (four successful and one deliberately rejected)
 and one refresh. Run these selections in separate fresh disposable reference
 processes to stay within its unchanged default ten-login limit. Use another
 fresh reference process for the complete CLI comparison. The adapter's CI job
-runs all 88 cases together; do not run that combined selection against one
+runs all 96 HTTP cases together; do not run that combined selection against one
 reference process with default limits.
 Other HTTP and persistence groups still use their
 existing JavaScript tools.
@@ -512,7 +515,33 @@ reference limits are changed. `BW_ACCOUNT_SECURITY_RECEIPT` records only case
 status and numeric counts in a new mode-0600 file. No CLI command or route trace
 is inferred from this direct HTTP selection.
 
-The expanded default local selection passes all 88 cases with 3871 counted HTTP
+The account-security milestone passed all 88 cases with 3871 counted HTTP
 requests, including real authentication-request expiry and modern registration.
 A fresh official Bitwarden CLI `2026.10.0` regression also passes all 120 commands
 against each server. It adds no account-security CLI command or captured route trace.
+
+The KDF HTTP selection uses a fresh reference process. It checks nested-only
+authentication/unlock data, exact aliases and positional fields, proof/guard
+precedence, matching salts/KDF values, signed thresholds, session revocation,
+device preservation and opaque future configurations. The separate focused CLI
+selection uses another fresh reference: it creates a genuinely encrypted item,
+changes PBKDF2 from 600,000 to 700,000 iterations by HTTP while rewrapping the same
+user key, then verifies login, lock/unlock, sync and decryption from a fresh CLI
+cache. It invokes nine official commands and keeps the original 120-command
+regression separate. `BW_ACCOUNT_KDF_CLI_RECEIPT` stores only redacted counts in a
+new mode-0600 file. Registration bootstrap and CLI-internal requests are excluded
+from its direct HTTP counts; no CLI-posted KDF route or captured trace is claimed.
+
+All eight selected KDF HTTP cases pass against both actual servers: 343 tracked
+requests each, including nine identity requests (eight successful grants and one
+rejected old refresh), two authentication-request creations and four public polls.
+The separate official CLI `2026.10.0` selection passes nine commands on each
+server after a genuine HTTP PBKDF2 600,000-to-700,000 transition: fresh-cache
+login, lock/unlock, sync and decryption of the preexisting item. Its direct seven
+HTTP requests and one password grant exclude registration bootstrap and all
+CLI-internal requests. No CLI-posted KDF endpoint or captured route is inferred.
+
+The current default local selection passes all 96 cases with 4214 tracked HTTP
+requests, including the real authentication-request expiry fixture.
+The unchanged official CLI `2026.10.0` baseline also passes all 120 commands
+against each server, separately from the nine-command KDF proof.

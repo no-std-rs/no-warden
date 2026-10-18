@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 351 active Rust tests: 159 core, 127 host, and 65 conformance
+The workspace has 373 active Rust tests: 167 core, 136 host, and 70 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -41,9 +41,9 @@ against Vaultwarden `1.37.4`: 199 requests, including five login attempts (four
 successful and one rejected) and one refresh. They verify known-device headers,
 exact owner-only projections, path guards, login metadata retention, API-key
 registration and refresh identity without changing account/vault state.
-The default adapter job runs all 88 cases, including authentication-request login,
-real-time expiry, modern registration and account security. All 88 cases pass locally
-with 3871 counted requests.
+The default adapter job runs all 96 HTTP cases, including authentication-request
+login, real-time expiry, modern registration, account security and KDF changes.
+All 96 cases pass locally with 4214 tracked HTTP requests.
 The eight authentication-request login cases also passed against Vaultwarden
 `1.37.4`: 444 requests per server, including 43 identity requests and a real
 301-second expiry check.
@@ -53,7 +53,8 @@ and authentication/path/JSON guard order. The public clears use the reference
 configuration with push disabled; actual relay behavior remains open.
 Reference comparisons use `--suite personal`, `--suite devices`, and
 `--suite device-tokens`, `--suite auth-requests`, `--suite auth-responses`,
-`--suite auth-login`, `--suite registration`, and `--suite account-security` in separate
+`--suite auth-login`, `--suite registration`, `--suite account-security`, and
+`--suite account-kdf` in separate
 fresh disposable Vaultwarden processes. The separate reference CLI comparison starts another fresh process, preserving the
 reference's default ten-login limit.
 The required client job reruns the unchanged 120-command CLI flow for the final
@@ -214,3 +215,10 @@ host tests independently verify proof/provider ordering, private authority,
 rollback and durable reopen. These HTTP checks add no CLI command or captured
 route trace; the official 120-command regression remains a separate final-head
 requirement.
+
+The required client job separately runs `--suite account-kdf-cli` after the
+default HTTP selection and before the unchanged 120-command CLI suite. Nine
+official commands prove that a fresh client cache decrypts preexisting ciphertext
+after an HTTP PBKDF2 change and same-user-key rewrap. This does not attribute the
+KDF POST to the CLI or count its internal HTTP calls. Reference HTTP, focused CLI
+and baseline CLI selections use separate fresh processes with unchanged limits.
