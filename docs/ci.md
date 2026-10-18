@@ -19,11 +19,15 @@ credentials, rotation, access-only sessions, exact attachment bytes and metadata
 unexpired download capabilities, and permanent-deletion cleanup.
 The core's minimum Rust version is 1.85; the standalone
 server and host-only `no-warden-conformance` support library are checked with
-their minimum version, 1.89. The Rust support library's subprocess capture,
-encrypted account fixtures, and loopback TLS tests run in the workspace suite.
-The default real-client orchestration still uses the existing JavaScript harness;
-its migration remains unfinished. Bare-metal compilation
-and the allocator-free consumer link pass independently of the host suites.
+their minimum version, 1.89. The Rust conformance crate has 30 active tests and
+one ignored subprocess fixture; capture, encrypted account fixtures, and loopback
+TLS tests run in the workspace suite. The default real-client
+entry point, `tools/e2e.sh`, runs the Rust binary and invokes the pinned official
+CLI as an external process in the required `bitwarden-cli` job. HTTP,
+restart-persistence, and client-inventory
+orchestration still use JavaScript, so the broader migration remains unfinished.
+Bare-metal compilation and the allocator-free consumer link pass independently
+of the host suites.
 
 The `embedded` job separately tests the owned fixed-capacity storage consumer,
 checks it with Rust 1.85, and links its RISC-V firmware without an allocator.

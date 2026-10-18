@@ -11,7 +11,7 @@ JavaScript test orchestration into Rust in reviewed chunks while continuing to
 invoke the pinned official Bitwarden CLI as an external process.
 
 - [ ] Rust conformance orchestration and fixtures replacing the growing JavaScript harnesses.
-- [x] Rust support library for private subprocess capture, encrypted account fixtures, and disposable loopback TLS; the default CLI harness still uses JavaScript.
+- [x] Rust support library for private subprocess capture, encrypted account fixtures, and disposable loopback TLS.
 
 - [x] Pinned exhaustive Vaultwarden route registrations, including configuration variants.
 - [x] Audited current route/model/service/HTTP/client evidence with source drift checks.
