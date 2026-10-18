@@ -538,6 +538,7 @@ mod tests {
             fields: None,
             password_history: None,
             last_known_revision_date: None,
+            archived_date: None,
         }
     }
 

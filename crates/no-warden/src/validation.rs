@@ -575,5 +575,13 @@ mod tests {
         let json = std::format!(r#"{{"type":1,"name":"{ENCRYPTED}"}}"#);
         let request: CipherRequest<'_> = serde_json::from_str(&json).unwrap();
         assert!(validate_cipher(&request).is_err());
+        let organization = std::format!(
+            r#"{{"type":2,"name":"{ENCRYPTED}","secureNote":{{"type":0}},"organizationID":"unsupported-org"}}"#
+        );
+        let request: CipherRequest<'_> = serde_json::from_str(&organization).unwrap();
+        assert_eq!(
+            validate_cipher(&request).unwrap_err().field,
+            Some("organizationId")
+        );
     }
 }

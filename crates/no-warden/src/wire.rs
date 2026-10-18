@@ -215,6 +215,7 @@ pub struct CipherRequest<'a> {
     pub data: Option<&'a str>,
     pub notes: Option<&'a str>,
     pub folder_id: Option<&'a str>,
+    #[serde(alias = "organizationID")]
     pub organization_id: Option<&'a str>,
     /// Account whose key material the client used to encrypt this cipher.
     pub encrypted_for: Option<&'a str>,
@@ -240,6 +241,7 @@ pub struct CipherRequest<'a> {
     #[serde(borrow)]
     pub password_history: Option<BoundedList<PasswordHistory<'a>, MAX_PASSWORD_HISTORY>>,
     pub last_known_revision_date: Option<&'a str>,
+    pub archived_date: Option<&'a str>,
 }
 
 /// The clone/create endpoint wraps the cipher instead of accepting it directly.
@@ -307,7 +309,7 @@ mod tests {
 
     #[test]
     fn modern_cipher_key_metadata_round_trips_without_rewriting_identifiers() {
-        let input = r#"{"type":2,"name":"ciphertext","secureNote":{"type":0},"encryptedFor":"alice","encryptedByKeyId":"opaque:key/id","key":"wrapped-cipher-key"}"#;
+        let input = r#"{"type":2,"name":"ciphertext","secureNote":{"type":0},"encryptedFor":"alice","encryptedByKeyId":"opaque:key/id","key":"wrapped-cipher-key","archivedDate":"2026-01-01T00:00:00Z"}"#;
         let request: CipherRequest<'_> = serde_json::from_str(input).unwrap();
         assert_eq!(request.encrypted_for, Some("alice"));
         assert_eq!(request.encrypted_by_key_id, Some("opaque:key/id"));
@@ -316,6 +318,7 @@ mod tests {
         assert_eq!(serialized["encryptedFor"], "alice");
         assert_eq!(serialized["encryptedByKeyId"], "opaque:key/id");
         assert_eq!(serialized["key"], "wrapped-cipher-key");
+        assert_eq!(serialized["archivedDate"], "2026-01-01T00:00:00Z");
     }
 
     #[test]
