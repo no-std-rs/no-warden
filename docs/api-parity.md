@@ -39,7 +39,8 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 28 routed patterns, 12 with typed requests, 15 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 29 routed patterns, 13 with typed requests, 16 with reusable core service behavior; each carries its narrower limits |
+| Runtime CLI comparison | Official CLI `2026.10.0`: 51 commands pass against the adapter and official Vaultwarden `1.37.4`, including personal JSON/CSV import. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
 unimplemented status or a partial local coverage record. Query/rank/configuration
@@ -55,12 +56,27 @@ Key Connector, provider-RPC, and server-supplied storage calls have explicit rol
 These categories are not added to a backend-completion percentage.
 
 The current supported subset has not established full upstream parity for any
-operation's entire contract. Its tested flows remain useful evidence, with
-positive and negative HTTP tests and CLI command references recorded separately.
-Import currently illustrates an explicit gap: `POST /api/ciphers/import` falls
-through as an item update, and the actual `bw import` command has no passing
-conformance scenario yet. Additional source-proven gaps remain in every API
-family; the inventory is not a plan to stop after import or personal-vault APIs.
+operation's entire contract. Every full-parity status remains false. Tested flows
+remain useful evidence, with positive and negative HTTP tests and CLI command
+references recorded separately. `POST /api/ciphers/import` now has a dedicated
+classifier, typed batch contract, reusable validation and provider boundary,
+atomic SQLite implementation, and passing real-client personal import scenarios.
+The CLI tests cover JSON types 1–4 and CSV types 1–2; they do not close the whole
+import/export family. Additional source-proven gaps remain in every API family;
+the inventory is not a plan to stop after import or personal-vault APIs.
+
+The
+[pinned Vaultwarden personal import handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L613-L678)
+and the
+[pinned CLI submission](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/importer/src/services/import.service.ts#L468-L481)
+use the same route. `ImportRequest` gives embeddings explicit decoder capacities;
+`ImportView` lets hosts borrow batches of their own size. `ImportStorage`
+requires a stable owned-folder snapshot and an atomic batch commit. The adapter
+preserves upstream folder-index tolerance and last-entry-wins relationships,
+while enforcing stronger ownership/current-key validation and rollback guarantees.
+The upstream source saves sequentially, so local atomicity is recorded as an
+adapter guarantee rather than upstream behavioral equivalence. See
+[verified compatibility](compatibility.md) for the exercised types and limits.
 
 ## Reproduce and maintain the inventory
 

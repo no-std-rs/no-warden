@@ -15,6 +15,7 @@ Continue through the remaining API families in small, green, squash-merged PRs.
 - [x] Standalone Rust adapter: persistent SQLite, registration, authentication.
 - [x] Personal vault: encrypted ciphers, folders, sync, trash, restore.
 - [x] Actual Bitwarden CLI end-to-end verification and Vaultwarden comparison.
+- [x] Personal JSON/CSV import subset: CLI JSON types 1–4, CSV types 1–2, and allocation-free batch/provider contracts with verified atomic persistence.
 - [x] Rust CI, bare-metal compile check, Runnerless configuration, Codex gate.
 - [x] Bare-metal consumer links JSON decoding/encoding without a global allocator.
 - [x] Owned fixed-capacity vault consumer exercises service rules without std/alloc.
@@ -23,5 +24,5 @@ Continue through the remaining API families in small, green, squash-merged PRs.
 - [ ] Organizations, collections, sharing and permissions.
 - [ ] Attachments, Sends, event notifications and websocket transport.
 - [ ] Two-factor authentication, passkeys, SSO and administrative APIs.
-- [ ] Import/export compatibility and upstream protocol regression fixtures.
+- [ ] Full import/export compatibility, remaining formats and variants, and upstream protocol regression fixtures.
 - [ ] Security audit, abuse controls, migration policy and production deployment.

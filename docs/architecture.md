@@ -28,6 +28,35 @@ knows an account's current key ID and reject a different supplied ID. The
 default provider returns no current ID; embeddings that support key-ID
 migration must override it. Ownership comes from the authenticated caller.
 
+Personal import has a configurable allocation-free decoder,
+`ImportRequest<'a, F, C, R>`, whose folder, cipher, and relationship capacities
+come from the embedding application. These capacities are not protocol batch
+limits. Hosts can instead lend their own slices through `ImportView` and the
+indexed `ImportData` contract; the entries and counts must stay unchanged
+through validation and persistence. The core validates the complete batch before
+calling an opt-in `ImportStorage` provider. `ImportPolicy` separately controls
+the encrypted-note limit, which defaults to 10,000 bytes.
+
+Import providers resolve supplied folder IDs against an owned-folder snapshot
+taken under the operation's lock or transaction. An existing owned folder is
+reused without renaming it; missing, unknown, or foreign IDs produce fresh
+folders. Every cipher gets a fresh ID. `folderRelationships` maps cipher indexes
+to folder indexes and replaces incoming `folderId` values. Duplicate cipher
+indexes use the last relationship, an invalid folder index clears the mapping,
+and relationships for nonexistent ciphers are ignored. Providers can call
+`ValidatedImport::fill_folder_mapping` with caller-owned storage to resolve the
+whole batch in O(ciphers + relationships) time without allocation. An undersized
+mapping buffer fails before changing it.
+
+`ImportStorage` must commit all folders, ciphers, and the account revision
+together, leaving the entire batch unchanged on failure and publishing
+notifications only after commit. It preserves ciphertext and key metadata while
+discarding imported identities and stale revision preconditions. This atomic
+contract and the core's owner/current-key validation are stronger than the
+pinned Vaultwarden import handler's sequential writes. Existing `Storage`
+implementations do not gain an import operation unless they implement this
+additional contract.
+
 Legacy field-level ciphers and opaque blob ciphers have separate validation
 paths. A blob request stores `data` and can omit the legacy name and type-specific
 object. The blob is an escaped JSON string, requiring a decoder scratch buffer
@@ -54,6 +83,10 @@ through create, update, and sync. These tests check payload preservation;
 real-client blob decryption and authenticator use remain unverified.
 
 SQLite transactions commit each mutation and its vault revision together.
+The personal import adapter uses one transaction for the complete batch,
+including folder resolution and fresh server-owned metadata. Rollback tests
+cover import failures after earlier writes and verify that folders, ciphers,
+and the account revision remain unchanged.
 Revisions advance monotonically even when updates share a millisecond or the
 wall clock moves backwards. Conditional cipher updates check the client's last
 known revision while holding the same storage lock. Other providers can override

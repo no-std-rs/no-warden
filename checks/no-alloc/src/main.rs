@@ -6,7 +6,8 @@
 use core::{hint::black_box, panic::PanicInfo};
 use no_warden::{
     route::{Method, classify},
-    wire::{CipherRequest, PreloginRequest, PreloginResponse},
+    service::ImportData,
+    wire::{CipherRequest, ImportRequest, PreloginRequest, PreloginResponse},
 };
 
 #[unsafe(no_mangle)]
@@ -31,6 +32,16 @@ pub extern "C" fn _start() -> ! {
         let _ = black_box(no_warden::validation::validate_cipher(&cipher));
         let mut encoded = [0u8; 2048];
         let _ = black_box(serde_json_core::to_slice(&cipher, &mut encoded));
+        black_box(encoded);
+    }
+    let import = serde_json_core::from_slice::<ImportRequest<'_, 1, 1, 1>>(black_box(
+        br#"{"folders":[{"name":"encrypted folder"}],"ciphers":[{"type":1,"data":"opaque sealed blob","encryptedByKeyId":"opaque:key/id"}],"folderRelationships":[{"key":0,"value":0}]}"#,
+    ));
+    if let Ok((import, _)) = import {
+        black_box(import.folder_count());
+        black_box(import.cipher(0));
+        let mut encoded = [0u8; 2048];
+        let _ = black_box(serde_json_core::to_slice(&import, &mut encoded));
         black_box(encoded);
     }
     loop {

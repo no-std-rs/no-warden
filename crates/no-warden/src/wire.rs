@@ -88,6 +88,34 @@ pub struct FolderRequest<'a> {
     pub name: &'a str,
 }
 
+/// An imported folder may reference an existing folder owned by the importing account.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct ImportFolderRequest<'a> {
+    pub id: Option<&'a str>,
+    pub name: &'a str,
+}
+
+/// Indices into the import's cipher and folder sequences, respectively.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct FolderRelationship {
+    pub key: usize,
+    pub value: usize,
+}
+
+/// Allocation-free import decoder with capacities chosen by its caller.
+///
+/// These are decoder capacities, not protocol batch limits. Applications with their own
+/// decoding/storage strategy can pass borrowed slices through `service::ImportView`.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportRequest<'a, const F: usize, const C: usize, const R: usize> {
+    #[serde(borrow)]
+    pub folders: BoundedList<ImportFolderRequest<'a>, F>,
+    #[serde(borrow)]
+    pub ciphers: BoundedList<CipherRequest<'a>, C>,
+    pub folder_relationships: BoundedList<FolderRelationship, R>,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderResponse<'a> {
@@ -276,6 +304,32 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
 mod tests {
     use super::*;
     use std::string::ToString;
+    #[test]
+    fn import_decoder_capacities_are_independent_and_caller_selected() {
+        let input = r#"{"folders":[],"ciphers":[{"type":1,"data":"sealed","encryptedFor":"alice","encryptedByKeyId":"opaque:key/id"}],"folderRelationships":[{"key":0,"value":99}]}"#;
+        let request: ImportRequest<'_, 0, 1, 1> = serde_json::from_str(input).unwrap();
+        assert_eq!(request.ciphers.get(0).unwrap().data, Some("sealed"));
+        assert_eq!(
+            request.ciphers.get(0).unwrap().encrypted_by_key_id,
+            Some("opaque:key/id")
+        );
+        assert_eq!(request.folder_relationships.get(0).unwrap().value, 99);
+        assert!(serde_json::from_str::<ImportRequest<'_, 0, 0, 1>>(input).is_err());
+        assert!(serde_json::from_str::<ImportRequest<'_, 0, 1, 0>>(input).is_err());
+        assert!(
+            serde_json::from_str::<ImportRequest<'_, 0, 0, 0>>(
+                r#"{"folders":[],"ciphers":[],"folderRelationships":[]}"#
+            )
+            .is_ok()
+        );
+        for missing in [
+            r#"{"ciphers":[],"folderRelationships":[]}"#,
+            r#"{"folders":[],"folderRelationships":[]}"#,
+            r#"{"folders":[],"ciphers":[]}"#,
+        ] {
+            assert!(serde_json::from_str::<ImportRequest<'_, 1, 1, 1>>(missing).is_err());
+        }
+    }
     #[test]
     fn borrowed_requests_and_bitwarden_field_names() {
         let request: RegisterRequest<'_> = serde_json::from_str(

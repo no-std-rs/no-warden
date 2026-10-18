@@ -407,3 +407,149 @@ await test("standalone adapter enforces authentication, isolation, and JSON pres
     ok(await request("/api/sync", { token: concurrent.find(result => result.status === 200).data.access_token }), "latest access token");
   });
 });
+
+await test("personal cipher imports preserve relationships and isolate atomic batches", async (t) => {
+  const owner = await account("Import owner");
+  const other = await account("Import foreign owner");
+  const token = owner.token.access_token;
+  const otherToken = other.token.access_token;
+  const path = "/api/ciphers/import";
+  const ownerId = ok(await request("/api/accounts/profile", { token }), "import owner profile").id;
+  const batch = (overrides = {}) => {
+    const body = { ciphers: [cipher(owner)], folders: [], folderRelationships: [], ...overrides };
+    if (Array.isArray(body.ciphers)) body.ciphers = body.ciphers.map(item => ({ encryptedFor: ownerId, ...item }));
+    return body;
+  };
+  async function state(userToken = token) {
+    const sync = ok(await request("/api/sync", { token: userToken }), "import state");
+    const byId = rows => [...rows].sort((left, right) => left.id.localeCompare(right.id));
+    return {
+      ciphers: byId(sync.ciphers), folders: byId(sync.folders),
+      revision: ok(await request("/api/accounts/revision-date", { token: userToken }), "import revision"),
+    };
+  }
+  async function imported(body) {
+    const response = await request(path, { method: "POST", token, body });
+    assert.equal(response.status, 200, "Successful personal import must return HTTP 200");
+    assert.equal(response.data, null, "Personal import response must have an empty body");
+  }
+
+  await t.test("empty imports are accepted and unauthenticated imports cannot mutate storage", async () => {
+    await imported({ ciphers: [], folders: [], folderRelationships: [] });
+    const empty = await state();
+    assert.deepEqual(empty.ciphers, []);
+    assert.deepEqual(empty.folders, []);
+    const before = await state();
+    for (const forged of [undefined, "forged-import-token"]) {
+      denied(await request(path, { method: "POST", token: forged, body: batch() }), "unauthenticated import", [401, 403]);
+    }
+    assert.deepEqual(await state(), before);
+  });
+
+  await t.test("owned folders are reused, foreign or unknown IDs create fresh folders, and relationship rules match upstream", async () => {
+    const ownFolder = ok(await request("/api/folders", { method: "POST", token, body: { name: owner.registration.key } }), "owned import folder");
+    const foreignFolder = ok(await request("/api/folders", {
+      method: "POST", token: otherToken, body: { name: other.registration.key },
+    }), "foreign import folder");
+    const foreignBefore = await state(otherToken);
+    const unknownId = randomUUID();
+    const requestedIds = Array.from({ length: 4 }, () => randomUUID());
+    const ciphers = [
+      cipher(owner, { id: requestedIds[0], folderId: foreignFolder.id }),
+      { type: 2, id: requestedIds[1], name: owner.registration.key, notes: owner.registration.key, secureNote: { type: 0 } },
+      { type: 3, id: requestedIds[2], name: owner.registration.key, folderId: foreignFolder.id, card: { number: owner.registration.key } },
+      { type: 4, id: requestedIds[3], name: owner.registration.key, identity: { firstName: owner.registration.key } },
+    ];
+    await imported(batch({
+      ciphers,
+      folders: [
+        { id: ownFolder.id, name: owner.registration.keys.encryptedPrivateKey },
+        {
+          id: foreignFolder.id, name: owner.registration.key,
+          creationDate: "2000-01-01T00:00:00.000Z", deletedDate: "2001-01-01T00:00:00.000Z",
+        },
+        { id: unknownId, name: owner.registration.keys.encryptedPrivateKey },
+        { id: unknownId, name: owner.registration.keys.encryptedPrivateKey },
+      ],
+      folderRelationships: [
+        { key: 0, value: 0 }, { key: 1, value: 0 }, { key: 1, value: 1 },
+        { key: 2, value: 999 }, { key: 3, value: 3 }, { key: 999, value: 0 },
+      ],
+    }));
+    const after = await state();
+    assert.equal(after.ciphers.length, 4);
+    assert.equal(after.folders.length, 4);
+    assert.equal(after.folders.find(folder => folder.id === ownFolder.id).name, ownFolder.name, "Reusing a folder ID must preserve its existing name");
+    const addedFolders = after.folders.filter(folder => folder.id !== ownFolder.id);
+    assert.equal(new Set(addedFolders.map(folder => folder.id)).size, 3);
+    assert(addedFolders.every(folder => folder.id !== foreignFolder.id && folder.id !== unknownId));
+    for (const folder of addedFolders) {
+      assert.equal(Object.hasOwn(folder, "creationDate"), false, "Import must discard client-supplied folder creation metadata");
+      assert.equal(Object.hasOwn(folder, "deletedDate"), false, "Import must discard client-supplied folder deletion metadata");
+    }
+    const byType = new Map(after.ciphers.map(item => [item.type, item]));
+    assert.equal(byType.get(1).folderId, ownFolder.id);
+    assert(addedFolders.some(folder => folder.id === byType.get(2).folderId && folder.name === owner.registration.key), "The last duplicate relationship must win");
+    assert.equal(byType.get(3).folderId ?? null, null, "An unknown relationship target must clear the folder mapping");
+    assert(addedFolders.some(folder => folder.id === byType.get(4).folderId));
+    assert(after.ciphers.every(item => !requestedIds.includes(item.id)), "Imported ciphers must receive fresh IDs");
+    assert(after.ciphers.every(item => (item.organizationId ?? null) === null));
+    assert.deepEqual(await state(otherToken), foreignBefore, "Import must not modify a foreign account or folder");
+  });
+
+  await t.test("omitted relationships discard incoming folder IDs and import appends to existing items", async () => {
+    const before = await state();
+    const foreignFolder = (await state(otherToken)).folders[0];
+    await imported(batch({ ciphers: [cipher(owner, { folderId: foreignFolder.id })] }));
+    const after = await state();
+    const added = after.ciphers.filter(item => !before.ciphers.some(old => old.id === item.id));
+    assert.equal(added.length, 1);
+    assert.equal(added[0].folderId ?? null, null);
+    for (const old of before.ciphers) assert.deepEqual(after.ciphers.find(item => item.id === old.id), old);
+  });
+
+  await t.test("import preserves escaped opaque extensions under the adapter's existing JSON contract", async () => {
+    const extension = { sealed: owner.registration.key, opaque: '{"quoted":"\\\\ café 🔐","future":[true,null,7]}' };
+    const before = await state();
+    await imported(batch({ ciphers: [cipher(owner, { futureProtocolExtension: extension })] }));
+    const added = (await state()).ciphers.filter(item => !before.ciphers.some(old => old.id === item.id));
+    assert.equal(added.length, 1);
+    assert.deepEqual(added[0].futureProtocolExtension, extension);
+    assert.deepEqual(ok(await request(`/api/ciphers/${added[0].id}`, { token }), "imported opaque item").futureProtocolExtension, extension);
+  });
+
+  await t.test("malformed arrays and relationship index types are rejected without partial writes (local provider guarantee)", async () => {
+    const before = await state();
+    const valid = batch({ folders: [{ name: owner.registration.key }] });
+    for (const body of [
+      {}, { ...valid, ciphers: null }, { ...valid, folders: {} }, { ...valid, folderRelationships: null },
+      ...[-1, 0.5, "0", null].map(key => ({ ...valid, folderRelationships: [{ key, value: 0 }] })),
+      ...[-1, 0.5, "0", null].map(value => ({ ...valid, folderRelationships: [{ key: 0, value }] })),
+      { ...valid, folderRelationships: [{ key: 0 }] },
+    ]) {
+      denied(await request(path, { method: "POST", token, body }), "malformed import", [400, 422]);
+      assert.deepEqual(await state(), before, "A rejected local import must leave its entire batch unchanged");
+    }
+  });
+
+  await t.test("organization injection and a malformed encrypted item roll back the entire batch (local provider guarantee)", async () => {
+    const before = await state();
+    for (const invalid of [
+      cipher(owner, { organizationId: randomUUID() }),
+      cipher(owner, { organizationId: undefined, organizationID: randomUUID() }),
+      cipher(owner, { key: "not-an-encrypted-key" }),
+      cipher(owner, { name: "not-an-encrypted-name" }),
+      cipher(owner, { type: 999 }),
+    ]) {
+      const response = await request(path, {
+        method: "POST", token,
+        body: batch({
+          folders: [{ name: owner.registration.key }], ciphers: [cipher(owner), invalid],
+          folderRelationships: [{ key: 0, value: 0 }, { key: 1, value: 0 }],
+        }),
+      });
+      denied(response, "invalid import batch", [400, 403, 404, 422]);
+      assert.deepEqual(await state(), before, "A rejected local batch must preserve items, folders, and revision");
+    }
+  });
+});
