@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 186 active Rust tests: 89 core, 53 host, and 44 conformance
+The workspace has 208 active Rust tests: 98 core, 63 host, and 47 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -33,20 +33,28 @@ nullable avatar updates, JSON guards, and preservation of unrelated state.
 Eight equivalent-domain cases follow, checking both mutation aliases, opaque
 ordered groups, signed exclusion IDs, the full 91-group catalog, GET/sync
 projections, JSON guards, query parsing, and authentication precedence.
-The same 32 cases pass against the adapter and Vaultwarden `1.37.4`, with 1417
+Those 32 cases pass against the adapter and Vaultwarden `1.37.4`, with 1417
 counted requests including nine password logins; fixture registrations are
 excluded. The domains group accounts for 530 requests and two of those logins.
-Each combined reference run uses a fresh disposable Vaultwarden process. The
-separate reference CLI comparison starts another fresh process, preserving the
+Eight device discovery cases follow in the default adapter run. They also pass
+against Vaultwarden `1.37.4`: 199 requests, including five login attempts (four
+successful and one rejected) and one refresh. They verify known-device headers,
+exact owner-only projections, path guards, login metadata retention, API-key
+registration and refresh identity without changing account/vault state.
+The default adapter job runs all 40 cases, totaling 1616 counted requests.
+Reference comparisons use `--suite personal` and `--suite devices` in separate
+fresh disposable Vaultwarden processes. The separate reference CLI comparison starts another fresh process, preserving the
 reference's default ten-login limit.
-The unchanged 120-command CLI flow passed against the domain-enabled adapter
-before the final query/authentication-order corrections. The required client job
-reruns it for the final head; it establishes no domain mutation or captured
-settings request.
-`BW_FOLDER_RECEIPT`, `BW_ACCOUNT_KEYS_RECEIPT`, `BW_PROFILE_RECEIPT`, and
-`BW_DOMAINS_RECEIPT` select optional private per-group receipts. The domain
+The required client job reruns the unchanged 120-command CLI flow for the final
+head. Its verified baseline covers both servers; it establishes no domain
+mutation, settings request trace or device-route trace.
+`BW_FOLDER_RECEIPT`, `BW_ACCOUNT_KEYS_RECEIPT`, `BW_PROFILE_RECEIPT`,
+`BW_DOMAINS_RECEIPT`, and `BW_DEVICES_RECEIPT` select optional private per-group
+receipts. The domain
 receipt also records the public catalog count and fingerprint, without account
 settings or response values.
+The device receipt separates identity requests, login attempts, successful
+logins and refreshes; a refresh is not counted as a login.
 The existing HTTP, restart-persistence, and client-inventory orchestration still
 uses JavaScript, so the broader migration
 remains unfinished.
@@ -55,6 +63,11 @@ of the host suites. Domain settings use caller-selected decoder capacities or
 indexed borrowed provider views without fixed core batch limits. Both typed
 GET/sync projections and the explicit empty mutation response link without an
 allocator; the full sync response remains adapter-built.
+The consumer also links the decoded known-device header input, bare boolean
+response, and streamed seven-field device and ten-field list projections with
+a borrowed pending-auth request. Storage, header decoding, clocks and session
+issuance remain in adapters. Host device tests cover failure rollback and
+database reopen; legacy sessions remain valid without an invented device binding.
 
 The `embedded` job separately tests the owned fixed-capacity storage consumer,
 checks it with Rust 1.85, and links its RISC-V firmware without an allocator.

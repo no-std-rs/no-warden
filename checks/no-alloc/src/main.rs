@@ -5,6 +5,7 @@
 
 use core::{hint::black_box, panic::PanicInfo};
 use no_warden::{
+    devices::{DeviceRecord, PendingDeviceAuthRequest},
     domains::{DomainProjection, DomainSettingsView, GlobalDomain},
     identity::Secret,
     route::{Method, classify},
@@ -12,8 +13,9 @@ use no_warden::{
     wire::{
         AccountKeys, AccountKeysResponse, ApiKeyResponse, AttachmentRequest, AttachmentResponse,
         AttachmentUploadResponse, AvatarUpdateRequest, CipherIdsRequest, CipherRequest,
-        ClientCredentialsRequest, DomainSettingsRequest, DomainSettingsResponse,
-        DomainSettingsUpdateResponse, ImportRequest, InitializedAccountKeysResponse,
+        ClientCredentialsRequest, DeviceListResponse, DeviceResponse, DomainSettingsRequest,
+        DomainSettingsResponse, DomainSettingsUpdateResponse, ImportRequest,
+        InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
         PasswordOrOtpRequest, PreloginRequest, PreloginResponse, ProfileUpdateRequest,
         UserPublicKeyResponse,
     },
@@ -185,6 +187,38 @@ pub extern "C" fn _start() -> ! {
         &mut output,
     ));
     black_box(output);
+    black_box(KnownDeviceRequest {
+        email: "embedded@example.test",
+        identifier: "embedded-device",
+    });
+    let mut known_output = [0u8; 8];
+    let _ = black_box(serde_json_core::to_slice(
+        &KnownDeviceResponse(true),
+        &mut known_output,
+    ));
+    black_box(known_output);
+    let device = DeviceRecord {
+        owner_id: "embedded-owner",
+        identifier: "embedded-device",
+        name: "embedded client",
+        device_type: 8,
+        creation_date: "2026-10-18T00:00:00.000000Z",
+        pending_auth_request: Some(PendingDeviceAuthRequest {
+            id: "pending-request",
+            creation_date: "2026-10-18T00:00:00.000000Z",
+        }),
+    };
+    let mut device_output = [0u8; 1024];
+    let _ = black_box(serde_json_core::to_slice(
+        &DeviceResponse::new(black_box(device)),
+        &mut device_output,
+    ));
+    black_box(device_output);
+    let records = [device];
+    let response = DeviceListResponse::new(black_box(&records[..]));
+    let mut list_output = [0u8; 1024];
+    let _ = black_box(serde_json_core::to_slice(&response, &mut list_output));
+    black_box(list_output);
     loop {
         core::hint::spin_loop();
     }

@@ -212,6 +212,61 @@ Sources: [Vaultwarden identity](https://github.com/dani-garcia/vaultwarden/blob/
 [CLI token parsing](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/auth/models/response/identity-token.response.ts),
 [JWT claims](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth.rs).
 
+## Device discovery
+
+The [pinned discovery handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1504-L1580)
+expose three read routes:
+
+| Method and route | Authentication and result |
+| --- | --- |
+| `GET /api/devices/knowndevice` | Public header guard; bare JSON boolean |
+| `GET /api/devices` | Bearer required; owner-only list wrapper |
+| `GET /api/devices/identifier/<id>` | Bearer required; one owned device, or 400 when absent/foreign |
+
+Known-device discovery requires both `X-Request-Email` and
+`X-Device-Identifier` headers. The email guard removes every trailing `=`,
+strictly decodes unpadded base64url, and requires valid UTF-8. Missing or invalid
+headers return 400. Account lookup lowercases the decoded email without trimming
+it. The identifier is an exact opaque UTF-8 string; an empty or non-UUID value is
+allowed. Unknown accounts or identifiers return false without authentication.
+
+The identifier path has a different guard. Rocket percent-decodes the path
+segment, then the [upstream `IdFromParam` macro](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/macros/src/lib.rs#L40-L58)
+accepts only ASCII letters, digits and hyphens, keeping their spelling and case.
+There is no UUID requirement. Percent-encoded letters and hyphens work.
+Decoded identifiers containing `+`, underscore, slash or Unicode reject with
+422; a literal `+` keeps its value rather than being form-decoded.
+Authentication precedes this path guard: a missing/invalid bearer returns 401
+before an invalid identifier is parsed.
+
+The [single-device model](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/device.rs#L67-L78)
+projects exactly `id`, `name`, `type`, `identifier`, `creationDate`, `isTrusted`,
+and `object: "device"`; `isTrusted` is false. The list wrapper has `data`,
+`continuationToken: null`, and `object: "list"`. Each list entry adds
+`devicePendingAuthRequest`, `encryptedPublicKey`, and `encryptedUserKey`, giving
+ten fields. The encrypted-key fields are null. The pending model has only
+[`id` and `creationDate`](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/auth_request.rs#L76-L82),
+or null without a request. The standalone adapter currently always returns null
+for pending metadata; it does not implement the request lifecycle.
+
+Successful password and personal API-key logins register the authenticated
+owner's device. The three device form fields require presence; their identifier
+and name remain opaque, including empty strings. The
+[pinned login helper](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L776-L797)
+parses device type as `i32`, falling back to 14 when parsing fails. Reusing an
+owner/identifier retains its initial name, type and creation time. Different
+owners may use the same identifier. Activity updates do not advance account
+revision or change vault data. Refresh retains the existing device identity,
+regardless of device metadata supplied in the refresh form.
+
+The allocation-free core exposes `DeviceStorage`, borrowed header input, and
+explicit boolean/list/single response projections. The standalone adapter owns
+the persistent registry, session binding and `device` JWT claim. Legacy sessions
+without bindings remain valid and are not backfilled. Push tokens, approval,
+authentication requests, device removal, notification behavior and broader device
+management remain unimplemented. The direct HTTP comparison establishes only
+this discovery/login-binding contract, with no CLI device-route trace claim.
+
 ## Profile, account keys, and synchronization
 
 `GET /api/accounts/profile` returns a profile containing the account `id`, `name`,

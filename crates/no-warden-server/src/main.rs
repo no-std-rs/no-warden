@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 mod attachments;
+mod devices;
 mod domains;
 mod protocol;
 mod store;
@@ -19,6 +20,7 @@ use hmac::{Hmac, Mac};
 use no_warden::{
     ApiError, ErrorKind, VaultService,
     bulk::CipherBulkOperation,
+    devices::DeviceRegistration,
     domains::DomainProjection,
     identity::{AuthorizedApiKeyGrant, Secret},
     import::ImportView,
@@ -251,6 +253,11 @@ async fn dispatch(
     if let Route::AttachmentDownload(cipher_id, attachment_id) = route {
         return attachments::download(&mut store, cipher_id, attachment_id, uri.query());
     }
+    if route == Route::KnownDevice {
+        let headers = devices::known_headers(&headers)?;
+        let response = VaultService::new(&mut *store).known_device(&headers.request())?;
+        return Ok(Json(response).into_response());
+    }
     if route == Route::Prelogin {
         let input: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
         let email = input["email"]
@@ -287,7 +294,7 @@ async fn dispatch(
     if route == Route::Token {
         let form = parse_connect_form(&body)?;
         let grant = connect_field(&form, &["grant_type", "granttype"])?.ok_or_else(invalid)?;
-        let account = match grant {
+        match grant {
             "client_credentials" => {
                 let request = ClientCredentialsRequest {
                     grant_type: Some(grant),
@@ -304,14 +311,17 @@ async fn dispatch(
                 };
                 let grant = VaultService::new(&mut *store).authenticate_api_key(&request)?;
                 let account = store.account("id", grant.user_id())?.ok_or_else(invalid)?;
-                return Ok(json_response(issue_token_grant(
+                let registration = devices::login_registration(&form)?;
+                return Ok(json_response(authenticated_login(
                     &app,
-                    &store.db,
+                    &mut store,
                     &account,
+                    &registration,
                     Some(&grant),
                 )?));
             }
             "password" => {
+                let registration = devices::login_registration(&form)?;
                 let email = form
                     .get("username")
                     .ok_or_else(unauthorized)?
@@ -328,7 +338,13 @@ async fn dispatch(
                 Argon2::default()
                     .verify_password(password.as_bytes(), &parsed)
                     .map_err(|_| invalid_grant())?;
-                account
+                return Ok(json_response(authenticated_login(
+                    &app,
+                    &mut store,
+                    &account,
+                    &registration,
+                    None,
+                )?));
             }
             "refresh_token" => {
                 let refresh = form.get("refresh_token").ok_or_else(invalid_grant)?;
@@ -343,6 +359,8 @@ async fn dispatch(
                 let account = store
                     .account("id", &owner.ok_or_else(invalid_grant)?)?
                     .ok_or_else(invalid_grant)?;
+                let owner = account["id"].as_str().ok_or_else(invalid_grant)?;
+                let binding = devices::refresh_binding(&store.db, &digest(refresh), owner)?;
                 let tx = store.db.transaction()?;
                 // Consume only refresh authority. Clients may still have requests
                 // in flight with the old bearer; it remains valid until its
@@ -354,13 +372,16 @@ async fn dispatch(
                 if consumed != 1 {
                     return Err(invalid_grant());
                 }
-                let tokens = issue_tokens(&app, &tx, &account)?;
+                if let Some(identifier) = binding.as_deref() {
+                    devices::touch(&tx, owner, identifier)?;
+                }
+                let tokens =
+                    issue_token_grant_bound(&app, &tx, &account, None, binding.as_deref())?;
                 tx.commit()?;
                 return Ok(json_response(tokens));
             }
             _ => return Err(Failure(StatusCode::BAD_REQUEST, "Unsupported grant type")),
-        };
-        return Ok(json_response(issue_tokens(&app, &store.db, &account)?));
+        }
     }
     let bearer = headers
         .get("authorization")
@@ -378,6 +399,17 @@ async fn dispatch(
     let owner = owner.ok_or_else(unauthorized)?;
     let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
     match route {
+        Route::Devices => {
+            let mut service = VaultService::new(&mut *store);
+            let response = service.list_devices(&owner)?;
+            Ok(Json(response).into_response())
+        }
+        Route::DeviceGet(segment) => {
+            let identifier = devices::path_identifier(segment)?;
+            let mut service = VaultService::new(&mut *store);
+            let response = service.get_device(&owner, &identifier)?;
+            Ok(Json(response).into_response())
+        }
         Route::DomainsGet => {
             let mut service = VaultService::new(&mut *store);
             let response =
@@ -804,15 +836,53 @@ fn connect_field<'a>(
     Ok(value)
 }
 
+#[cfg(test)]
 fn issue_tokens(app: &App, db: &rusqlite::Connection, account: &Value) -> Result<Value, Failure> {
     issue_token_grant(app, db, account, None)
 }
 
+#[cfg(test)]
 fn issue_token_grant(
     app: &App,
     db: &rusqlite::Connection,
     account: &Value,
     api: Option<&AuthorizedApiKeyGrant<'_>>,
+) -> Result<Value, Failure> {
+    issue_token_grant_bound(app, db, account, api, None)
+}
+
+// The storage mutex is held across this savepoint. Registration, activity and
+// session/binding issuance must all roll back together if any step fails.
+fn authenticated_login(
+    app: &App,
+    store: &mut Store,
+    account: &Value,
+    registration: &DeviceRegistration<'_>,
+    api: Option<&AuthorizedApiKeyGrant<'_>>,
+) -> Result<Value, Failure> {
+    store.db.execute_batch("SAVEPOINT device_login")?;
+    let result = (|| {
+        let owner = account["id"].as_str().ok_or_else(invalid)?;
+        VaultService::new(&mut *store).register_device(owner, registration)?;
+        let tokens =
+            issue_token_grant_bound(app, &store.db, account, api, Some(registration.identifier))?;
+        store.db.execute_batch("RELEASE device_login")?;
+        Ok(tokens)
+    })();
+    if result.is_err() {
+        store
+            .db
+            .execute_batch("ROLLBACK TO device_login; RELEASE device_login")?;
+    }
+    result
+}
+
+fn issue_token_grant_bound(
+    app: &App,
+    db: &rusqlite::Connection,
+    account: &Value,
+    api: Option<&AuthorizedApiKeyGrant<'_>>,
+    device: Option<&str>,
 ) -> Result<Value, Failure> {
     let timestamp = chrono::Utc::now().timestamp();
     db.execute(
@@ -827,9 +897,12 @@ fn issue_token_grant(
         vec!["api", "offline_access"]
     };
     let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
-    let claims = json!({"sub":account["id"],"email":account["email"],"email_verified":true,
+    let mut claims = json!({"sub":account["id"],"email":account["email"],"email_verified":true,
         "name":account["name"],"premium":true,"iss":app.base,"iat":timestamp,"nbf":timestamp,"exp":timestamp+expires_in,
         "client_id":client_id,"scope":scopes,"amr":["Application"],"sstamp":account["id"],"jti":random_token()});
+    if let Some(identifier) = device {
+        claims["device"] = json!(identifier);
+    }
     let unsigned = format!("{header}.{}", URL_SAFE_NO_PAD.encode(claims.to_string()));
     let mut mac = Hmac::<Sha256>::new_from_slice(&app.signing_key).expect("HMAC key size");
     mac.update(unsigned.as_bytes());
@@ -848,6 +921,14 @@ fn issue_token_grant(
         0
     };
     db.execute("INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES(?1,?2,?3,?4,?5)",params![digest(&access),refresh_digest,account["id"].as_str(),timestamp+expires_in,refresh_expires])?;
+    if let Some(identifier) = device {
+        devices::bind(
+            db,
+            account["id"].as_str().ok_or_else(invalid)?,
+            identifier,
+            &access,
+        )?;
+    }
     let mut response = if api.is_some() {
         protocol::api_key_token_fields(account)
     } else {
@@ -870,6 +951,646 @@ fn issue_token_grant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn device_fixture_app() -> App {
+        let store = Store::open(":memory:").unwrap();
+        let encoded = Argon2::default()
+            .hash_password(b"fixture-master-hash", &SaltString::generate(&mut OsRng))
+            .unwrap()
+            .to_string();
+        for owner in ["alice", "bob"] {
+            let account = json!({"id":owner,"email":format!("{owner}@example.test"),"name":"Preserved","key":"preserved-wrapped-key","keys":{"publicKey":"preserved-public","encryptedPrivateKey":"preserved-private"},"future":{"preserved":true},"devices":[{"identifier":"forged-registration-device"}]});
+            store.db.execute("INSERT INTO accounts(id,email,document,password,revision) VALUES(?1,?2,?3,?4,?5)", params![owner,format!("{owner}@example.test"),account.to_string(),encoded,store::now()]).unwrap();
+            store.db.execute("INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES(?1,?2,?3,4000000000,4000000000)",params![digest(&format!("device-fixture-{owner}")),digest(&format!("device-fixture-refresh-{owner}")),owner]).unwrap();
+        }
+        App {
+            store: Arc::new(Mutex::new(store)),
+            base: "http://127.0.0.1".into(),
+            signing_key: [1; 32],
+        }
+    }
+    fn device_authorization(bearer: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        if let Some(bearer) = bearer {
+            headers.insert("authorization", format!("Bearer {bearer}").parse().unwrap());
+        }
+        headers
+    }
+    async fn device_request(
+        app: &App,
+        method: Method,
+        path: &str,
+        headers: HeaderMap,
+        body: &[u8],
+    ) -> Result<Response, Failure> {
+        dispatch(
+            State(app.clone()),
+            method,
+            path.parse().unwrap(),
+            headers,
+            Bytes::copy_from_slice(body),
+        )
+        .await
+    }
+    async fn device_document(result: Result<Response, Failure>) -> Value {
+        let response = result.unwrap_or_else(|_| panic!("Valid device request failed."));
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), MAX_REQUEST_BYTES)
+            .await
+            .unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+    fn device_claims(tokens: &Value) -> Value {
+        let payload = tokens["access_token"]
+            .as_str()
+            .unwrap()
+            .split('.')
+            .nth(1)
+            .unwrap();
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap()
+    }
+    fn device_login_body(owner: &str, identifier: &str, name: &str, kind: &str) -> Vec<u8> {
+        serde_urlencoded::to_string([
+            ("grant_type", "password"),
+            ("username", &format!("{owner}@example.test")),
+            ("password", "fixture-master-hash"),
+            ("DeviceIdentifier", identifier),
+            ("device_name", name),
+            ("DEVICETYPE", kind),
+        ])
+        .unwrap()
+        .into_bytes()
+    }
+    fn device_persisted_state(store: &Store) -> Vec<String> {
+        store.db.prepare("SELECT 'account:'||id||':'||document||':'||password||':'||revision FROM accounts UNION ALL SELECT 'session:'||access||':'||refresh||':'||owner||':'||access_expires||':'||refresh_expires FROM sessions UNION ALL SELECT 'device:'||owner||':'||identifier||':'||name||':'||device_type||':'||created||':'||updated FROM device_registry UNION ALL SELECT 'binding:'||access||':'||owner||':'||identifier FROM session_devices ORDER BY 1").unwrap().query_map([],|row|row.get(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
+    }
+
+    #[tokio::test]
+    async fn device_http_discovery_projects_exact_fields_and_authenticates_before_path_guard() {
+        let app = device_fixture_app();
+        {
+            let mut store = app.store.lock().unwrap();
+            for (owner, identifier, name) in [
+                ("alice", "not-a-UUID", "Alice device"),
+                ("bob", "foreign-device", "Bob device"),
+            ] {
+                VaultService::new(&mut *store)
+                    .register_device(
+                        owner,
+                        &DeviceRegistration {
+                            identifier,
+                            name,
+                            device_type: 8,
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+        for bearer in [None, Some("invalid")] {
+            for path in [
+                "/api/devices",
+                "/api/devices/identifier/not-a-UUID",
+                "/api/devices/identifier/%5Finvalid",
+            ] {
+                let Err(error) =
+                    device_request(&app, Method::GET, path, device_authorization(bearer), b"")
+                        .await
+                else {
+                    panic!("Anonymous device read succeeded.")
+                };
+                assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+            }
+        }
+        let list = device_document(
+            device_request(
+                &app,
+                Method::GET,
+                "/api/devices",
+                device_authorization(Some("device-fixture-alice")),
+                b"",
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(list.as_object().unwrap().len(), 3);
+        assert!(list["object"] == "list" && list["continuationToken"].is_null());
+        assert_eq!(list["data"].as_array().unwrap().len(), 1);
+        assert_eq!(list["data"][0].as_object().unwrap().len(), 10);
+        assert!(
+            list["data"][0]["name"] == "Alice device"
+                && list["data"][0]["encryptedPublicKey"].is_null()
+                && list["data"][0]["encryptedUserKey"].is_null()
+                && list["data"][0]["devicePendingAuthRequest"].is_null()
+        );
+        let single = device_document(
+            device_request(
+                &app,
+                Method::GET,
+                "/api/devices/identifier/%6Eot-a-UUID",
+                device_authorization(Some("device-fixture-alice")),
+                b"",
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(single.as_object().unwrap().len(), 7);
+        assert!(
+            single["id"] == "not-a-UUID"
+                && single["identifier"] == "not-a-UUID"
+                && single["object"] == "device"
+                && single["isTrusted"] == false
+        );
+        for (path, status) in [
+            (
+                "/api/devices/identifier/foreign-device",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "/api/devices/identifier/NOT-a-UUID",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "/api/devices/identifier/%5Fbad",
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                "/api/devices/identifier/a+b",
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                "/api/devices/identifier/a%2Bb",
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                "/api/devices/identifier/a%2Fb",
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+        ] {
+            let Err(error) = device_request(
+                &app,
+                Method::GET,
+                path,
+                device_authorization(Some("device-fixture-alice")),
+                b"",
+            )
+            .await
+            else {
+                panic!("Invalid or foreign device read succeeded.")
+            };
+            assert_eq!(error.0, status);
+        }
+        let before = device_persisted_state(&app.store.lock().unwrap());
+        for (email, identifier, expected) in [
+            ("ALICE@EXAMPLE.TEST", "not-a-UUID", true),
+            (" alice@example.test", "not-a-UUID", false),
+            ("alice@example.test ", "not-a-UUID", false),
+            ("bob@example.test", "not-a-UUID", false),
+            ("alice@example.test", "forged-registration-device", false),
+            ("alice@example.test", "opaque-雪", false),
+            ("alice@example.test", "opaque:_/+", false),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                "x-request-email",
+                format!("{}=====", URL_SAFE_NO_PAD.encode(email))
+                    .parse()
+                    .unwrap(),
+            );
+            headers.insert(
+                "x-device-identifier",
+                axum::http::HeaderValue::from_bytes(identifier.as_bytes()).unwrap(),
+            );
+            let value = device_document(
+                device_request(&app, Method::GET, "/api/devices/knowndevice", headers, b"").await,
+            )
+            .await;
+            assert!(value == json!(expected));
+        }
+        let Err(error) = device_request(
+            &app,
+            Method::GET,
+            "/api/devices/knowndevice",
+            HeaderMap::new(),
+            b"",
+        )
+        .await
+        else {
+            panic!("Missing discovery headers accepted.")
+        };
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        assert!(
+            device_persisted_state(&app.store.lock().unwrap()) == before,
+            "Device discovery mutated persisted state."
+        );
+    }
+
+    #[tokio::test]
+    async fn device_password_and_api_logins_register_only_verified_owners_and_preserve_metadata() {
+        let app = device_fixture_app();
+        let authority_before = device_persisted_state(&app.store.lock().unwrap());
+        let mut wrong =
+            parse_connect_form(&device_login_body("alice", "failed-device", "Failed", "8"))
+                .unwrap_or_else(|_| panic!("Fixture form failed."));
+        wrong.insert("password".into(), "wrong".into());
+        let wrong = serde_urlencoded::to_string(&wrong).unwrap();
+        let Err(error) = device_request(
+            &app,
+            Method::POST,
+            "/identity/connect/token",
+            HeaderMap::new(),
+            wrong.as_bytes(),
+        )
+        .await
+        else {
+            panic!("Wrong credential registered a device.")
+        };
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        assert!(device_persisted_state(&app.store.lock().unwrap()) == authority_before);
+        for omitted in ["DeviceIdentifier", "device_name", "DEVICETYPE"] {
+            let mut form =
+                parse_connect_form(&device_login_body("alice", "failed-device", "Failed", "8"))
+                    .unwrap_or_else(|_| panic!("Fixture form failed."));
+            form.remove(omitted);
+            let body = serde_urlencoded::to_string(form).unwrap();
+            let Err(error) = device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                body.as_bytes(),
+            )
+            .await
+            else {
+                panic!("Missing device field accepted.")
+            };
+            assert_eq!(error.0, StatusCode::BAD_REQUEST);
+            assert!(device_persisted_state(&app.store.lock().unwrap()) == authority_before);
+        }
+        let first = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                &device_login_body("alice", "Shared-Login", "Original 雪", "iOS"),
+            )
+            .await,
+        )
+        .await;
+        assert!(device_claims(&first)["device"] == "Shared-Login");
+        let original = {
+            let store = app.store.lock().unwrap();
+            devices::load(&store.db, "alice", "Shared-Login")
+                .unwrap()
+                .unwrap()
+        };
+        let revision_before = {
+            let store = app.store.lock().unwrap();
+            store.account("id", "alice").unwrap().unwrap()
+        };
+        let repeat = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                &device_login_body("alice", "Shared-Login", "Replacement", "-1"),
+            )
+            .await,
+        )
+        .await;
+        assert!(device_claims(&repeat)["device"] == "Shared-Login");
+        let bob = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                &device_login_body("bob", "Shared-Login", "Bob", "-1"),
+            )
+            .await,
+        )
+        .await;
+        assert!(device_claims(&bob)["sub"] == "bob");
+        {
+            let store = app.store.lock().unwrap();
+            let retained = devices::load(&store.db, "alice", "Shared-Login")
+                .unwrap()
+                .unwrap();
+            assert!(
+                retained.name == original.name
+                    && retained.created == original.created
+                    && retained.device_type == 14
+            );
+            assert!(
+                store.account("id", "alice").unwrap().unwrap() == revision_before,
+                "Login changed the account document or revision."
+            );
+            assert_eq!(
+                devices::load(&store.db, "bob", "Shared-Login")
+                    .unwrap()
+                    .unwrap()
+                    .device_type,
+                -1
+            );
+        }
+        let secret = {
+            let mut store = app.store.lock().unwrap();
+            no_warden::identity::IdentityStorage::get_or_create_api_key(&mut *store, "alice")
+                .unwrap()
+                .api_key
+                .expose_secret()
+                .to_owned()
+        };
+        let api_body = |supplied: &str| {
+            serde_urlencoded::to_string([
+                ("grant_type", "client_credentials"),
+                ("client_id", "user.alice"),
+                ("client_secret", supplied),
+                ("scope", "api"),
+                ("deviceIdentifier", "API-Device"),
+                ("deviceName", "API original"),
+                ("deviceType", "2147483647"),
+            ])
+            .unwrap()
+        };
+        let before = device_persisted_state(&app.store.lock().unwrap());
+        assert!(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                api_body("wrong").as_bytes()
+            )
+            .await
+            .is_err()
+        );
+        assert!(device_persisted_state(&app.store.lock().unwrap()) == before);
+        let api = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                api_body(&secret).as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        assert!(
+            device_claims(&api)["device"] == "API-Device" && api.get("refresh_token").is_none()
+        );
+        let store = app.store.lock().unwrap();
+        assert_eq!(
+            devices::load(&store.db, "alice", "API-Device")
+                .unwrap()
+                .unwrap()
+                .device_type,
+            i32::MAX
+        );
+        assert!(
+            devices::load(&store.db, "bob", "API-Device")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn device_refresh_preserves_binding_activity_and_legacy_session_authority() {
+        let app = device_fixture_app();
+        let first = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                &device_login_body("alice", "Refresh-Device", "Original", "8"),
+            )
+            .await,
+        )
+        .await;
+        let before = {
+            let store = app.store.lock().unwrap();
+            store.db.execute("UPDATE device_registry SET updated='2000-01-01T00:00:00.000000Z' WHERE owner='alice'",[]).unwrap();
+            store.account("id", "alice").unwrap().unwrap()
+        };
+        let body = serde_urlencoded::to_string([
+            ("grant_type", "refresh_token"),
+            ("refresh_token", first["refresh_token"].as_str().unwrap()),
+            ("deviceIdentifier", "forged-refresh-device"),
+        ])
+        .unwrap();
+        let refreshed = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                body.as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        assert!(device_claims(&refreshed)["device"] == "Refresh-Device");
+        {
+            let store = app.store.lock().unwrap();
+            assert!(store.account("id", "alice").unwrap().unwrap() == before);
+            assert!(
+                devices::refresh_binding(
+                    &store.db,
+                    &digest(refreshed["refresh_token"].as_str().unwrap()),
+                    "alice"
+                )
+                .unwrap()
+                .as_deref()
+                    == Some("Refresh-Device")
+            );
+            let updated: String = store
+                .db
+                .query_row(
+                    "SELECT updated FROM device_registry WHERE owner='alice'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(updated != "2000-01-01T00:00:00.000000Z");
+            assert_eq!(devices::list(&store.db, "alice").unwrap().0.len(), 1);
+        }
+        let list = device_document(
+            device_request(
+                &app,
+                Method::GET,
+                "/api/devices",
+                device_authorization(first["access_token"].as_str()),
+                b"",
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(list["data"].as_array().unwrap().len(), 1);
+        let snapshot = device_persisted_state(&app.store.lock().unwrap());
+        assert!(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                body.as_bytes()
+            )
+            .await
+            .is_err()
+        );
+        assert!(device_persisted_state(&app.store.lock().unwrap()) == snapshot);
+        let legacy_body = b"grant_type=refresh_token&refresh_token=device-fixture-refresh-bob";
+        let legacy = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                legacy_body,
+            )
+            .await,
+        )
+        .await;
+        assert!(device_claims(&legacy).get("device").is_none());
+        let store = app.store.lock().unwrap();
+        assert!(devices::list(&store.db, "bob").unwrap().0.is_empty());
+        assert!(
+            devices::refresh_binding(
+                &store.db,
+                &digest(legacy["refresh_token"].as_str().unwrap()),
+                "bob"
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn device_login_and_refresh_failures_roll_back_registry_sessions_and_binding() {
+        for failure in ["session", "binding", "commit"] {
+            let app = device_fixture_app();
+            {
+                let mut store = app.store.lock().unwrap();
+                VaultService::new(&mut *store)
+                    .register_device(
+                        "alice",
+                        &DeviceRegistration {
+                            identifier: "Existing-Device",
+                            name: "Original",
+                            device_type: 8,
+                        },
+                    )
+                    .unwrap();
+                store
+                    .db
+                    .execute(
+                        "UPDATE device_registry SET updated='2000-01-01T00:00:00.000000Z'",
+                        [],
+                    )
+                    .unwrap();
+                store.db.execute("INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES('expired-access','expired-refresh','alice',0,0)",[]).unwrap();
+                let trigger = match failure {
+                    "session" => {
+                        "CREATE TRIGGER reject_device_session BEFORE INSERT ON sessions BEGIN SELECT RAISE(ABORT,'injected session failure'); END;"
+                    }
+                    "binding" => {
+                        "CREATE TRIGGER reject_device_binding BEFORE INSERT ON session_devices BEGIN SELECT RAISE(ABORT,'injected binding failure'); END;"
+                    }
+                    "commit" => {
+                        "CREATE TABLE failed_device_login(owner TEXT REFERENCES accounts(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER reject_device_login AFTER INSERT ON session_devices BEGIN INSERT INTO failed_device_login(owner) VALUES('missing'); END;"
+                    }
+                    _ => unreachable!(),
+                };
+                store.db.execute_batch(trigger).unwrap();
+            }
+            let before = device_persisted_state(&app.store.lock().unwrap());
+            for identifier in ["New-Device", "Existing-Device"] {
+                let Err(error) = device_request(
+                    &app,
+                    Method::POST,
+                    "/identity/connect/token",
+                    HeaderMap::new(),
+                    &device_login_body("alice", identifier, "Replacement", "-1"),
+                )
+                .await
+                else {
+                    panic!("Injected device login failure succeeded.")
+                };
+                assert_eq!(error.0, StatusCode::INTERNAL_SERVER_ERROR);
+                let store = app.store.lock().unwrap();
+                assert!(
+                    device_persisted_state(&store) == before,
+                    "Failed login committed device or session state."
+                );
+                assert!(store.db.is_autocommit());
+            }
+        }
+        let app = device_fixture_app();
+        let first = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                &device_login_body("alice", "Refresh-Failure", "Original", "8"),
+            )
+            .await,
+        )
+        .await;
+        {
+            let store = app.store.lock().unwrap();
+            store
+                .db
+                .execute(
+                    "UPDATE device_registry SET updated='2000-01-01T00:00:00.000000Z'",
+                    [],
+                )
+                .unwrap();
+            store.db.execute_batch("CREATE TRIGGER reject_refresh_binding BEFORE INSERT ON session_devices BEGIN SELECT RAISE(ABORT,'injected refresh binding failure'); END;").unwrap();
+        }
+        let before = device_persisted_state(&app.store.lock().unwrap());
+        let body = serde_urlencoded::to_string([
+            ("grant_type", "refresh_token"),
+            ("refresh_token", first["refresh_token"].as_str().unwrap()),
+        ])
+        .unwrap();
+        assert!(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                body.as_bytes()
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            device_persisted_state(&app.store.lock().unwrap()) == before,
+            "Failed refresh consumed authority or changed device activity."
+        );
+        app.store
+            .lock()
+            .unwrap()
+            .db
+            .execute_batch("DROP TRIGGER reject_refresh_binding")
+            .unwrap();
+        let retry = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                body.as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        assert!(device_claims(&retry)["device"] == "Refresh-Failure");
+    }
 
     #[tokio::test]
     async fn domain_http_dispatch_preserves_owner_isolation_and_sync_projection() {

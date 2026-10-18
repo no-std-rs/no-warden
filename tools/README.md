@@ -181,7 +181,7 @@ binary payloads never enter assertion output. Build `no-warden-server` first, or
 set `NO_WARDEN_BIN` to its binary path. The test stops its child processes and
 removes the temporary database on success or failure.
 
-## Rust folder, account-key, profile, and domain HTTP contracts
+## Rust personal-account and device HTTP contracts
 
 The portable folder checks use the Rust fixture library and two disposable
 accounts. They exercise the existing seven folder routes, JSON decoding and
@@ -191,18 +191,29 @@ deletion:
 ```sh
 cargo run --locked -p no-warden-conformance --bin no-warden-http-conformance
 BW_E2E_SERVER=http://127.0.0.1:8001 cargo run --locked \
-  -p no-warden-conformance --bin no-warden-http-conformance
+  -p no-warden-conformance --bin no-warden-http-conformance -- --suite personal
+# Restart the disposable reference before running the device group:
+BW_E2E_SERVER=http://127.0.0.1:8001 cargo run --locked \
+  -p no-warden-conformance --bin no-warden-http-conformance -- --suite devices
 ```
 
-The binary runs folders, account keys, profile/avatar, then equivalent domains.
-`BW_FOLDER_RECEIPT`, `BW_ACCOUNT_KEYS_RECEIPT`, `BW_PROFILE_RECEIPT`, and
-`BW_DOMAINS_RECEIPT` optionally name new private result files for their respective
-groups. Existing paths are
+By default the binary runs folders, account keys, profile/avatar, equivalent
+domains, then devices: 40 cases. `--suite personal` selects the first four groups;
+`--suite devices` selects only devices. Individual selectors are `folders`,
+`account-keys`, `profile`, and `domains`; `--suite all` is the default.
+Invalid arguments return exit code 2 without echoing supplied values.
+`BW_FOLDER_RECEIPT`, `BW_ACCOUNT_KEYS_RECEIPT`, `BW_PROFILE_RECEIPT`,
+`BW_DOMAINS_RECEIPT`, and `BW_DEVICES_RECEIPT` optionally name new private result
+files for their respective groups. Existing paths are
 rejected; files are created with mode 0600 and contain authored case names,
 statuses, request counts, and login counts, without request or response values.
-These HTTP groups make nine fixture logins in total, below the reference's
-unchanged default ten-login limit. Use a fresh disposable reference process
-before the combined suite and again before the complete CLI comparison.
+The personal groups make nine fixture logins. Devices make six identity
+requests: five login attempts (four successful and one deliberately rejected)
+and one refresh. Run these selections in separate fresh disposable reference
+processes to stay within its unchanged default ten-login limit. Use another
+fresh reference process for the complete CLI comparison. The adapter's CI job
+runs all 40 cases together; do not run that combined selection against one
+reference process with default limits.
 Other HTTP and persistence groups still use their
 existing JavaScript tools.
 
@@ -212,7 +223,7 @@ The fixture helper retains a valid generated pair privately for initialization;
 it omits that pair from the actual registration request. Public-key lookup is
 verified across accounts, while private retrieval always uses the bearer’s owner.
 Initialization checks include positional JSON, opaque/empty values, and rejection
-of an existing pair without any mutation. All four groups preserve response
+of an existing pair without any mutation. All groups preserve response
 bodies, credentials, and encrypted key material inside the process. Receipts
 contain authored case names, statuses and counts, plus the public catalog
 fingerprint for domains. No authentication or mutation is retried.
@@ -268,7 +279,23 @@ The final HTTP receipts pass against both the adapter and official Vaultwarden
 | Account keys | 8 | 242 | 3 |
 | Profile/avatar | 8 | 425 | 2 |
 | Equivalent domains | 8 | 530 | 2 |
-| Combined | 32 | 1417 | 9 |
+| Personal subtotal | 32 | 1417 | 9 |
+
+The eight device cases also pass against both servers: 199 counted requests,
+including the six identity requests described above. They cover public header
+decoding and exact identifier matching, owner-only list/single projections,
+percent-decoded path guards, metadata retention on repeated login, API-key device
+registration, refresh identity, and failed-login/authentication boundaries.
+The receipt distinguishes successful logins, attempted logins, identity requests,
+and refresh requests. Their combined total with the personal groups is 40 cases
+and 1616 requests, measured in separate reference processes.
+
+Device identifiers in headers and login forms remain opaque. Authenticated
+lookup paths accept ASCII letters, digits and hyphens after percent-decoding;
+they are not UUID paths. List entries have ten fields and single responses
+seven. Pending-auth requests, trust/key setup, push-token mutation and notification
+lifecycles remain unimplemented by the adapter. The core exposes a borrowed
+pending-auth projection without claiming that lifecycle.
 
 Login requests are included in the request counts; fixture registrations are
 excluded. These receipts do not establish captured CLI route traces or complete
