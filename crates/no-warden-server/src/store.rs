@@ -1,11 +1,12 @@
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use no_warden::{
     Storage,
+    account_keys::{AccountKeyState, AccountKeyStorage},
     bulk::{CipherBulkOperation, CipherBulkStorage, ValidatedCipherBulk},
     identity::{ApiKeyDevice, IdentityStorage, ReauthenticationProof, Secret},
     import::{ImportData, ImportStorage, ValidatedImport},
     service::ItemMetadata,
-    wire::{ApiKeyResponse, CipherRequest, FolderRequest, RegisterRequest},
+    wire::{AccountKeys, ApiKeyResponse, CipherRequest, FolderRequest, RegisterRequest},
 };
 use rand::{
     distributions::{Alphanumeric, DistString},
@@ -24,6 +25,16 @@ pub struct Store {
     key_id: Option<String>,
     api_key_secret: Option<String>,
     api_key_revision: Option<String>,
+    account_key_cache: Option<CachedAccountKeys>,
+    public_key_cache: Option<String>,
+}
+
+// Owned query results keep the optional core response borrows tied to this
+// adapter. Formatting and general serialization never expose cached key data.
+struct CachedAccountKeys {
+    key: String,
+    public_key: Option<String>,
+    encrypted_private_key: Option<String>,
 }
 
 pub fn now() -> String {
@@ -175,6 +186,8 @@ impl Store {
             key_id: None,
             api_key_secret: None,
             api_key_revision: None,
+            account_key_cache: None,
+            public_key_cache: None,
         })
     }
 
@@ -565,6 +578,93 @@ impl CipherBulkStorage for Store {
     }
 }
 
+impl AccountKeyStorage for Store {
+    fn account_key_state(
+        &mut self,
+        owner: &str,
+    ) -> Result<Option<AccountKeyState<'_>>, Self::Error> {
+        self.account_key_cache = self
+            .db
+            .query_row(
+                "SELECT COALESCE(json_extract(document,'$.key'),''),
+                    json_extract(document,'$.keys.publicKey'),
+                    json_extract(document,'$.keys.encryptedPrivateKey')
+             FROM accounts WHERE id=?1",
+                [owner],
+                |row| {
+                    Ok(CachedAccountKeys {
+                        key: row.get(0)?,
+                        public_key: row.get(1)?,
+                        encrypted_private_key: row.get(2)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(self.account_key_cache.as_ref().map(|keys| AccountKeyState {
+            key: &keys.key,
+            public_key: keys.public_key.as_deref(),
+            encrypted_private_key: keys.encrypted_private_key.as_deref(),
+        }))
+    }
+
+    fn initialize_account_keys(
+        &mut self,
+        owner: &str,
+        request: &AccountKeys<'_>,
+    ) -> Result<(), Self::Error> {
+        let tx = self.db.transaction()?;
+        let encoded: String = tx.query_row(
+            "SELECT document FROM accounts WHERE id=?1",
+            [owner],
+            |row| row.get(0),
+        )?;
+        let mut document: Value =
+            serde_json::from_str(&encoded).map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let fields = document
+            .as_object_mut()
+            .ok_or(rusqlite::Error::InvalidQuery)?;
+        let keys = fields.entry("keys").or_insert_with(|| json!({}));
+        if keys.is_null() {
+            *keys = json!({});
+        }
+        let keys = keys.as_object_mut().ok_or(rusqlite::Error::InvalidQuery)?;
+        // The service checks the same condition under the host mutex. Repeat
+        // it inside the transaction so this provider never replaces an existing
+        // or partially initialized pair, including a present empty string.
+        if ["publicKey", "encryptedPrivateKey"]
+            .iter()
+            .any(|key| keys.get(*key).is_some_and(|value| !value.is_null()))
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        keys.insert("publicKey".into(), json!(request.public_key));
+        keys.insert(
+            "encryptedPrivateKey".into(),
+            json!(request.encrypted_private_key),
+        );
+        let revision = next_revision(&tx, owner)?;
+        require_change(tx.execute(
+            "UPDATE accounts SET document=?1 WHERE id=?2",
+            params![document.to_string(), owner],
+        )?)?;
+        bump(&tx, owner, &revision)?;
+        tx.commit()
+    }
+
+    fn user_public_key(&mut self, user_id: &str) -> Result<Option<&str>, Self::Error> {
+        self.public_key_cache = self
+            .db
+            .query_row(
+                "SELECT json_extract(document,'$.keys.publicKey') FROM accounts WHERE id=?1",
+                [user_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(self.public_key_cache.as_deref())
+    }
+}
+
 impl Storage for Store {
     type Error = rusqlite::Error;
 
@@ -695,6 +795,266 @@ mod tests {
     use serde::Deserialize;
 
     const CIPHERTEXT: &str = "2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+    #[test]
+    fn account_key_presence_distinguishes_absence_partial_pairs_and_present_empty_strings() {
+        for (public, private) in [
+            (None, None),
+            (Some("public"), None),
+            (None, Some("private")),
+            (Some(""), None),
+            (None, Some("")),
+            (Some(""), Some("")),
+            (Some("public"), Some("wrapped-private")),
+        ] {
+            let mut store = setup();
+            store.db.execute("UPDATE accounts SET document=json_set(document,'$.key','','$.keys',json(?1)) WHERE id='alice'",
+                [json!({"publicKey":public,"encryptedPrivateKey":private}).to_string()]).unwrap();
+            let state = AccountKeyStorage::account_key_state(&mut store, "alice")
+                .unwrap()
+                .unwrap();
+            assert!(state.key.is_empty());
+            assert!(state.public_key == public);
+            assert!(state.encrypted_private_key == private);
+            let mut service = VaultService::new(&mut store);
+            let result = service.get_account_keys("alice");
+            if public.is_some() && private.is_some() {
+                let response = result.unwrap();
+                assert!(response.key.is_none());
+                assert!(Some(response.public_key) == public);
+                assert!(Some(response.private_key.expose_secret()) == private);
+            } else {
+                let Err(error) = result else {
+                    panic!("Incomplete key pair was returned.");
+                };
+                assert_eq!(error.status_code(), 404);
+            }
+            assert!(AccountKeyStorage::user_public_key(&mut store, "alice").unwrap() == public);
+            if public.is_some() || private.is_some() {
+                let before = snapshot(&store);
+                let request = AccountKeys {
+                    encrypted_private_key: "replacement-private",
+                    public_key: "replacement-public",
+                };
+                let result =
+                    VaultService::new(&mut store).initialize_account_keys("alice", &request);
+                let Err(error) = result else {
+                    panic!("Existing or partial pair was replaced.");
+                };
+                assert_eq!(error.status_code(), 400);
+                assert!(
+                    AccountKeyStorage::initialize_account_keys(&mut store, "alice", &request)
+                        .is_err()
+                );
+                assert!(
+                    snapshot(&store) == before,
+                    "Rejected initialization changed existing keys or state."
+                );
+            }
+        }
+        let mut store = setup();
+        assert!(
+            AccountKeyStorage::account_key_state(&mut store, "missing")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            AccountKeyStorage::user_public_key(&mut store, "missing")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            AccountKeyStorage::user_public_key(&mut store, "bob")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn account_key_initialization_changes_only_the_pair_and_owner_revision() {
+        let mut store = setup();
+        save(&mut store, "alice", "folder", "folder", None);
+        save(&mut store, "alice", "cipher", "cipher", Some("folder"));
+        save(&mut store, "bob", "foreign", "cipher", None);
+        let mut document = store.account("id", "alice").unwrap().unwrap();
+        document["key"] = json!("preserved-wrapped-user-key");
+        document["userKeyId"] = json!("preserved-user-key-id");
+        document["securityStamp"] = json!("preserved-security-stamp");
+        document["futureAccountField"] = json!({"nested":["preserved",null,7]});
+        document["keys"] = json!({"futureKeyMetadata":{"preserved":true}});
+        store
+            .db
+            .execute(
+                "UPDATE accounts SET document=?1 WHERE id='alice'",
+                [document.to_string()],
+            )
+            .unwrap();
+        store.db.execute("INSERT INTO api_keys(owner,secret,verifier) VALUES('alice','preserved-api-secret','preserved-api-verifier')",[]).unwrap();
+        store.db.execute("INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES('preserved-access','preserved-refresh','alice',4000000000,4000000000)",[]).unwrap();
+        let bytes: Vec<u8> = (0..=255).collect();
+        store.db.execute("INSERT INTO attachments(id,cipher_id,file_name,key,size,data) VALUES('preserved-attachment','cipher',?1,?1,256,?2)",params![CIPHERTEXT,bytes]).unwrap();
+        store.db.execute("INSERT INTO attachment_downloads(token,attachment_id,expires) VALUES('preserved-capability','preserved-attachment',4000000000)",[]).unwrap();
+        let authority = account_authority_snapshot(&store);
+        let other_state = snapshot(&store)
+            .into_iter()
+            .filter(|row| !row.starts_with("account:alice:"))
+            .collect::<Vec<_>>();
+        let previous_revision: String = store
+            .db
+            .query_row(
+                "SELECT revision FROM accounts WHERE id='alice'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let request = AccountKeys {
+            encrypted_private_key: "opaque private \" café 🔐",
+            public_key: "",
+        };
+        let response = VaultService::new(&mut store)
+            .initialize_account_keys("alice", &request)
+            .unwrap();
+        assert!(response.public_key.is_empty());
+        assert!(response.private_key.expose_secret() == request.encrypted_private_key);
+        let after = store.account("id", "alice").unwrap().unwrap();
+        let revision: String = store
+            .db
+            .query_row(
+                "SELECT revision FROM accounts WHERE id='alice'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            revision > previous_revision,
+            "Initialization must advance the account revision."
+        );
+        document["keys"]["publicKey"] = json!(request.public_key);
+        document["keys"]["encryptedPrivateKey"] = json!(request.encrypted_private_key);
+        document["revisionDate"] = json!(revision);
+        assert!(
+            after == document,
+            "Initialization changed unrelated account fields."
+        );
+        assert!(
+            account_authority_snapshot(&store) == authority,
+            "Initialization changed credentials, sessions, or attachment data."
+        );
+        assert!(
+            snapshot(&store)
+                .into_iter()
+                .filter(|row| !row.starts_with("account:alice:"))
+                .collect::<Vec<_>>()
+                == other_state,
+            "Initialization changed vault or foreign account state."
+        );
+        let mut service = VaultService::new(&mut store);
+        let get = service.get_account_keys("alice").unwrap();
+        assert!(
+            get.key
+                .is_some_and(|key| key.expose_secret() == "preserved-wrapped-user-key")
+        );
+        assert!(get.public_key.is_empty());
+        assert!(get.private_key.expose_secret() == request.encrypted_private_key);
+    }
+
+    #[test]
+    fn account_key_initialization_rolls_back_document_revision_and_commit_failures() {
+        for failure in ["document", "revision", "commit"] {
+            let mut store = setup();
+            store.db.execute("UPDATE accounts SET document=json_set(document,'$.key','preserved-user-key','$.keys',NULL) WHERE id='alice'",[]).unwrap();
+            let before = snapshot(&store);
+            let authority = account_authority_snapshot(&store);
+            let trigger = match failure {
+                "document" => {
+                    "CREATE TRIGGER reject_pair_document BEFORE UPDATE OF document ON accounts BEGIN SELECT RAISE(ABORT,'injected pair document failure'); END;"
+                }
+                "revision" => {
+                    "CREATE TRIGGER reject_pair_revision BEFORE UPDATE OF revision ON accounts BEGIN SELECT RAISE(ABORT,'injected pair revision failure'); END;"
+                }
+                "commit" => {
+                    "CREATE TABLE failed_pair_commit(owner TEXT REFERENCES accounts(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER reject_pair_commit AFTER UPDATE OF revision ON accounts BEGIN INSERT INTO failed_pair_commit(owner) VALUES('missing-owner'); END;"
+                }
+                _ => unreachable!(),
+            };
+            store.db.execute_batch(trigger).unwrap();
+            let request = AccountKeys {
+                encrypted_private_key: "opaque-private",
+                public_key: "opaque-public",
+            };
+            assert!(
+                VaultService::new(&mut store)
+                    .initialize_account_keys("alice", &request)
+                    .is_err(),
+                "Injected {failure} failure must be reported."
+            );
+            assert!(
+                snapshot(&store) == before,
+                "Injected {failure} failure partially committed keys or revision."
+            );
+            assert!(
+                account_authority_snapshot(&store) == authority,
+                "Injected {failure} failure changed authority."
+            );
+            let state = AccountKeyStorage::account_key_state(&mut store, "alice")
+                .unwrap()
+                .unwrap();
+            assert!(state.public_key.is_none() && state.encrypted_private_key.is_none());
+        }
+    }
+
+    #[test]
+    fn present_empty_account_keys_survive_private_database_reopen() {
+        let directory = std::env::temp_dir().join(format!(
+            "no-warden-key-persistence-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let database = directory.join("vault.db");
+        let path = database.to_str().unwrap();
+        let revision;
+        {
+            let mut store = Store::open(path).unwrap();
+            store.db.execute("INSERT INTO accounts(id,email,document,password,revision) VALUES('alice','alice@example.test','{\"id\":\"alice\",\"key\":\"\",\"keys\":null}','test',?1)",[now()]).unwrap();
+            VaultService::new(&mut store)
+                .initialize_account_keys(
+                    "alice",
+                    &AccountKeys {
+                        encrypted_private_key: "",
+                        public_key: "",
+                    },
+                )
+                .unwrap();
+            revision = store.account("id", "alice").unwrap().unwrap()["revisionDate"].clone();
+        }
+        {
+            let mut store = Store::open(path).unwrap();
+            assert!(store.account("id", "alice").unwrap().unwrap()["revisionDate"] == revision);
+            let mut service = VaultService::new(&mut store);
+            let response = service.get_account_keys("alice").unwrap();
+            assert!(response.key.is_none());
+            assert!(response.public_key.is_empty());
+            assert!(response.private_key.expose_secret().is_empty());
+            assert!(AccountKeyStorage::user_public_key(&mut store, "alice").unwrap() == Some(""));
+            assert!(
+                VaultService::new(&mut store)
+                    .initialize_account_keys(
+                        "alice",
+                        &AccountKeys {
+                            encrypted_private_key: "replacement",
+                            public_key: "replacement"
+                        }
+                    )
+                    .is_err()
+            );
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn api_keys_are_recoverable_stable_and_verified_independently_from_passwords() {
@@ -1072,6 +1432,16 @@ mod tests {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap()
+    }
+
+    fn account_authority_snapshot(store: &Store) -> Vec<String> {
+        store.db.prepare(
+            "SELECT 'password:'||id||':'||password FROM accounts
+             UNION ALL SELECT 'session:'||access||':'||refresh||':'||owner||':'||access_expires||':'||refresh_expires FROM sessions
+             UNION ALL SELECT 'api-key:'||owner||':'||secret||':'||verifier FROM api_keys
+             UNION ALL SELECT 'attachment:'||id||':'||cipher_id||':'||file_name||':'||COALESCE(key,'null')||':'||size||':'||COALESCE(hex(data),'null') FROM attachments
+             UNION ALL SELECT 'download:'||token||':'||attachment_id||':'||expires FROM attachment_downloads ORDER BY 1",
+        ).unwrap().query_map([],|row|row.get::<_,String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
     }
 
     #[cfg(unix)]

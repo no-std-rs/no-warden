@@ -7,7 +7,8 @@ server have separate platform requirements.
 
 The host-only `no-warden-conformance` Rust crate runs the default CLI suite,
 including private subprocess capture, encrypted account fixtures, and disposable
-loopback TLS. `tools/e2e.sh` invokes it through Cargo. HTTP, restart-persistence,
+loopback TLS. `tools/e2e.sh` invokes it through Cargo. Rust HTTP groups cover
+folder and account-key contracts; the existing HTTP, restart-persistence,
 and client-inventory checks still use JavaScript; the broader migration remains
 unfinished.
 
@@ -110,8 +111,8 @@ uploads empty, all-byte-value, and 2 MiB plus 37-byte fixtures, including a quot
 Unicode filename. Downloads go to private files and are compared byte for byte;
 binary contents never pass through text stdout capture. The test edits the
 parent item, trashes/restores it, discards the client cache, syncs and downloads
-all attachments again, then deletes them. The complete suite executes 118 real
-CLI commands. The Rust runner checks the cumulative 37, 51, 66, 90, and 118-command
+all attachments again, then deletes them. The complete suite executes 120 real
+CLI commands. The Rust runner checks the cumulative 37, 51, 66, 92, and 120-command
 milestones. Fixture and downloaded files remain inside private temporary
 directories and are removed when the run returns, including on an error.
 
@@ -179,7 +180,7 @@ binary payloads never enter assertion output. Build `no-warden-server` first, or
 set `NO_WARDEN_BIN` to its binary path. The test stops its child processes and
 removes the temporary database on success or failure.
 
-## Rust folder HTTP contracts
+## Rust folder and account-key HTTP contracts
 
 The portable folder checks use the Rust fixture library and two disposable
 accounts. They exercise the existing seven folder routes, JSON decoding and
@@ -192,11 +193,22 @@ BW_E2E_SERVER=http://127.0.0.1:8001 cargo run --locked \
   -p no-warden-conformance --bin no-warden-http-conformance
 ```
 
-`BW_FOLDER_RECEIPT` optionally names a new private result file. These HTTP
-checks make two fixture logins; use a fresh disposable reference process before
+`BW_FOLDER_RECEIPT` and `BW_ACCOUNT_KEYS_RECEIPT` optionally name new private
+result files for their respective groups. These HTTP
+groups make five fixture logins in total; use a fresh disposable reference process before
 this group and again before the complete CLI comparison. Its default login
 limits remain unchanged. Other HTTP and persistence groups still use their
 existing JavaScript tools.
+
+The account-key group uses three fresh accounts and one password login for each.
+Two accounts register without a key pair so initialization is exercised directly.
+The fixture helper retains a valid generated pair privately for initialization;
+it omits that pair from the actual registration request. Public-key lookup is
+verified across accounts, while private retrieval always uses the bearer’s owner.
+Initialization checks include positional JSON, opaque/empty values, and rejection
+of an existing pair without any mutation. Both groups preserve response bodies,
+credentials, and encrypted key material inside the process; receipts contain only
+authored case names, statuses, and counts. No authentication or mutation is retried.
 
 ## Compare against upstream Vaultwarden
 
@@ -292,3 +304,10 @@ CLI run. The retained `tools/seed-account.mjs` helper supports the JavaScript
 HTTP/persistence fixtures and standalone account creation until their migration.
 For standalone seeding, supply `BW_E2E_EMAIL`, `BW_E2E_PASSWORD`, and optionally
 `BW_E2E_SERVER` in the environment, then run `node tools/seed-account.mjs`.
+
+The account-key extension preserves the original 118 commands and adds two
+fingerprint commands, for 120 total. `bw get fingerprint me` reads the cached
+public key; `bw get fingerprint <user-id>` requests that user’s public key from
+the server. The runner requires the two fingerprints to match without printing
+either fingerprint or the account ID. This is direct client evidence for the
+public-key read flow, with no captured route trace or full-parity claim.

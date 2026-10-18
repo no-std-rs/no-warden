@@ -242,3 +242,13 @@ An embedded consumer can provide fixed-capacity storage and serialize responses
 into a caller-owned buffer. Feature unification in an embedding application must
 not accidentally enable `serde`'s `std` or `alloc` features for the core target.
 CI separately compiles the core for a target without an operating system.
+
+Account encryption-key reads and initialization use the opt-in `AccountKeyStorage`
+provider. It borrows opaque state from the host; the core checks pair presence and
+authenticated identity without interpreting cryptographic material. Public-key
+lookup intentionally permits authenticated cross-user access, while private-key
+reads always use the authenticated account. Initialization preserves existing key
+material, changes only a completely absent pair, and commits with the account
+revision. Key response types have explicit serialization boundaries and redacted
+Debug output. The standalone adapter holds its storage lock across service checks
+and the atomic SQLite write; no persistence or clock enters the core.

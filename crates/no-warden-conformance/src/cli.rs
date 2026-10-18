@@ -112,7 +112,7 @@ impl Runner {
                 .map_err(|_| fail("Conformance receipt seek failed"))?;
             file.set_len(0)
                 .map_err(|_| fail("Conformance receipt update failed"))?;
-            let record = json!({"status":status,"commands":self.commands,"expectedCommands":118,"cliVersion":"2026.10.0"});
+            let record = json!({"status":status,"commands":self.commands,"expectedCommands":120,"cliVersion":"2026.10.0"});
             file.write_all(record.to_string().as_bytes())
                 .map_err(|_| fail("Conformance receipt write failed"))?;
             file.sync_all()
@@ -543,13 +543,13 @@ pub fn run() -> Result<(), Failure> {
         &imports,
         &archive_item,
     )?;
-    runner.count(90)?;
+    runner.count(92)?;
     attachment_checks(&mut runner, &client_server, &archive_item)?;
-    runner.count(118)?;
+    runner.count(120)?;
     runner.write_receipt("passed")?;
     runner.passed = true;
     println!(
-        "PASS: 118 real CLI commands; Rust runner verified personal vault, import, archive, API-key authentication and binary attachments."
+        "PASS: 120 real CLI commands; Rust runner verified personal vault, import, archive, API-key authentication, public-key fingerprints and binary attachments."
     );
     Ok(())
 }
@@ -911,8 +911,19 @@ fn api_key_checks(
         r.json(&["get", "item", id])?["login"]["password"] == imports.items[0]["login"]["password"],
         "Rotated API vault did not decrypt",
     )?;
+    fingerprint_checks(r, text(&profile["id"])?)?;
     r.command(&["logout"])?;
     Ok(())
+}
+
+fn fingerprint_checks(r: &mut Runner, user_id: &str) -> Result<(), Failure> {
+    stage("Compare the cached public-key fingerprint with an authenticated API lookup");
+    let local = r.command(&["get", "fingerprint", "me"])?;
+    let remote = r.command(&["get", "fingerprint", user_id])?;
+    check(
+        !local.is_empty() && local == remote,
+        "Local and API public-key fingerprints did not match",
+    )
 }
 
 struct AttachmentFixture {

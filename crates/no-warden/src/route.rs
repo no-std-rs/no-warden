@@ -29,6 +29,9 @@ pub enum Route<'a> {
     Register,
     AccountApiKey,
     AccountRotateApiKey,
+    AccountKeysGet,
+    AccountKeysInitialize,
+    UserPublicKey(&'a str),
     Profile,
     UserKeyId,
     RevisionDate,
@@ -102,6 +105,8 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (Post, "/api/accounts/register") => Some(Register),
         (Post, "/api/accounts/api-key") => Some(AccountApiKey),
         (Post, "/api/accounts/rotate-api-key") => Some(AccountRotateApiKey),
+        (Get, "/api/accounts/keys") => Some(AccountKeysGet),
+        (Post, "/api/accounts/keys") => Some(AccountKeysInitialize),
         (Get, "/api/accounts/profile") => Some(Profile),
         (Post, "/api/accounts/key-management/user-key-id") => Some(UserKeyId),
         (Get, "/api/accounts/revision-date") => Some(RevisionDate),
@@ -132,6 +137,12 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
             | "/api/ciphers/unarchive",
         ) => None,
         _ => {
+            if let Some(tail) = path.strip_prefix("/api/users/") {
+                let (id, "public-key") = tail.split_once('/')? else {
+                    return None;
+                };
+                return (method == Get && valid_segment(id)).then_some(UserPublicKey(id));
+            }
             if let Some(tail) = path.strip_prefix("/api/folders/") {
                 if let Some((id, "delete")) = tail.split_once('/') {
                     return if method == Post && valid_segment(id) {
@@ -217,6 +228,44 @@ fn valid_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn account_key_routes_require_authentication_and_preserve_identifier_spelling() {
+        for (method, path, expected) in [
+            (Method::Get, "/api/accounts/keys", Route::AccountKeysGet),
+            (
+                Method::Post,
+                "/api/accounts/keys",
+                Route::AccountKeysInitialize,
+            ),
+            (
+                Method::Get,
+                "/api/users/ABCdef-123/public-key?ignored=true",
+                Route::UserPublicKey("ABCdef-123"),
+            ),
+        ] {
+            let route = classify(method, path).unwrap();
+            assert_eq!(route, expected);
+            assert!(route.requires_authentication());
+        }
+        for method in [Method::Put, Method::Delete, Method::Options] {
+            assert!(classify(method, "/api/accounts/keys").is_none());
+        }
+        for method in [Method::Post, Method::Put, Method::Delete, Method::Options] {
+            assert!(classify(method, "/api/users/ABCdef-123/public-key").is_none());
+        }
+        for path in [
+            "/api/accounts/keys/unknown",
+            "/api/users/public-key",
+            "/api/users//public-key",
+            "/api/users/../public-key",
+            "/api/users/user/public-key/extra",
+            "/api/users/user/private-key",
+            "/api/users/user%2Fother/public-key",
+        ] {
+            assert!(classify(Method::Get, path).is_none());
+        }
+    }
+
     #[test]
     fn attachment_routes_keep_admin_aliases_and_scoped_download_authentication_distinct() {
         use Method::*;

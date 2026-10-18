@@ -23,7 +23,7 @@ use no_warden::{
     route::{self, Route},
     validation::FolderNamePolicy,
     wire::{
-        CipherRequest, ClientCredentialsRequest, FolderRelationship, FolderRequest,
+        AccountKeys, CipherRequest, ClientCredentialsRequest, FolderRelationship, FolderRequest,
         FolderWriteRequest, ImportFolderRequest, PasswordOrOtpRequest, RegisterRequest,
     },
 };
@@ -111,7 +111,7 @@ struct FolderInput {
     id: Option<String>,
 }
 
-fn folder_json_error(error: serde_json::Error) -> Failure {
+fn json_guard_error(error: serde_json::Error) -> Failure {
     match error.classify() {
         serde_json::error::Category::Data => {
             Failure(StatusCode::UNPROCESSABLE_ENTITY, "Invalid request")
@@ -121,14 +121,27 @@ fn folder_json_error(error: serde_json::Error) -> Failure {
 }
 
 fn parse_folder_input(body: &[u8]) -> Result<(FolderInput, Value), Failure> {
-    let input: FolderInput = serde_json::from_slice(body).map_err(folder_json_error)?;
-    let mut document: Value = serde_json::from_slice(body).map_err(folder_json_error)?;
+    let input: FolderInput = serde_json::from_slice(body).map_err(json_guard_error)?;
+    let mut document: Value = serde_json::from_slice(body).map_err(json_guard_error)?;
     // Serde's derived struct decoder also accepts positional arrays. Keep the
     // internal storage representation an object for every accepted input shape.
     if !document.is_object() {
         document = json!({"name": input.name, "id": input.id});
     }
     Ok((input, document))
+}
+
+// Field declaration order matches upstream KeysData for positional JSON
+// sequences. Named fields also accept escapes and reject known duplicates.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountKeysInput {
+    encrypted_private_key: String,
+    public_key: String,
+}
+
+fn parse_account_keys_input(body: &[u8]) -> Result<AccountKeysInput, Failure> {
+    serde_json::from_slice(body).map_err(json_guard_error)
 }
 
 fn json_response(value: Value) -> Response {
@@ -191,6 +204,10 @@ async fn dispatch(
         // spelling. In particular, an upper-case UUID must not alias another ID.
         uuid::Uuid::parse_str(id)
             .map_err(|_| Failure(StatusCode::UNPROCESSABLE_ENTITY, "Invalid folder ID"))?;
+    }
+    if let Route::UserPublicKey(id) = route {
+        uuid::Uuid::parse_str(id)
+            .map_err(|_| Failure(StatusCode::UNPROCESSABLE_ENTITY, "Invalid user ID"))?;
     }
     if route == Route::Config {
         return Ok(json_response(protocol::config(&app.base)));
@@ -339,6 +356,26 @@ async fn dispatch(
     let owner = owner.ok_or_else(unauthorized)?;
     let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
     match route {
+        Route::AccountKeysGet => {
+            let mut service = VaultService::new(&mut *store);
+            let response = service.get_account_keys(&owner)?;
+            Ok(Json(response).into_response())
+        }
+        Route::AccountKeysInitialize => {
+            let input = parse_account_keys_input(&body)?;
+            let request = AccountKeys {
+                encrypted_private_key: &input.encrypted_private_key,
+                public_key: &input.public_key,
+            };
+            let mut service = VaultService::new(&mut *store);
+            let response = service.initialize_account_keys(&owner, &request)?;
+            Ok(Json(response).into_response())
+        }
+        Route::UserPublicKey(id) => {
+            let mut service = VaultService::new(&mut *store);
+            let response = service.get_user_public_key(&owner, id)?;
+            Ok(Json(response).into_response())
+        }
         Route::AttachmentReserve(cipher_id) => {
             let document: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
             let request = no_warden::wire::AttachmentRequest::deserialize(&document)
@@ -768,6 +805,149 @@ fn issue_token_grant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_key_input_matches_upstream_string_schema_and_sequence_order() {
+        for (body, private, public) in [
+            (br#"{"encryptedPrivateKey":"","publicKey":""}"#.as_slice(), "", ""),
+            (br#"["wrapped-private","public"]"#.as_slice(), "wrapped-private", "public"),
+            (br#"{"publicKey":"future public","encryptedPrivateKey":"quoted \" \u00e9","ignored":{"nested":true}}"#.as_slice(), "quoted \" é", "future public"),
+        ] {
+            let parsed = parse_account_keys_input(body).unwrap_or_else(|_| panic!("Valid account key input was rejected."));
+            assert!(parsed.encrypted_private_key == private);
+            assert!(parsed.public_key == public);
+        }
+        for (body, status) in [
+            (b"{".as_slice(), StatusCode::BAD_REQUEST),
+            (br#"{"publicKey":"x","encryptedPrivateKey":"\uD800"}"#.as_slice(), StatusCode::BAD_REQUEST),
+            (br#"["private","public","extra"]"#.as_slice(), StatusCode::BAD_REQUEST),
+            (b"{}".as_slice(), StatusCode::UNPROCESSABLE_ENTITY),
+            (b"null".as_slice(), StatusCode::UNPROCESSABLE_ENTITY),
+            (br#"{"publicKey":"x"}"#.as_slice(), StatusCode::UNPROCESSABLE_ENTITY),
+            (br#"{"encryptedPrivateKey":"x"}"#.as_slice(), StatusCode::UNPROCESSABLE_ENTITY),
+            (br#"{"publicKey":null,"encryptedPrivateKey":"x"}"#.as_slice(), StatusCode::UNPROCESSABLE_ENTITY),
+            (br#"{"publicKey":"x","encryptedPrivateKey":7}"#.as_slice(), StatusCode::UNPROCESSABLE_ENTITY),
+            (br#"{"publicKey":"first","publicKey":"second","encryptedPrivateKey":"x"}"#.as_slice(), StatusCode::UNPROCESSABLE_ENTITY),
+            (br#"{"publicKey":"x","encryptedPrivateKey":"first","encryptedPrivate\u004bey":"second"}"#.as_slice(), StatusCode::UNPROCESSABLE_ENTITY),
+        ] {
+            let error = parse_account_keys_input(body).err().expect("Invalid account key input was accepted.");
+            assert_eq!(error.0, status);
+            assert_eq!(error.1, "Invalid request");
+        }
+    }
+
+    #[tokio::test]
+    async fn account_key_http_boundaries_authenticate_and_never_disclose_another_private_key() {
+        const ALICE: &str = "f0c3f062-6368-4d80-8ec9-c9b8cc209749";
+        const BOB: &str = "e3878851-41cc-40f7-a74f-b2c4042a54b9";
+        let app = App {
+            store: Arc::new(Mutex::new(Store::open(":memory:").unwrap())),
+            base: "http://127.0.0.1".into(),
+            signing_key: [1; 32],
+        };
+        {
+            let store = app.store.lock().unwrap();
+            for (id, public, private) in [
+                (ALICE, "alice-public", "alice-wrapped-private"),
+                (BOB, "bob-public", "bob-wrapped-private"),
+            ] {
+                store.db.execute("INSERT INTO accounts(id,email,document,password,revision) VALUES(?1,?2,?3,'test',?4)",
+                    params![id, format!("{id}@example.test"), json!({"id":id,"email":format!("{id}@example.test"),"key":"wrapped-user-key","keys":{"publicKey":public,"encryptedPrivateKey":private}}).to_string(), store::now()]).unwrap();
+            }
+            store.db.execute("INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES(?1,'unused-fixture-refresh',?2,?3,0)",
+                params![digest("fixture-key-bearer"), ALICE, chrono::Utc::now().timestamp()+3_600]).unwrap();
+        }
+        let public_path = format!("/api/users/{BOB}/public-key");
+        for (method, path, body) in [
+            (Method::GET, "/api/accounts/keys", b"".as_slice()),
+            (
+                Method::POST,
+                "/api/accounts/keys",
+                br#"{"encryptedPrivateKey":"x","publicKey":"y"}"#.as_slice(),
+            ),
+            (Method::GET, public_path.as_str(), b"".as_slice()),
+        ] {
+            let result = dispatch(
+                State(app.clone()),
+                method,
+                path.parse().unwrap(),
+                HeaderMap::new(),
+                Bytes::copy_from_slice(body),
+            )
+            .await;
+            let Err(error) = result else {
+                panic!("Anonymous account key request succeeded.")
+            };
+            assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        }
+        for (path, expected_fields, public) in [
+            ("/api/accounts/keys", 5, "alice-public"),
+            (public_path.as_str(), 3, "bob-public"),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                "authorization",
+                "Bearer fixture-key-bearer".parse().unwrap(),
+            );
+            let response = dispatch(
+                State(app.clone()),
+                Method::GET,
+                path.parse().unwrap(),
+                headers,
+                Bytes::new(),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("Authenticated account key request failed."));
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), MAX_REQUEST_BYTES)
+                .await
+                .unwrap();
+            let value: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(value.as_object().unwrap().len(), expected_fields);
+            assert!(value["publicKey"] == public);
+            assert!(
+                !bytes
+                    .windows(b"bob-wrapped-private".len())
+                    .any(|part| part == b"bob-wrapped-private")
+            );
+            if path == public_path {
+                assert!(value["userId"] == BOB);
+                assert!(value.get("privateKey").is_none());
+                assert!(value.get("key").is_none());
+                assert!(value.get("accountKeys").is_none());
+            }
+        }
+        let uppercase = format!("/api/users/{}/public-key", BOB.to_uppercase());
+        for (path, status) in [
+            (
+                "/api/users/not-a-uuid/public-key",
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                "/api/users/00000000-0000-0000-0000-000000000000/public-key",
+                StatusCode::NOT_FOUND,
+            ),
+            (uppercase.as_str(), StatusCode::NOT_FOUND),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                "authorization",
+                "Bearer fixture-key-bearer".parse().unwrap(),
+            );
+            let result = dispatch(
+                State(app.clone()),
+                Method::GET,
+                path.parse().unwrap(),
+                headers,
+                Bytes::new(),
+            )
+            .await;
+            let Err(error) = result else {
+                panic!("Invalid public key lookup succeeded.")
+            };
+            assert_eq!(error.0, status);
+        }
+    }
 
     #[test]
     fn folder_input_preserves_json_error_categories_and_duplicate_fields() {

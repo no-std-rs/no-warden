@@ -9,9 +9,10 @@ use no_warden::{
     route::{Method, classify},
     service::ImportData,
     wire::{
-        ApiKeyResponse, AttachmentRequest, AttachmentResponse, AttachmentUploadResponse,
-        CipherIdsRequest, CipherRequest, ClientCredentialsRequest, ImportRequest,
-        PasswordOrOtpRequest, PreloginRequest, PreloginResponse,
+        AccountKeys, AccountKeysResponse, ApiKeyResponse, AttachmentRequest, AttachmentResponse,
+        AttachmentUploadResponse, CipherIdsRequest, CipherRequest, ClientCredentialsRequest,
+        ImportRequest, InitializedAccountKeysResponse, PasswordOrOtpRequest, PreloginRequest,
+        PreloginResponse, UserPublicKeyResponse,
     },
 };
 
@@ -107,6 +108,29 @@ pub extern "C" fn _start() -> ! {
     );
     let _ = black_box(serde_json_core::to_slice(&upload, &mut attachment_output));
     black_box(attachment_output);
+    let pair = serde_json_core::from_slice::<AccountKeys<'_>>(black_box(
+        br#"{"encryptedPrivateKey":"opaque-private-key","publicKey":"opaque-public-key"}"#,
+    ));
+    if let Ok((pair, _)) = pair {
+        let mut key_output = [0u8; 1024];
+        let own_keys = AccountKeysResponse {
+            key: Some(Secret::new("opaque-symmetric-key")),
+            public_key: pair.public_key,
+            private_key: Secret::new(pair.encrypted_private_key),
+        };
+        let _ = black_box(serde_json_core::to_slice(&own_keys, &mut key_output));
+        let initialized = InitializedAccountKeysResponse {
+            public_key: pair.public_key,
+            private_key: Secret::new(pair.encrypted_private_key),
+        };
+        let _ = black_box(serde_json_core::to_slice(&initialized, &mut key_output));
+        let public_key = UserPublicKeyResponse {
+            user_id: "requested-user",
+            public_key: pair.public_key,
+        };
+        let _ = black_box(serde_json_core::to_slice(&public_key, &mut key_output));
+        black_box(key_output);
+    }
     loop {
         core::hint::spin_loop();
     }

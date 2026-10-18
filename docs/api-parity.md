@@ -39,8 +39,8 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 54 routed patterns, 30 with typed requests, 42 with reusable core service behavior; each carries its narrower limits |
-| Runtime CLI comparison | Official CLI `2026.10.0`: all 118 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 57 routed patterns, 31 with typed requests, 45 with reusable core service behavior; each carries its narrower limits |
+| Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
 unimplemented status or a partial local coverage record. Query/rank/configuration
@@ -48,13 +48,13 @@ variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
 
-Seventeen local patterns have some typed response representation, including the
+Twenty local patterns have some typed response representation, including the
 explicit API-key and attachment responses. Bulk cipher lists use the generic `ListResponse`
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 46 patterns, negative
-HTTP evidence for 45, and CLI command associations for 30. These are distinct
+The ledger records positive or restart HTTP evidence for 49 patterns, negative
+HTTP evidence for 48, and CLI command associations for 31. These are distinct
 coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -128,7 +128,7 @@ complete upstream failure-semantics proof.
 
 The eight Rust folder cases pass against both the adapter and official Vaultwarden
 `1.37.4`, with 220 requests and two logins per run. The required client job reruns
-the 118-command CLI baseline
+the 120-command CLI suite
 against both servers. No coverage counts or full-parity statuses are advanced by
 this in-progress comparison. Notifications, WebSocket/push updates, complete error
 envelopes, content-type handling, and transport limits remain open. The host's
@@ -185,6 +185,24 @@ HTTP tests pass against the upstream release and cover all 12 lifecycle route
 patterns. Bulk changes and archive state survive two graceful restarts.
 Full-parity statuses and the formal comparison/trace receipt requirements remain
 unchanged.
+
+The account encryption-key chunk adds three previously unimplemented pinned
+routes: `GET /api/accounts/keys`, `POST /api/accounts/keys`, and
+`GET /api/users/<id>/public-key`. `AccountKeyStorage` keeps persisted key strings
+and transactions in the embedding application; `VaultService` applies owner-only
+private reads, initialization only when both fields are absent, and authenticated
+cross-user public lookup. Explicit borrowed response serializers preserve the
+pinned legacy key-pair envelope without linking `alloc`.
+
+The [initialization handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L598-L625)
+accepts opaque strings, including empty values. A partially present pair blocks
+initialization, while private retrieval requires both fields. This differs from
+registration’s stricter cryptographic validation. The
+[shipped TypeScript public-key helper](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/services/api.service.ts#L1205)
+has a direct CLI method reference; that static fact does not establish a captured
+CLI request or command-specific use of this endpoint. Complete account lifecycle,
+modern key rotation/registration, and exhaustive error/configuration behavior
+remain separate parity work.
 
 The personal API-key chunk adds two account routes and a grant variant on the
 existing token route:
