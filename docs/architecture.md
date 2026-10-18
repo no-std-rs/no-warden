@@ -5,10 +5,10 @@ permissions before opening it. Startup also restricts existing database, WAL,
 shared-memory, and rollback-journal files. Filesystem providers remain outside
 the allocation-free core.
 
-The standalone host caps encoded HTTP bodies at 16 MiB. The core caps each
-decoded encrypted field at 1 MiB; the larger transport budget accommodates JSON
-escaping and request metadata. Oversized fields still fail core validation,
-and oversized requests fail before dispatch.
+The standalone host caps encoded HTTP bodies at 16 MiB. Encrypted-field validation normally caps decoded values at 1 MiB; the larger
+transport budget accommodates JSON escaping and request metadata. Folder CRUD
+uses the explicit opaque-name policy described below. Oversized requests fail
+before dispatch.
 
 `no-warden` is the reusable protocol and business-rules crate. It borrows input
 strings, models wire data without an allocator, classifies routes, validates
@@ -27,6 +27,23 @@ Requests retain the wrapped per-cipher `key`, `encryptedFor`, and the opaque
 knows an account's current key ID and reject a different supplied ID. The
 default provider returns no current ID; embeddings that support key-ID
 migration must override it. Ownership comes from the authenticated caller.
+
+Folder CRUD keeps the existing strict `FolderRequest` API and adds borrowed
+`FolderWriteRequest` decoding for an optional, untrusted body ID.
+`FolderNamePolicy::Encrypted` remains the default for existing service calls and
+imports. The standalone adapter uses `create_folder_with_policy` and
+`update_folder_with_policy` with `FolderNamePolicy::Opaque` to preserve upstream
+names verbatim, including empty strings and future encrypted formats. Transport
+and storage limits apply at the adapter boundary. Ownership and generated/route
+IDs retain their authority under either policy.
+
+The HTTP adapter decodes folder bodies through an owned Serde guard before
+retaining their JSON, preserving escaped strings and duplicate-field errors.
+Only `id`, `name`, `revisionDate`, and `object` enter folder responses; unknown
+stored extensions stay private. Folder deletion clears owned cipher links and
+advances the account revision while retaining cipher revisions, archive state,
+encrypted fields, and attachment bytes. The SQLite provider commits these
+changes atomically.
 
 Personal import has a configurable allocation-free decoder,
 `ImportRequest<'a, F, C, R>`, whose folder, cipher, and relationship capacities

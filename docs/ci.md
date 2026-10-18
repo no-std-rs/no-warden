@@ -5,10 +5,10 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The core has 56 unit tests and a compile-fail doctest proving that `Secret`
-cannot be serialized implicitly. The host has 22 Rust tests on Unix, including
+The core has 62 unit tests and a compile-fail doctest proving that `Secret`
+cannot be serialized implicitly. The host has 27 Rust tests on Unix, including
 attachment byte/revision rollback, capability expiry and deletion cleanup.
-The expanded HTTP suite has 61 tests,
+The Node HTTP suite has 61 tests,
 including imports, bulk lifecycle/archive contracts, and API-key reauthentication,
 rotation, scope, device fields, session authority, and all 11 pinned attachment
 route patterns. The CLI suite includes
@@ -19,13 +19,16 @@ credentials, rotation, access-only sessions, exact attachment bytes and metadata
 unexpired download capabilities, and permanent-deletion cleanup.
 The core's minimum Rust version is 1.85; the standalone
 server and host-only `no-warden-conformance` support library are checked with
-their minimum version, 1.89. The Rust conformance crate has 30 active tests and
+their minimum version, 1.89. The Rust conformance crate has 33 active tests and
 one ignored subprocess fixture; capture, encrypted account fixtures, and loopback
 TLS tests run in the workspace suite. The default real-client
 entry point, `tools/e2e.sh`, runs the Rust binary and invokes the pinned official
-CLI as an external process in the required `bitwarden-cli` job. HTTP,
-restart-persistence, and client-inventory
-orchestration still use JavaScript, so the broader migration remains unfinished.
+CLI as an external process in the required `bitwarden-cli` job. The separate
+`no-warden-http-conformance` Rust binary runs eight folder contract cases in that
+job, including response projection, opaque names, JSON guards, ownership, UUID
+paths, and deletion revision effects. The existing HTTP, restart-persistence, and
+client-inventory orchestration still uses JavaScript, so the broader migration
+remains unfinished.
 Bare-metal compilation and the allocator-free consumer link pass independently
 of the host suites.
 

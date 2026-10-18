@@ -638,10 +638,15 @@ impl Storage for Store {
     }
 
     fn delete_folder(&mut self, owner: &str, id: &str) -> Result<(), Self::Error> {
-        // Removing a folder keeps its encrypted items and clears their folder reference.
+        // A folder association belongs to the user's view of a cipher. Removing
+        // it advances the account revision without changing the cipher revision.
         let tx = self.db.transaction()?;
         let revision = next_revision(&tx, owner)?;
-        tx.execute("UPDATE items SET document=json_set(document,'$.folderId',NULL,'$.revisionDate',?1),revision=?1 WHERE owner=?2 AND kind='cipher' AND json_extract(document,'$.folderId')=?3",params![revision,owner,id])?;
+        tx.execute(
+            "UPDATE items SET document=json_set(document,'$.folderId',NULL)
+             WHERE owner=?1 AND kind='cipher' AND json_extract(document,'$.folderId')=?2",
+            params![owner, id],
+        )?;
         require_change(tx.execute(
             "DELETE FROM items WHERE owner=?1 AND id=?2 AND kind='folder'",
             params![owner, id],
@@ -1258,6 +1263,150 @@ mod tests {
     }
 
     #[test]
+    fn folder_deletion_preserves_cipher_metadata_archives_and_attachment_bytes() {
+        let mut store = setup();
+        save(&mut store, "alice", "folder", "folder", None);
+        save(&mut store, "bob", "bob-folder", "folder", None);
+        for (owner, id, folder, trashed) in [
+            ("alice", "active", Some("folder"), false),
+            ("alice", "trashed", Some("folder"), true),
+            ("alice", "loose", None, false),
+            ("bob", "foreign", Some("bob-folder"), false),
+        ] {
+            store.pending = json!({
+                "type": 1, "name": CIPHERTEXT, "notes": CIPHERTEXT,
+                "folderId": folder, "favorite": true,
+                "login": {"username": CIPHERTEXT, "password": CIPHERTEXT},
+                "fields": [{"name": CIPHERTEXT, "value": CIPHERTEXT, "type": 0}],
+                "updated": "2026-01-02T03:04:05.123456Z",
+                "futureClientField": {"nested": [CIPHERTEXT, null, 7]},
+                "archivedDate": "2026-01-03T04:05:06.123456Z",
+            });
+            store.save(owner, id, "cipher").unwrap();
+            if trashed {
+                store.set_cipher_deleted(owner, id, true).unwrap();
+            }
+            let bytes: Vec<u8> = (0..=255).collect();
+            store.db.execute(
+                "INSERT INTO attachments(id,cipher_id,file_name,key,size,data) VALUES(?1,?2,?3,?3,?4,?5)",
+                params![format!("attachment-{id}"), id, CIPHERTEXT, bytes.len(), bytes],
+            ).unwrap();
+            store.db.execute(
+                "INSERT INTO attachment_downloads(token,attachment_id,expires) VALUES(?1,?2,?3)",
+                params![format!("fixture-token-{id}"), format!("attachment-{id}"), 4_000_000_000_i64],
+            ).unwrap();
+        }
+        let records = |store: &Store| {
+            store.db.prepare("SELECT id,owner,document,deleted,revision,created FROM items WHERE kind='cipher' ORDER BY id")
+                .unwrap().query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, bool>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?)))
+                .unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
+        };
+        let attachments = |store: &Store| {
+            store
+                .db
+                .prepare("SELECT id,cipher_id,file_name,key,size,data FROM attachments ORDER BY id")
+                .unwrap()
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, u64>(4)?,
+                        row.get::<_, Vec<u8>>(5)?,
+                    ))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        let mut expected = records(&store);
+        for (id, owner, document, _, _, _) in &mut expected {
+            if owner == "alice" && matches!(id.as_str(), "active" | "trashed") {
+                let mut value: Value = serde_json::from_str(document).unwrap();
+                value["folderId"] = Value::Null;
+                *document = value.to_string();
+            }
+        }
+        let original_attachments = attachments(&store);
+        let original_annotations = snapshot(&store)
+            .into_iter()
+            .filter(|row| row.starts_with("archive:"))
+            .collect::<Vec<_>>();
+        let original_downloads = store
+            .db
+            .prepare("SELECT token,attachment_id,expires FROM attachment_downloads ORDER BY token")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        let alice_before = store.account("id", "alice").unwrap().unwrap();
+        let foreign_before = snapshot(&store)
+            .into_iter()
+            .filter(|row| {
+                row.starts_with("account:bob:")
+                    || row.starts_with("item:bob-folder:")
+                    || row.starts_with("item:foreign:")
+            })
+            .collect::<Vec<_>>();
+
+        store.delete_folder("alice", "folder").unwrap();
+
+        assert!(store.item("alice", "folder", "folder").unwrap().is_none());
+        assert!(
+            records(&store) == expected,
+            "Folder deletion changed cipher data beyond its folder association."
+        );
+        assert!(
+            attachments(&store) == original_attachments,
+            "Folder deletion changed attachment metadata or encrypted bytes."
+        );
+        assert_eq!(
+            snapshot(&store)
+                .into_iter()
+                .filter(|row| row.starts_with("archive:"))
+                .collect::<Vec<_>>(),
+            original_annotations
+        );
+        let downloads = store
+            .db
+            .prepare("SELECT token,attachment_id,expires FROM attachment_downloads ORDER BY token")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(
+            downloads == original_downloads,
+            "Folder deletion changed existing attachment download grants."
+        );
+        assert_eq!(
+            snapshot(&store)
+                .into_iter()
+                .filter(|row| row.starts_with("account:bob:")
+                    || row.starts_with("item:bob-folder:")
+                    || row.starts_with("item:foreign:"))
+                .collect::<Vec<_>>(),
+            foreign_before
+        );
+        let alice_after = store.account("id", "alice").unwrap().unwrap();
+        assert_ne!(alice_after["revisionDate"], alice_before["revisionDate"]);
+    }
+
+    #[test]
     fn deleting_folder_preserves_items_and_other_vaults() {
         let mut store = setup();
         save(&mut store, "alice", "folder", "folder", None);
@@ -1280,7 +1429,7 @@ mod tests {
         assert!(remaining["folderId"].is_null());
         assert_eq!(remaining["name"], original["name"]);
         assert_eq!(remaining["creationDate"], original["creationDate"]);
-        assert_ne!(remaining["revisionDate"], original["revisionDate"]);
+        assert_eq!(remaining["revisionDate"], original["revisionDate"]);
         assert_eq!(
             store.item("alice", "loose", "cipher").unwrap().unwrap(),
             loose

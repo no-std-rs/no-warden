@@ -32,6 +32,7 @@ In another terminal, run the actual client and authorization checks:
 ```sh
 npm ci --prefix tools
 bash tools/e2e.sh
+cargo run -p no-warden-conformance --bin no-warden-http-conformance --locked
 node --test tools/server-tests.mjs
 ```
 
@@ -41,8 +42,10 @@ cache and never opens your existing vault. See [test tools](tools/README.md).
 
 `tools/e2e.sh` runs the host-only `no-warden-conformance` Rust binary. It provides
 CLI orchestration, private subprocess capture, encrypted account fixtures, and
-disposable loopback TLS. HTTP, restart-persistence, and client-inventory checks
-still use JavaScript; the broader harness migration remains open.
+disposable loopback TLS. Its separate Rust HTTP binary checks the folder API
+against a configured adapter or Vaultwarden release. The existing HTTP,
+restart-persistence, and client-inventory checks still use JavaScript; the broader
+harness migration remains open.
 
 For the Rust checks and the separate bare-metal consumer:
 

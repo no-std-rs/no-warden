@@ -291,6 +291,16 @@ pub struct FolderRequest<'a> {
     pub name: &'a str,
 }
 
+/// Folder CRUD wire input. The optional body ID is decoded but has no authority:
+/// creation uses a host-generated ID, and updates use the authenticated route ID.
+/// Keep it separate from `FolderRequest` so existing embedding constructors stay stable.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct FolderWriteRequest<'a> {
+    pub name: &'a str,
+    #[serde(default)]
+    pub id: Option<&'a str>,
+}
+
 /// An imported folder may reference an existing folder owned by the importing account.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct ImportFolderRequest<'a> {
@@ -674,6 +684,42 @@ mod tests {
         ] {
             assert!(serde_json::from_str::<CipherIdsRequest<'_, 3>>(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn folder_write_requests_decode_optional_body_ids_without_coercion() {
+        for (input, expected) in [
+            (r#"{"name":"café 🔐"}"#, None),
+            (r#"{"name":"café 🔐","id":null}"#, None),
+            (r#"{"name":"café 🔐","id":""}"#, Some("")),
+            (
+                r#"{"name":"café 🔐","id":"Untrusted/Body:ID"}"#,
+                Some("Untrusted/Body:ID"),
+            ),
+        ] {
+            let request: FolderWriteRequest<'_> = serde_json::from_str(input).unwrap();
+            assert_eq!(request.id, expected);
+            assert_eq!(request.name, "café 🔐");
+            let start = input.as_ptr() as usize;
+            assert!((start..start + input.len()).contains(&(request.name.as_ptr() as usize)));
+        }
+        let document = serde_json::json!({"name":"quoted\" and line\n 🔐","id":"ignored"});
+        let request = FolderWriteRequest::deserialize(&document).unwrap();
+        assert_eq!(request.name, "quoted\" and line\n 🔐");
+        for input in [
+            r#"{"name":"","id":1}"#,
+            r#"{"name":"","id":false}"#,
+            r#"{"name":"","id":[]}"#,
+            r#"{"name":"","id":{}}"#,
+            r#"{"id":"ignored"}"#,
+            r#"{"name":null}"#,
+            r#"{"name":7}"#,
+        ] {
+            assert!(serde_json::from_str::<FolderWriteRequest<'_>>(input).is_err());
+        }
+        // Existing programmatic callers need no optional-ID field.
+        let old_request = FolderRequest { name: "" };
+        assert_eq!(old_request.name, "");
     }
     #[test]
     fn import_decoder_capacities_are_independent_and_caller_selected() {

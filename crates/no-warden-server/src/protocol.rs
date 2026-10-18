@@ -5,6 +5,17 @@
 
 use serde_json::{Value, json};
 
+/// Upstream folder responses expose exactly these four fields. Extra stored
+/// request fields stay private and do not become part of the wire contract.
+pub fn folder(document: &Value) -> Value {
+    json!({
+        "id": document["id"],
+        "name": document["name"],
+        "revisionDate": document["revisionDate"],
+        "object": "folder",
+    })
+}
+
 fn kdf(account: &Value, pascal_case: bool) -> Value {
     let kind = account.get("kdf").and_then(Value::as_u64).unwrap_or(0);
     let iterations = account
@@ -186,4 +197,30 @@ pub fn api_key_token_fields(account: &Value) -> Value {
         }
     }
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folder_projection_preserves_name_and_revision_without_private_extensions() {
+        let document = json!({
+            "id": "opaque-folder-id", "name": "future-format\nquoted \" café 🔐",
+            "revisionDate": "2026-01-02T03:04:05.123456Z", "object": "ignored",
+            "creationDate": "private", "deletedDate": "private",
+            "unknown": {"future": [1, null, "private"]},
+        });
+        let original = document.clone();
+        let response = folder(&document);
+        assert_eq!(response.as_object().unwrap().len(), 4);
+        assert_eq!(response["id"], document["id"]);
+        assert!(response["name"] == document["name"]);
+        assert_eq!(response["revisionDate"], document["revisionDate"]);
+        assert_eq!(response["object"], "folder");
+        assert!(
+            document == original,
+            "Projecting a response must preserve stored data."
+        );
+    }
 }

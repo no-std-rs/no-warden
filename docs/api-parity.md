@@ -53,8 +53,8 @@ explicit API-key and attachment responses. Bulk cipher lists use the generic `Li
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 43 patterns, negative
-HTTP evidence for 44, and CLI command associations for 30. These are distinct
+The ledger records positive or restart HTTP evidence for 46 patterns, negative
+HTTP evidence for 45, and CLI command associations for 30. These are distinct
 coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -74,6 +74,68 @@ atomic SQLite implementation, and passing real-client personal import scenarios.
 The CLI tests cover JSON types 1–4 and CSV types 1–2; they do not close the whole
 import/export family. Additional source-proven gaps remain in every API family;
 the inventory is not a plan to stop after import or personal-vault APIs.
+
+The current folder chunk improves seven existing routes, without adding route
+patterns or closing the folder family's full-parity status:
+
+| Method and route | Personal folder contract |
+| --- | --- |
+| `GET /api/folders` | List only the authenticated owner's folders |
+| `POST /api/folders` | Create a fresh folder ID; ignore a supplied body ID |
+| `GET /api/folders/<id>` | Read the exact owned folder ID |
+| `PUT /api/folders/<id>` | Replace the name without changing the path ID |
+| `POST /api/folders/<id>` | Same update contract |
+| `DELETE /api/folders/<id>` | Clear folder associations and remove the folder; empty 200 |
+| `POST /api/folders/<id>/delete` | Same deletion contract |
+
+The [pinned handlers and request model](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/folders.rs#L14-L110)
+accept arbitrary string names and ignore the optional body ID during CRUD. Empty,
+Unicode, future-format, and larger-than-one-MiB names already pass direct Rust
+HTTP comparisons against both servers. The separate borrowed
+`FolderWriteRequest` models `name` and an optional string `id`. Its owned host
+decoding guard preserves escaped strings and duplicate-known-field errors,
+then borrows those decoded fields into the allocation-free API. IDs of a type
+other than string or null are rejected; omitted, null, empty, and other string
+IDs cannot choose storage identity. Unknown fields may remain in the adapter's
+private document, while every folder response surface projects the
+[upstream four-field model](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/folder.rs#L52-L62):
+`id`, `revisionDate`, `name`, and `object: "folder"`.
+
+`FolderNamePolicy::Encrypted` remains the default for the existing core methods.
+The new `create_folder_with_policy` and `update_folder_with_policy` methods permit
+an explicit `FolderNamePolicy::Opaque`, which accepts any borrowed string without
+interpreting an encryption envelope or applying the encrypted-field byte ceiling.
+The adapter selects that policy for these CRUD routes; import validation is
+unchanged. UUID syntax remains a host path guard rather than a restriction on
+generic core storage IDs. The
+[pinned UUID guard](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/macros/src/lib.rs#L15-L27)
+preserves exact spelling and case. Malformed path UUIDs return 422; a valid but
+missing or foreign folder returns 400 with `Invalid folder`. Body schema errors
+classified as data errors return 422, while syntax/end-of-input errors return
+400, following the [Rocket JSON guard](https://api.rocket.rs/v0.5/src/rocket/serde/json.rs.html#196-210).
+Successful deletion returns empty 200 through upstream's `EmptyResult` and
+[Rocket unit response](https://api.rocket.rs/v0.5/rocket/struct.Response.html#method.new).
+
+The [pinned deletion model](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/folder.rs#L101-L110)
+advances the owner's account revision and deletes folder associations without
+saving linked ciphers. The adapter now preserves active and trashed cipher
+revisions and all unrelated stored fields. Its storage regression snapshots
+documents and persistence columns, archive annotations, attachment metadata and
+all encrypted bytes, existing download grants, loose items, and foreign vault
+state. Existing injected revision-write failures and focused HTTP error tests
+verify local rollback; these atomic provider guarantees are distinct from a
+complete upstream failure-semantics proof.
+
+The eight Rust folder cases pass against both the adapter and official Vaultwarden
+`1.37.4`, with 220 requests and two logins per run. The required client job reruns
+the 118-command CLI baseline
+against both servers. No coverage counts or full-parity statuses are advanced by
+this in-progress comparison. Notifications, WebSocket/push updates, complete error
+envelopes, content-type handling, and transport limits remain open. The host's
+16-MiB request cap differs from the
+[pinned 20-MB JSON limit](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/main.rs#L575-L578).
+Formal comparison and CLI trace receipts remain separate requirements, and the
+full API delivery goal remains open.
 
 The
 [pinned Vaultwarden personal import handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L613-L678)
