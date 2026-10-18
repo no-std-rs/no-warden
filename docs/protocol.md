@@ -418,3 +418,34 @@ Browser/mobile clients, organizations, attachments, Send, two-factor login,
 device approval, SSO, passkey authentication, key rotation, push notifications,
 and recovery need separate implementation and actual-client evidence. A passing personal
 CLI test must not be described as complete Bitwarden or Vaultwarden parity.
+
+## Account encryption keys
+
+The [pinned account handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L565-L625)
+separate account encryption keys from personal API credentials. Every route here
+requires bearer authentication:
+
+| Method and route | Contract |
+| --- | --- |
+| `GET /api/accounts/keys` | Return the authenticated account’s key pair; 404 unless both fields are present |
+| `POST /api/accounts/keys` | Initialize `publicKey` and `encryptedPrivateKey` only when both are absent; reject an existing or partial pair with 400 |
+| `GET /api/users/<id>/public-key` | Return that user’s public key to an authenticated caller; 404 for an absent user or public key |
+
+The initialization input requires two JSON strings. They remain opaque, including
+empty strings and future formats; registration’s stricter validation does not
+apply to this route. Schema failures return 422 and syntax failures return 400.
+Successful initialization returns `privateKey`, `publicKey`, and `object: "keys"`.
+The provider saves the pair atomically with the account revision and preserves
+the symmetric account key, password verifier, sessions, API credentials, and vault.
+
+Reading your pair returns `key`, `publicKey`, `privateKey`, `accountKeys`, and
+`object: "keys"`; an empty symmetric key is represented as null. The nested
+[`accountKeys` model](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/user.rs#L270-L289)
+contains the wrapped private key and public key, with null signed-key, security,
+and signature fields. Public lookup returns only `userId`, `publicKey`, and
+`object: "userKey"`. It intentionally permits cross-user public-key access,
+without exposing the target’s private key or symmetric key. UUID path parsing
+preserves spelling and returns 422 for malformed IDs.
+
+These contracts remain partial until complete upstream behavior, configuration,
+error-envelope, and client-path comparisons have been established.

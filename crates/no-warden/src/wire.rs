@@ -246,11 +246,124 @@ impl Default for PreloginResponse {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+/// Borrowed registration/initialization input. Positional JSON sequences put the
+/// encrypted private key first, matching the pinned upstream `KeysData` declaration.
+#[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountKeys<'a> {
-    pub public_key: &'a str,
     pub encrypted_private_key: &'a str,
+    pub public_key: &'a str,
+}
+
+impl core::fmt::Debug for AccountKeys<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("AccountKeys([REDACTED])")
+    }
+}
+
+/// Owner-only account-key response with the pinned legacy SDK key-pair projection.
+/// Sensitive fields serialize only at this explicit response boundary.
+pub struct AccountKeysResponse<'a> {
+    pub key: Option<Secret<'a>>,
+    pub public_key: &'a str,
+    pub private_key: Secret<'a>,
+}
+
+impl core::fmt::Debug for AccountKeysResponse<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("AccountKeysResponse([REDACTED])")
+    }
+}
+
+impl Serialize for AccountKeysResponse<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct EncryptionKeyPair<'a> {
+            wrapped_private_key: &'a str,
+            public_key: &'a str,
+            signed_public_key: Option<()>,
+            object: &'static str,
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct PrivateKeys<'a> {
+            public_key_encryption_key_pair: EncryptionKeyPair<'a>,
+            security_state: Option<()>,
+            signature_key_pair: Option<()>,
+            object: &'static str,
+        }
+        let mut response = serializer.serialize_struct("AccountKeysResponse", 5)?;
+        response.serialize_field("key", &self.key.as_ref().map(Secret::expose_secret))?;
+        response.serialize_field("publicKey", self.public_key)?;
+        response.serialize_field("privateKey", self.private_key.expose_secret())?;
+        response.serialize_field(
+            "accountKeys",
+            &PrivateKeys {
+                public_key_encryption_key_pair: EncryptionKeyPair {
+                    wrapped_private_key: self.private_key.expose_secret(),
+                    public_key: self.public_key,
+                    signed_public_key: None,
+                    object: "publicKeyEncryptionKeyPair",
+                },
+                security_state: None,
+                signature_key_pair: None,
+                object: "privateKeys",
+            },
+        )?;
+        response.serialize_field("object", "keys")?;
+        response.end()
+    }
+}
+
+/// Initialization returns only the stored pair and object discriminator.
+pub struct InitializedAccountKeysResponse<'a> {
+    pub public_key: &'a str,
+    pub private_key: Secret<'a>,
+}
+
+impl core::fmt::Debug for InitializedAccountKeysResponse<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("InitializedAccountKeysResponse([REDACTED])")
+    }
+}
+
+impl Serialize for InitializedAccountKeysResponse<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut response = serializer.serialize_struct("InitializedAccountKeysResponse", 3)?;
+        response.serialize_field("privateKey", self.private_key.expose_secret())?;
+        response.serialize_field("publicKey", self.public_key)?;
+        response.serialize_field("object", "keys")?;
+        response.end()
+    }
+}
+
+/// Authenticated lookup that exposes only the requested user's public key.
+pub struct UserPublicKeyResponse<'a> {
+    pub user_id: &'a str,
+    pub public_key: &'a str,
+}
+
+impl core::fmt::Debug for UserPublicKeyResponse<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("UserPublicKeyResponse")
+            .field("user_id", &self.user_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Serialize for UserPublicKeyResponse<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut response = serializer.serialize_struct("UserPublicKeyResponse", 3)?;
+        response.serialize_field("userId", self.user_id)?;
+        response.serialize_field("publicKey", self.public_key)?;
+        response.serialize_field("object", "userKey")?;
+        response.end()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -527,6 +640,80 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
 mod tests {
     use super::*;
     use std::string::ToString;
+    #[test]
+    fn account_key_requests_borrow_opaque_strings_and_use_private_then_public_sequence_order() {
+        let input = r#"["opaque-private:future","opaque-public:future"]"#;
+        let request: AccountKeys<'_> = serde_json::from_str(input).unwrap();
+        assert_eq!(request.encrypted_private_key, "opaque-private:future");
+        assert_eq!(request.public_key, "opaque-public:future");
+        let start = input.as_ptr() as usize;
+        for value in [request.encrypted_private_key, request.public_key] {
+            assert!((start..start + input.len()).contains(&(value.as_ptr() as usize)));
+        }
+        assert!(!std::format!("{request:?}").contains("opaque-private"));
+        let large = "opaque".repeat(250_000);
+        let document =
+            serde_json::json!({"publicKey":large,"encryptedPrivateKey":"quoted\"\n雪 🔐"});
+        let request = AccountKeys::deserialize(&document).unwrap();
+        assert_eq!(request.encrypted_private_key, "quoted\"\n雪 🔐");
+        assert_eq!(request.public_key.len(), 1_500_000);
+        let request: AccountKeys<'_> = serde_json::from_str(r#"["",""]"#).unwrap();
+        assert!(request.encrypted_private_key.is_empty() && request.public_key.is_empty());
+        for input in [
+            "{}",
+            r#"{"publicKey":"p"}"#,
+            r#"{"publicKey":"p","encryptedPrivateKey":null}"#,
+            r#"{"publicKey":7,"encryptedPrivateKey":"p"}"#,
+            r#"["private"]"#,
+            r#"["private",null]"#,
+            r#"["private","public",0]"#,
+        ] {
+            assert!(serde_json::from_str::<AccountKeys<'_>>(input).is_err());
+        }
+    }
+
+    #[test]
+    fn account_key_responses_keep_exact_nulls_shapes_and_redacted_debug() {
+        let response = AccountKeysResponse {
+            key: None,
+            public_key: "opaque-public",
+            private_key: Secret::new("opaque-private"),
+        };
+        let expected = serde_json::json!({
+            "key":null,"publicKey":"opaque-public","privateKey":"opaque-private",
+            "accountKeys":{
+                "publicKeyEncryptionKeyPair":{
+                    "wrappedPrivateKey":"opaque-private","publicKey":"opaque-public",
+                    "signedPublicKey":null,"object":"publicKeyEncryptionKeyPair"
+                },
+                "securityState":null,"signatureKeyPair":null,"object":"privateKeys"
+            },"object":"keys"
+        });
+        assert_eq!(serde_json::to_value(&response).unwrap(), expected);
+        assert_eq!(
+            std::format!("{response:?}"),
+            "AccountKeysResponse([REDACTED])"
+        );
+        let initialized = InitializedAccountKeysResponse {
+            public_key: "opaque-public",
+            private_key: Secret::new("opaque-private"),
+        };
+        assert_eq!(
+            serde_json::to_value(&initialized).unwrap(),
+            serde_json::json!({"publicKey":"opaque-public","privateKey":"opaque-private","object":"keys"})
+        );
+        assert!(!std::format!("{initialized:?}").contains("opaque-private"));
+        let public = UserPublicKeyResponse {
+            user_id: "Other/Raw:ID",
+            public_key: "opaque-public",
+        };
+        assert_eq!(
+            serde_json::to_value(&public).unwrap(),
+            serde_json::json!({"userId":"Other/Raw:ID","publicKey":"opaque-public","object":"userKey"})
+        );
+        assert!(!std::format!("{public:?}").contains("opaque-public"));
+    }
+
     #[test]
     fn attachment_wire_sizes_accept_integers_and_integer_strings_without_losing_opaque_metadata() {
         for value in [

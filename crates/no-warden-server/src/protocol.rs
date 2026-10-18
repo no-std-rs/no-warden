@@ -42,7 +42,7 @@ fn kdf(account: &Value, pascal_case: bool) -> Value {
 fn account_keys(account: &Value) -> Value {
     let private_key = &account["keys"]["encryptedPrivateKey"];
     let public_key = &account["keys"]["publicKey"];
-    if private_key.is_null() || public_key.is_null() {
+    if private_key.is_null() {
         return Value::Null;
     }
     json!({
@@ -202,6 +202,88 @@ pub fn api_key_token_fields(account: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_account_key_projection_preserves_partial_and_empty_states() {
+        for (public, private) in [
+            (None, None),
+            (Some("public-only"), None),
+            (None, Some("wrapped-private-only")),
+            (Some(""), Some("")),
+            (Some("public"), Some("wrapped-private")),
+        ] {
+            let account = json!({"keys":{"publicKey":public,"encryptedPrivateKey":private}});
+            let projected = account_keys(&account);
+            if private.is_none() {
+                assert!(projected.is_null());
+                continue;
+            }
+            assert_eq!(projected.as_object().unwrap().len(), 4);
+            let pair = &projected["publicKeyEncryptionKeyPair"];
+            assert_eq!(pair.as_object().unwrap().len(), 4);
+            assert!(pair["publicKey"] == json!(public));
+            assert!(pair["wrappedPrivateKey"] == json!(private));
+            assert!(pair["signedPublicKey"].is_null());
+            assert_eq!(pair["object"], "publicKeyEncryptionKeyPair");
+            assert!(projected["securityState"].is_null());
+            assert!(projected["signatureKeyPair"].is_null());
+            assert_eq!(projected["object"], "privateKeys");
+        }
+    }
+
+    #[test]
+    fn account_key_response_boundaries_expose_only_their_pinned_fields() {
+        use no_warden::{
+            identity::Secret,
+            wire::{AccountKeysResponse, InitializedAccountKeysResponse, UserPublicKeyResponse},
+        };
+        let get = serde_json::to_value(AccountKeysResponse {
+            key: Some(Secret::new("wrapped-user-key")),
+            public_key: "public",
+            private_key: Secret::new("wrapped-private"),
+        })
+        .unwrap();
+        assert_eq!(get.as_object().unwrap().len(), 5);
+        assert!(get["key"] == "wrapped-user-key");
+        assert!(get["publicKey"] == "public");
+        assert!(get["privateKey"] == "wrapped-private");
+        assert_eq!(get["object"], "keys");
+        assert!(
+            get["accountKeys"]
+                == account_keys(
+                    &json!({"keys":{"publicKey":"public","encryptedPrivateKey":"wrapped-private"}})
+                )
+        );
+        let initialized = serde_json::to_value(InitializedAccountKeysResponse {
+            public_key: "public",
+            private_key: Secret::new("wrapped-private"),
+        })
+        .unwrap();
+        assert_eq!(initialized.as_object().unwrap().len(), 3);
+        assert!(initialized["publicKey"] == "public");
+        assert!(initialized["privateKey"] == "wrapped-private");
+        assert_eq!(initialized["object"], "keys");
+        assert!(initialized.get("accountKeys").is_none());
+        assert!(initialized.get("key").is_none());
+        let public = serde_json::to_value(UserPublicKeyResponse {
+            user_id: "another-user",
+            public_key: "public",
+        })
+        .unwrap();
+        assert_eq!(public.as_object().unwrap().len(), 3);
+        assert!(public["userId"] == "another-user");
+        assert!(public["publicKey"] == "public");
+        assert_eq!(public["object"], "userKey");
+        for field in [
+            "privateKey",
+            "encryptedPrivateKey",
+            "key",
+            "accountKeys",
+            "email",
+        ] {
+            assert!(public.get(field).is_none());
+        }
+    }
 
     #[test]
     fn folder_projection_preserves_name_and_revision_without_private_extensions() {

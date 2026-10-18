@@ -29,7 +29,9 @@ old secret is rejected. API login output alone does not establish vault unlock.
 Real-client blob, SSH-key, and other import variants still need their own fixtures.
 
 The attachment extension expands the suite to 118 CLI commands, all passing
-against the standalone host and official Vaultwarden 1.37.4.
+against the standalone host and official Vaultwarden 1.37.4. The account-key
+extension adds two matching fingerprint checks, bringing the verified suite to
+120 commands against both servers.
 
 | API surface | Standalone behavior | Verification |
 | --- | --- | --- |
@@ -37,6 +39,7 @@ against the standalone host and official Vaultwarden 1.37.4.
 | `POST /api/accounts/register` | Registration with encrypted keys | Cryptographic fixture |
 | Prelogin legacy and identity aliases | PBKDF2/Argon2 parameters | Latest CLI and HTTP |
 | `POST /identity/connect/token` | Password grant, expiring sessions, rotating refresh | CLI and HTTP |
+| `GET /api/accounts/keys`, `POST /api/accounts/keys`, `GET /api/users/<id>/public-key` | Owner-only private retrieval, initialization of an absent pair, authenticated cross-user public lookup | Borrowed core/provider contracts; Rust HTTP comparison group and SQLite rollback/reopen tests |
 | `POST /api/accounts/api-key`, `POST /api/accounts/rotate-api-key` | Password-reauthenticated personal key retrieval, lazy creation, rotation | Core, HTTP comparison with upstream, rollback and restart tests; keys used by real CLI |
 | Personal `client_credentials` at `POST /identity/connect/token` | `user.<id>`, exact `api` scope, access token without refresh token | Real CLI API login, password unlock and decryption; core and HTTP comparison with upstream |
 | `POST /api/accounts/key-management/user-key-id` | One-time key-ID migration | SDK login and HTTP |
@@ -89,6 +92,29 @@ They do not prove that a real client can decrypt a blob or use stored passkey
 credentials.
 User-key-ID migration is a one-time identifier backfill, not a key-rotation
 implementation.
+
+The account encryption-key group passes all eight Rust HTTP cases against the
+adapter and official Vaultwarden `1.37.4`: 242 requests and three password logins
+per run. It exercises complete and missing pairs, strict private/public response
+projections, opaque initialization, JSON rejection and positional field order,
+authenticated cross-user public lookup, UUID guards, and nonmutating repeated
+initialization. The folder group still passes its 220 requests against both.
+
+`AccountKeyStorage` provides borrowed state and atomic initialization for embedding
+applications. Empty strings count as present keys. A partial pair prevents
+initialization but cannot satisfy private retrieval. The adapter preserves the
+symmetric account key, key ID, password verifier, API credentials, sessions,
+unknown account fields, vault data, and attachments. Tests inject document,
+revision, and deferred-commit failures and reopen the private database to verify
+rollback and durable empty-key state. Core response serializers redact key
+material in Debug and link into the bare-metal consumer without an allocator.
+
+The CLI fingerprint extension compares the cached active user’s fingerprint with
+`bw get fingerprint <user-id>`, whose UUID branch performs the authenticated public
+lookup. Fingerprints stay private. This flow supplies client evidence for public
+lookup only; it does not establish CLI key-pair initialization or captured request
+traces. Modern registration, complete key rotation/account lifecycle, exhaustive
+errors, content-type handling, and transport-size parity remain open.
 
 The folder chunk corrects the behavior of the seven existing
 [pinned folder routes](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/folders.rs#L14-L110).

@@ -42,7 +42,7 @@ cache and never opens your existing vault. See [test tools](tools/README.md).
 
 `tools/e2e.sh` runs the host-only `no-warden-conformance` Rust binary. It provides
 CLI orchestration, private subprocess capture, encrypted account fixtures, and
-disposable loopback TLS. Its separate Rust HTTP binary checks the folder API
+disposable loopback TLS. Its separate Rust HTTP binary checks folder and account-key APIs
 against a configured adapter or Vaultwarden release. The existing HTTP,
 restart-persistence, and client-inventory checks still use JavaScript; the broader
 harness migration remains open.

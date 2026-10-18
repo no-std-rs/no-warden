@@ -313,6 +313,28 @@ pub fn seed_account(server: &str, email: &str, password: &str) -> Result<Value, 
     Ok(body)
 }
 
+/// Register a password account without submitting its generated RSA key pair.
+///
+/// Fixture-only distinction: the returned private registration document retains
+/// `keys`, encrypted for this account's generated user key, so a later account-key
+/// initialization can submit that matching pair. The actual registration request
+/// omits `keys` entirely. Transport and verification behavior are identical to
+/// [`seed_account`]; returned values contain credentials and must stay private.
+pub fn seed_account_without_keys(
+    server: &str,
+    email: &str,
+    password: &str,
+) -> Result<Value, FixtureError> {
+    let body = registration(email, password, REGISTRATION_ITERATIONS)?;
+    let mut submitted = body.clone();
+    submitted
+        .as_object_mut()
+        .ok_or(FixtureError(Failure::RegistrationDocument))?
+        .remove("keys");
+    post_registration(server, &submitted)?;
+    Ok(body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -540,7 +562,9 @@ mod tests {
         let handle = thread::spawn(move || {
             let mut requests = Vec::new();
             for reply in replies {
-                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                // Public seeding helpers derive a full-strength password fixture
+                // before connecting; allow that CPU work on slower CI machines.
+                let deadline = std::time::Instant::now() + Duration::from_secs(30);
                 let (mut stream, _) = loop {
                     match listener.accept() {
                         Ok(connection) => break connection,
@@ -605,6 +629,55 @@ mod tests {
         post_registration(&format!("{server}/"), &body).unwrap();
         let requests = handle.join().unwrap();
         assert!(requests[0].1 == body);
+    }
+
+    #[test]
+    fn keyless_seed_omits_keys_on_wire_and_retains_matching_fixture_material() {
+        let (server, handle) = server(vec![Reply {
+            path: "/api/accounts/register",
+            status: 200,
+            body: "not-json",
+        }]);
+        let body = seed_account_without_keys(&server, "keyless@example.test", "synthetic-password")
+            .unwrap();
+        let requests = handle.join().unwrap();
+        let mut expected = body.clone();
+        let keys = expected.as_object_mut().unwrap().remove("keys").unwrap();
+        assert!(keys["publicKey"].is_string() && keys["encryptedPrivateKey"].is_string());
+        assert!(requests.len() == 1 && requests[0].1 == expected);
+        assert!(requests[0].1.get("keys").is_none());
+    }
+
+    #[test]
+    fn keyless_seed_uses_existing_modern_verification_flow_without_submitting_keys() {
+        let (server, handle) = server(vec![
+            Reply {
+                path: "/api/accounts/register",
+                status: 404,
+                body: "{}",
+            },
+            Reply {
+                path: "/identity/accounts/register/send-verification-email",
+                status: 200,
+                body: "\"synthetic-verification-secret\"",
+            },
+            Reply {
+                path: "/identity/accounts/register/finish",
+                status: 204,
+                body: "",
+            },
+        ]);
+        let body =
+            seed_account_without_keys(&server, "keyless-modern@example.test", "synthetic-password")
+                .unwrap();
+        let requests = handle.join().unwrap();
+        assert!(requests.len() == 3 && requests.iter().all(|(_, body)| body.get("keys").is_none()));
+        let mut expected = body.clone();
+        expected.as_object_mut().unwrap().remove("keys");
+        assert!(requests[0].1 == expected);
+        expected["emailVerificationToken"] = json!("synthetic-verification-secret");
+        assert!(requests[2].1 == expected);
+        assert!(body.get("emailVerificationToken").is_none() && body["keys"].is_object());
     }
 
     #[test]
@@ -844,6 +917,33 @@ mod tests {
     #[test]
     fn legacy_registration_rejects_cross_origin_307_and_308_redirects() {
         rejects_cross_origin_redirects(0);
+    }
+
+    #[test]
+    fn keyless_seed_rejects_redirects_without_replaying_registration_material() {
+        for status in [307, 308] {
+            let (destination, stop, destination_handle) = redirect_destination();
+            let (origin, origin_handle) = server_with_redirect(
+                vec![Reply {
+                    path: "/api/accounts/register",
+                    status,
+                    body: "",
+                }],
+                Some(destination),
+            );
+            let result = seed_account_without_keys(
+                &origin,
+                "keyless-redirect@example.test",
+                "synthetic-password",
+            );
+            let requests = origin_handle.join().unwrap();
+            stop.store(true, Ordering::Release);
+            assert!(destination_handle.join().unwrap() == 0);
+            assert!(requests.len() == 1 && requests[0].1.get("keys").is_none());
+            let error = result.err().unwrap();
+            assert!(error.0 == Failure::RegistrationRejected);
+            assert!(!format!("{error} {error:?}").contains("synthetic-password"));
+        }
     }
 
     #[test]
