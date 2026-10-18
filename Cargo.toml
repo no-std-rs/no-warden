@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/no-warden", "crates/no-warden-server"]
+default-members = ["crates/no-warden"]
 resolver = "2"
 
 [workspace.package]

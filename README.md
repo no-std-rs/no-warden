@@ -62,5 +62,10 @@ Sends, notifications and the remaining account APIs are tracked in the roadmap.
 The local conformance adapter needs further hardening before production use.
 See the [verified compatibility matrix](docs/compatibility.md) for exact scope.
 
+Plain `cargo build` and `cargo test` select the allocation-free core. The
+[`embedded vault consumer`](checks/embedded-vault/README.md) implements owned,
+fixed-capacity storage and exercises the actual business logic without `std`
+or an allocator. Host tests and a RISC-V executable link verify that boundary.
+
 Licensed under MIT OR Apache-2.0. This is an independent project and is not
 affiliated with Bitwarden or Vaultwarden.
