@@ -56,12 +56,20 @@ jobs:
       - run: rustup default stable
       - run: npm ci --prefix tools
       - run: curl --fail --location --retry 3 https://raw.githubusercontent.com/bitwarden/clients/b449ac1d255784380d75ef026343198891286be7/package-lock.json -o "$RUNNER_TEMP/clients-build-package-lock.json"
+      - name: Fetch the pinned bundled SDK request sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://codeload.github.com/bitwarden/sdk-internal/tar.gz/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6 -o "$RUNNER_TEMP/sdk.tar.gz"
+          mkdir -p "$RUNNER_TEMP/sdk-source"
+          tar --extract --gzip --file "$RUNNER_TEMP/sdk.tar.gz" --directory "$RUNNER_TEMP/sdk-source" --strip-components=1
       - run: prlimit --version
       - run: node --test tools/repository-policy.test.mjs
       - run: node --test tools/api-coverage.test.mjs
       - run: node --test tools/cli-inventory.test.mjs
         env:
           BW_CLIENTS_BUILD_LOCK: ${{ runner.temp }}/clients-build-package-lock.json
+          BW_SDK_SOURCE_ROOT: ${{ runner.temp }}/sdk-source
       - run: node --test tools/cli-process.test.mjs
       - run: cargo build -p no-warden-server --locked
       - name: Real client and authorization checks

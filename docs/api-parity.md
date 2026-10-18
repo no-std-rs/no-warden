@@ -70,18 +70,27 @@ build lock and verify the client and implementation snapshots:
 
 ```sh
 curl --fail --location https://raw.githubusercontent.com/bitwarden/clients/b449ac1d255784380d75ef026343198891286be7/package-lock.json -o /tmp/clients-build-lock.json
-BW_CLIENTS_BUILD_LOCK=/tmp/clients-build-lock.json node --test tools/cli-inventory.test.mjs
+curl --fail --location https://codeload.github.com/bitwarden/sdk-internal/tar.gz/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6 -o /tmp/bw-sdk.tar.gz
+mkdir -p /tmp/bw-sdk-source
+tar -xzf /tmp/bw-sdk.tar.gz -C /tmp/bw-sdk-source --strip-components=1
+BW_CLIENTS_BUILD_LOCK=/tmp/clients-build-lock.json BW_SDK_SOURCE_ROOT=/tmp/bw-sdk-source node --test tools/cli-inventory.test.mjs
 node --test tools/api-coverage.test.mjs
 node tools/check-api-coverage.mjs
 ```
 
 The client check binds inventory records to the locked package integrity,
 published bundle/source-map hashes, upstream SDK build-lock pins, and actual
-shipped source locations. It does not promote a symbolic template or source
-reference into a runtime request trace.
+shipped source locations. Each operation has a reviewed receipt combining its
+method/path/role, cited expression span, and pinned SDK/helper source hashes.
+Changing either the claim or those source bytes invalidates the receipt. These
+are audited interpretations, not automatic semantic inference or runtime request
+traces. Updating a receipt requires inspecting the source expression and its
+SDK/helper trace again; refreshing aggregate counts cannot validate a new claim.
 
-Implementation and test source hashes keep coverage claims tied to the audited
-code. An implementation change must update the affected records and references,
+Implementation and test source hashes, including local helpers and the tool
+dependency lock, keep coverage claims tied to the audited code. HTTP coverage
+flags must agree with their positive, negative, or restart evidence. An
+implementation change must update the affected records and references,
 then refresh `source_sha256` using `node tools/check-api-coverage.mjs
 --source-hashes`. Review that metadata diff with the code change; refreshing
 hashes alone does not establish new behavior. Counts are computed from records.

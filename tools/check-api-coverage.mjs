@@ -18,7 +18,12 @@ export function sourceHashes(root = repositoryRoot) {
     }
   }
   for (const directory of ["crates", "checks"]) walk(join(root, directory));
-  for (const path of ["tools/server-tests.mjs", "tools/persistence.mjs", "tools/e2e.mjs"]) paths.push(join(root, path));
+  // Include helpers and subprocess entry points as well as the test entry points.
+  for (const entry of readdirSync(join(root, "tools"), { withFileTypes: true })) {
+    if (entry.isFile() && (entry.name.endsWith(".mjs") || ["package.json", "package-lock.json"].includes(entry.name))) {
+      paths.push(join(root, "tools", entry.name));
+    }
+  }
   return Object.fromEntries(paths.sort().map(path => [
     relative(root, path).split("\\").join("/"), createHash("sha256").update(readFileSync(path)).digest("hex"),
   ]));
@@ -53,6 +58,12 @@ export function validateCoverage(coverage, hashes = sourceHashes(), readSource =
     for (const name of [...route.http_test_names.positive, ...route.http_test_names.negative]) {
       assert(tests.has(name), `${key}: unknown HTTP test ${name}`);
     }
+    if (route.restart_http_test !== null) {
+      assert(Object.hasOwn(hashes, route.restart_http_test), `${key}: restart evidence must name an audited source`);
+    }
+    assert.equal(route.http_positive_tested, route.http_test_names.positive.length > 0 || route.restart_http_test !== null, `${key}: positive HTTP coverage requires test evidence`);
+    assert.equal(route.http_negative_tested, route.http_test_names.negative.length > 0, `${key}: negative HTTP coverage requires test evidence`);
+    assert.equal(route.http_tested, route.http_positive_tested || route.http_negative_tested, `${key}: HTTP coverage must agree with its evidence`);
     for (const command of route.cli_command_coverage) assert(Object.hasOwn(coverage.cli_command_catalog, command), `${key}: unknown CLI command ${command}`);
     if (route.cli_route_trace_tested) {
       assert(Array.isArray(route.cli_trace_evidence) && route.cli_trace_evidence.length > 0, `${key}: CLI commands alone do not prove a captured route trace`);

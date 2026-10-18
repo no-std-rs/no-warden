@@ -25,7 +25,36 @@ export function cliEvidence() {
   const lock = JSON.parse(readFileSync(join(root, "tools/package-lock.json"), "utf8"));
   assert(process.env.BW_CLIENTS_BUILD_LOCK, "Set BW_CLIENTS_BUILD_LOCK to the pinned upstream clients package-lock.json");
   const buildLockBytes = readFileSync(process.env.BW_CLIENTS_BUILD_LOCK);
-  return { bundleSha256: sha256(bundle), sourceMapSha256: sha256(mapBytes), sources, lock, buildLock: JSON.parse(buildLockBytes), buildLockSha256: sha256(buildLockBytes), embeddedSourceCount: map.sources.length };
+  assert(process.env.BW_SDK_SOURCE_ROOT, "Set BW_SDK_SOURCE_ROOT to the pinned bundled SDK source");
+  const sdkSources = new Map();
+  for (const row of JSON.parse(readFileSync(cliInventoryPath, "utf8")).operations) {
+    if (!row.sdkSource) continue;
+    const path = row.sdkSource.path;
+    assert(/^crates\/[a-zA-Z0-9_/-]+\.rs$/.test(path) && !path.includes(".."), "Invalid SDK source path");
+    if (!sdkSources.has(path)) sdkSources.set(path, readFileSync(join(process.env.BW_SDK_SOURCE_ROOT, path), "utf8"));
+  }
+  return { bundleSha256: sha256(bundle), sourceMapSha256: sha256(mapBytes), sources, sdkSources, lock, buildLock: JSON.parse(buildLockBytes), buildLockSha256: sha256(buildLockBytes), embeddedSourceCount: map.sources.length };
+}
+
+// A reviewed receipt binds the interpreted operation to the actual cited expression.
+// Regenerating it is an audit action, not a claim of automatic semantic inference.
+export function operationBinding(row, evidence) {
+  const text = evidence.sources.get(row.source.path);
+  assert.equal(typeof text, "string", "Missing request source");
+  const span = row.requestEvidence?.sourceSpan;
+  assert(span && Number.isSafeInteger(span.start) && Number.isSafeInteger(span.end) && span.start >= 0 && span.end > span.start && span.end <= text.length, "Invalid request expression span");
+  assert.equal(text.slice(0, span.start).split("\n").length, row.source.line, "Request expression must start on its cited line");
+  const expressionSha256 = sha256(text.slice(span.start, span.end));
+  let sdkSourceSha256 = null;
+  if (row.sdkSource) {
+    const sdkText = evidence.sdkSources.get(row.sdkSource.path);
+    assert.equal(typeof sdkText, "string", "Missing pinned SDK request source");
+    assert(Number.isSafeInteger(row.sdkSource.line) && row.sdkSource.line > 0 && row.sdkSource.line <= sdkText.split("\n").length, "Invalid SDK source line");
+    sdkSourceSha256 = sha256(sdkText);
+  }
+  const helperSourceSha256 = row.helperSource ? sha256(evidence.sources.get(row.helperSource.path)) : null;
+  const claim = { method: row.method, path: row.path, template: row.template, trafficRole: row.trafficRole, transport: row.transport, source: row.source, sdkSource: row.sdkSource ?? null, helperSource: row.helperSource ?? null, expressionSha256, sdkSourceSha256, helperSourceSha256 };
+  return { sourceSpan: { start: span.start, end: span.end }, expressionSha256, sdkSourceSha256, helperSourceSha256, claimSha256: sha256(JSON.stringify(claim)) };
 }
 
 export function validateCliInventory(inventory, evidence) {
@@ -69,6 +98,8 @@ export function validateCliInventory(inventory, evidence) {
     if (row.sdkSource) {
       assert.equal(row.sdkSource.url, `https://github.com/bitwarden/sdk-internal/blob/${pin.sdk.commit}/${row.sdkSource.path}#L${row.sdkSource.line}`);
     }
+    if (row.helperSource) sourceExists(row.helperSource);
+    assert.deepEqual(row.requestEvidence, operationBinding(row, evidence), `Operation differs from its reviewed source expression: ${row.id}`);
   }
   for (const row of inventory.cliLocalServeRoutes) {
     assert.equal(row.trafficRole, "cli_local_server");

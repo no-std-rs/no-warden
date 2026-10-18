@@ -30,7 +30,27 @@ test("source enumeration includes the runtime and real-client checks", () => {
   const hashes = sourceHashes();
   assert(Object.hasOwn(hashes, "crates/no-warden/src/lib.rs"));
   assert(Object.hasOwn(hashes, "tools/e2e.mjs"));
+  for (const file of ["seed-account.mjs", "cli-process.mjs", "tls-proxy.mjs"]) assert(Object.hasOwn(hashes, `tools/${file}`));
+  assert(Object.hasOwn(hashes, "tools/package-lock.json"));
   assert(Object.values(hashes).every(hash => /^[a-f0-9]{64}$/.test(hash)));
+});
+
+for (const field of ["http_positive_tested", "http_negative_tested", "http_tested"]) {
+  test(`rejects ${field} without matching HTTP evidence even after count refresh`, () => {
+    const data = structuredClone(snapshot);
+    data.routes[0][field] = true;
+    if (field === "http_positive_tested") data.counts.routes_with_direct_positive_or_restart_http_evidence++;
+    if (field === "http_negative_tested") data.counts.routes_with_negative_http_evidence++;
+    assert.throws(() => validateCoverage(data), /HTTP coverage/);
+  });
+}
+
+test("changing a transitive CLI helper invalidates the coverage snapshot", () => {
+  for (const file of ["seed-account.mjs", "cli-process.mjs", "tls-proxy.mjs"]) {
+    const hashes = sourceHashes();
+    hashes[`tools/${file}`] = "0".repeat(64);
+    assert.throws(() => validateCoverage(snapshot, hashes), /sources changed/);
+  }
 });
 
 test("an implemented HTTP route still needs upstream comparison evidence", () => {
