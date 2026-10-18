@@ -57,13 +57,16 @@ that a real client can decrypt a blob or use stored passkey credentials.
 User-key-ID migration is a one-time identifier backfill, not a key-rotation
 implementation.
 
-Refreshing consumes the supplied refresh token and issues a new pair. Existing
-access tokens keep their original expiry, so an in-flight sync can finish after
-refresh. This matches the tested Vaultwarden 1.37.4 access-token behavior. This
+Direct HTTP tests verify that refreshing consumes the supplied refresh token and
+issues a new pair while existing access tokens keep their original expiry. The
+old-bearer result matches a disposable HTTP probe of Vaultwarden 1.37.4. The CLI
+suite verifies its ordinary encrypted lifecycle; it does not force an old-bearer
+request to overlap refresh, so that ordering has HTTP-only evidence. This
 adapter's single-use refresh policy is stricter: the upstream baseline accepted
 immediate refresh-token replay in the disposable HTTP probe, while this adapter
 returns `400 invalid_grant` for replay. Concurrent use of one refresh token
-allows exactly one successful rotation.
+allows exactly one successful rotation. Token issuance purges a stored session
+only after both its access and refresh authority have expired.
 
 This adapter is a conformance host. It has no deployment hardening, login abuse
 controls, two-factor authentication, administrative account recovery, or schema

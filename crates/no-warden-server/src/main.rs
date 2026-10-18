@@ -401,6 +401,10 @@ async fn dispatch(
 
 fn issue_tokens(app: &App, db: &rusqlite::Connection, account: &Value) -> Result<Value, Failure> {
     let timestamp = chrono::Utc::now().timestamp();
+    db.execute(
+        "DELETE FROM sessions WHERE access_expires<=?1 AND refresh_expires<=?1",
+        [timestamp],
+    )?;
     let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
     let claims = json!({"sub":account["id"],"email":account["email"],"email_verified":true,
         "name":account["name"],"premium":true,"iss":app.base,"iat":timestamp,"nbf":timestamp,"exp":timestamp+3600,
@@ -421,4 +425,50 @@ fn issue_tokens(app: &App, db: &rusqlite::Connection, account: &Value) -> Result
     response["expires_in"] = json!(3600);
     response["scope"] = json!("api offline_access");
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_issuance_purges_only_sessions_with_no_live_authority() {
+        let app = App {
+            store: Arc::new(Mutex::new(Store::open(":memory:").unwrap())),
+            base: "http://127.0.0.1".into(),
+            signing_key: [1; 32],
+        };
+        let store = app.store.lock().unwrap();
+        let account = json!({"id":"alice","email":"alice@example.test","name":"Alice"});
+        store.db.execute(
+            "INSERT INTO accounts(id,email,document,password,revision) VALUES('alice','alice@example.test',?1,'test',?2)",
+            params![account.to_string(), store::now()],
+        ).unwrap();
+        let now = chrono::Utc::now().timestamp();
+        for (access, refresh, access_expires, refresh_expires) in [
+            ("consumed-expired", "r1", now - 60, 0),
+            ("both-expired", "r2", now - 60, now - 60),
+            ("expiry-boundary", "r3", now, now),
+            ("live-access", "r4", now + 600, 0),
+            ("live-refresh", "r5", now - 60, now + 600),
+        ] {
+            store.db.execute(
+                "INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES(?1,?2,'alice',?3,?4)",
+                params![access,refresh,access_expires,refresh_expires],
+            ).unwrap();
+        }
+        assert!(issue_tokens(&app, &store.db, &account).is_ok());
+        let mut query = store
+            .db
+            .prepare("SELECT access FROM sessions ORDER BY access")
+            .unwrap();
+        let remaining = query
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(remaining.len(), 3); // Two live authorities and the new pair.
+        assert!(remaining.iter().any(|access| access == "live-access"));
+        assert!(remaining.iter().any(|access| access == "live-refresh"));
+    }
 }
