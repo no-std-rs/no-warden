@@ -304,9 +304,10 @@ boolean.
 
 The list projection adds three fields to the seven-field single-device
 projection: pending authentication metadata and two null encrypted-key fields.
-`PendingDeviceAuthRequest` models only its ID and creation date; it does not
-implement approval or authentication-request workflows. The standalone provider
-currently supplies no pending request, so all three extra fields are null.
+`PendingDeviceAuthRequest` models only its ID and creation date. The standalone
+provider projects the latest pending request for the exact owner and requesting
+device, or null when none exists. The two encrypted-key fields remain null.
+Approval and login workflows remain separate.
 
 The standalone adapter keeps the registry in its own SQLite table keyed by
 `(owner, identifier)`. Account-document extensions and registration extras do not
@@ -325,8 +326,8 @@ the new session to the same owner and identifier. Existing access tokens retain
 their original expiry. Older sessions without binding rows remain usable and
 refresh without inventing a device; no legacy registry backfill is implemented.
 Registry and binding records survive private-database reopen. Device approval,
-pending-authentication lifecycle, device removal and notification delivery remain
-separate tracked work.
+auth-request response/login and expiry cleanup, device removal and notification
+delivery remain separate tracked work.
 
 `DevicePushStorage` is a separate opt-in provider for push-token ordering.
 `DevicePushTokenRequest` borrows its opaque string, decodes/serializes without an
@@ -360,3 +361,39 @@ its other existing routes remain usable. Clear ignores bearer credentials and
 body data, validates the path, and returns an empty 200 with tokens unchanged.
 Local abuse limiting, real relay registration/unregistration and push delivery
 remain open adapter work.
+
+Auth-request creation and discovery use `AuthRequestStorage`, an opt-in extension
+of `DeviceStorage`. Its borrowed four-string request and stable indexed read view
+require no allocation in the core. Creation resolves the email through the
+provider, then validates the existing device's owner, exact opaque identifier
+and raw numeric type before inserting anything. The adapter lowercases email
+without trimming; it supplies ID generation, timestamps, peer address and origin.
+An absent or unparseable `device-type` header supplies 14; any parsed `i32` is
+compared exactly, even when its response label is `Unknown Browser`.
+
+Explicit serializers project eleven auth-request fields. Creation reports
+`requestApproved: false` while storing a pending `None`; GET and list report that
+state as null. Lists filter only `approved: None`, with no implicit age filter.
+Internal owner/device identifiers and access codes have no response field;
+request/context/record/response Debug output is redacted, and records have no
+general serialization implementation. The caller owns secret input buffers.
+
+The standalone adapter stores requests in a dedicated `auth_requests` table with
+nullable future response fields. Account-document and registration extensions do
+not seed requests. A savepoint commits only the request; failure preserves account
+revision, credentials, sessions, device activity, push tokens, vault data and
+foreign state. Tests cover late insert and deferred-commit failure, private
+reopen, approval-state filtering and latest-pending ownership. Device lists join
+the newest pending row by creation date for each exact owner/device and project
+only its ID and creation date; single-device responses keep seven fields.
+
+The Axum adapter records the direct socket peer through `ConnectInfo` and ignores
+forwarding headers. A bounded socket regression connects from `127.0.0.2` and
+supplies forwarding headers to verify this adapter policy; it is not an upstream
+IP-equivalence test. Vaultwarden can honor configured `X-Real-IP` from trusted
+proxies, including local peers under its defaults. That forwarded-IP policy is
+not implemented here. The canonical origin derived from the configured URL,
+without its path, does match upstream. Authenticated auth-request reads require
+a verified session-device binding before UUID path validation; existing unbound sessions keep their older
+API behavior. Notifications/events, approval/public response polling, auth-request
+login, expiry jobs, proxy policy and public abuse controls remain open.

@@ -11,6 +11,7 @@
 pub mod account_keys;
 pub mod account_profile;
 pub mod attachment;
+pub mod auth_requests;
 pub mod bounded;
 pub mod bulk;
 pub mod device_push;

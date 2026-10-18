@@ -246,8 +246,9 @@ and `object: "device"`; `isTrusted` is false. The list wrapper has `data`,
 `devicePendingAuthRequest`, `encryptedPublicKey`, and `encryptedUserKey`, giving
 ten fields. The encrypted-key fields are null. The pending model has only
 [`id` and `creationDate`](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/auth_request.rs#L76-L82),
-or null without a request. The standalone adapter currently always returns null
-for pending metadata; it does not implement the request lifecycle.
+or null without a request. The standalone adapter selects the latest pending
+request by creation date for the exact owner/requesting device. Approval and
+login remain separate from this discovery projection.
 
 Successful password and personal API-key logins register the authenticated
 owner's device. The three device form fields require presence; their identifier
@@ -262,9 +263,9 @@ regardless of device metadata supplied in the refresh form.
 The allocation-free core exposes `DeviceStorage`, borrowed header input, and
 explicit boolean/list/single response projections. The standalone adapter owns
 the persistent registry, session binding and `device` JWT claim. Legacy sessions
-without bindings remain valid and are not backfilled. Approval, authentication
-requests, device removal, notification behavior and broader device management
-remain unimplemented. The direct HTTP comparison establishes only
+without bindings remain valid and are not backfilled. Approval, auth-request
+response/login, device removal, notification behavior and broader device
+management remain unimplemented. The direct HTTP comparison establishes only
 this discovery/login-binding contract, with no CLI device-route trace claim.
 
 ## Device push tokens
@@ -318,6 +319,70 @@ and one refresh. It confirms target selection, retained activity on an identical
 token, disabled-clear retention and refresh binding. Literal zero SQL writes is
 a stronger property covered by host trigger tests. No CLI device-token route
 attribution or live enabled-relay behavior is claimed.
+
+## Auth-request creation and discovery
+
+The [pinned creation and lookup handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1650-L1743)
+and [pending-list aliases](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1863-L1900)
+provide this discovery slice:
+
+| Method and route | Contract |
+| --- | --- |
+| `POST /api/auth-requests` | Public creation for an existing account and matching registered device |
+| `GET /api/auth-requests/<id>` | Authenticated owner-only lookup, including stored approval states |
+| `GET /api/auth-requests` | Authenticated pending list alias |
+| `GET /api/auth-requests/pending` | Authenticated pending list; only records whose approval is null |
+
+Creation requires four string fields, in positional order `accessCode`,
+`deviceIdentifier`, `email`, `publicKey`. Escapes, blank/control/NUL/Unicode values
+and opaque non-UUID device identifiers are accepted as strings; account/device
+verification still applies. Unknown fields are ignored. Missing, null,
+wrong-typed or duplicate known fields return 422; malformed JSON and surplus
+positional elements return 400. A four-element positional array is accepted.
+Email lookup lowercases Unicode without trimming whitespace. The existing device
+must match the resolved owner, exact identifier and raw header type.
+
+[ClientHeaders](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth.rs#L610-L636)
+parses optional `device-type` as `i32` without trimming, using 14 for absence or
+parse failure. Unknown numeric types retain their value for equality checks;
+only response labels map them to `Unknown Browser`. Creation ignores bearer
+credentials. Lookup/list require the verified session device; authentication
+precedes the single-request UUID guard. Percent decoding occurs once and retains
+the accepted UUID spelling, including case, braces and URN forms. Malformed UUIDs
+return 422; valid missing or foreign requests return 400.
+
+Each auth-request response has exactly `id`, `publicKey`, `requestDeviceType`,
+`requestIpAddress`, `key`, `masterPasswordHash`, `creationDate`, `responseDate`,
+`requestApproved`, `origin`, and `object: "auth-request"`. Creation returns false
+for `requestApproved`, with null key/hash/response date; its stored approval is
+null, which GET and pending list return. The list wrapper has `data`,
+`continuationToken: null`, and `object: "list"`. Access codes, owner identifiers
+and requesting-device identifiers are never projected. Internal models and
+responses redact Debug output.
+
+The [pending-device model](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/auth_request.rs#L145-L163)
+selects the latest creation date for the owner/requesting device with null
+approval. Device lists project only that request's `id` and `creationDate`, or
+null; single-device responses remain seven fields. Creation does not update
+account revision, device activity, vault state or credentials. The standalone
+adapter records the direct socket peer and ignores forwarding headers. Upstream
+[ClientIp](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth.rs#L1092-L1162)
+can honor the configured IP header from trusted proxies; its
+[defaults](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/config.rs#L667-L680)
+use `X-Real-IP` and trust local peers. Forwarded-IP parity remains unimplemented.
+The adapter's peer-address unit test verifies its own policy, not equivalence to
+that upstream proxy behavior. Canonical origin from the configured URL, without
+its path, does match upstream.
+
+All eight focused Rust HTTP cases pass against the adapter and official
+Vaultwarden `1.37.4`: 273 requests and five successful logins per server, with 33
+decoded creation attempts below the unchanged upstream public burst of 50. The
+suite includes a NUL/Unicode/non-UUID device identifier. Host tests separately
+verify hidden activity/state preservation, rollback, durable private storage and
+peer metadata; response projections alone do not establish those properties.
+Approval, public response polling, auth-request login, notifications/events,
+expiry cleanup, trusted proxy policy and local rate controls remain open. No
+CLI auth-request route claim or complete authentication parity is established.
 
 ## Profile, account keys, and synchronization
 

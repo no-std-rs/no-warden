@@ -5,6 +5,7 @@
 
 use core::{hint::black_box, panic::PanicInfo};
 use no_warden::{
+    auth_requests::{AuthRequestContext, AuthRequestRecord},
     devices::{DeviceRecord, PendingDeviceAuthRequest},
     domains::{DomainProjection, DomainSettingsView, GlobalDomain},
     identity::Secret,
@@ -12,7 +13,8 @@ use no_warden::{
     service::ImportData,
     wire::{
         AccountKeys, AccountKeysResponse, ApiKeyResponse, AttachmentRequest, AttachmentResponse,
-        AttachmentUploadResponse, AvatarUpdateRequest, CipherIdsRequest, CipherRequest,
+        AttachmentUploadResponse, AuthRequestCreateRequest, AuthRequestListResponse,
+        AuthRequestResponse, AvatarUpdateRequest, CipherIdsRequest, CipherRequest,
         ClientCredentialsRequest, DeviceListResponse, DevicePushTokenRequest, DeviceResponse,
         DomainSettingsRequest, DomainSettingsResponse, DomainSettingsUpdateResponse, ImportRequest,
         InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
@@ -187,6 +189,57 @@ pub extern "C" fn _start() -> ! {
         &mut output,
     ));
     black_box(output);
+    let auth = serde_json_core::from_slice::<AuthRequestCreateRequest<'_>>(black_box(
+        br#"{"accessCode":"caller-supplied-test-code","deviceIdentifier":"embedded-device","email":"bare-metal@example.com","publicKey":"caller-supplied-public-key"}"#,
+    ));
+    let mut auth_output = [0_u8; 2048];
+    if let Ok((auth, _)) = auth {
+        let _ = black_box(serde_json_core::to_slice(&auth, &mut auth_output));
+    }
+    let auth_context = AuthRequestContext {
+        device_type: 25,
+        request_ip: "127.0.0.1",
+        origin: "https://example.test",
+    };
+    black_box(auth_context);
+    let auth_record = AuthRequestRecord {
+        id: "authentication-request",
+        owner_id: "private-owner",
+        request_device_identifier: "embedded-device",
+        device_type: 25,
+        request_ip: "127.0.0.1",
+        access_code: "caller-supplied-test-code",
+        public_key: "caller-supplied-public-key",
+        key: None,
+        master_password_hash: None,
+        approved: None,
+        creation_date: "2026-01-01T00:00:00Z",
+        response_date: None,
+    };
+    let _ = black_box(serde_json_core::to_slice(
+        &AuthRequestResponse::created(black_box(auth_record), auth_context.origin),
+        &mut auth_output,
+    ));
+    let _ = black_box(serde_json_core::to_slice(
+        &AuthRequestResponse::stored(black_box(auth_record), auth_context.origin),
+        &mut auth_output,
+    ));
+    let auth_records = [
+        auth_record,
+        AuthRequestRecord {
+            approved: Some(true),
+            ..auth_record
+        },
+    ];
+    let _ = black_box(serde_json_core::to_slice(
+        &AuthRequestListResponse::new(black_box(&auth_records[..]), auth_context.origin),
+        &mut auth_output,
+    ));
+    black_box(auth_output);
+    black_box(classify(
+        Method::Get,
+        black_box("/api/auth-requests/pending"),
+    ));
     let push = serde_json_core::from_slice::<DevicePushTokenRequest<'_>>(black_box(
         br#"{"pushToken":"caller-supplied-test-value"}"#,
     ));

@@ -5,6 +5,170 @@
 use crate::{bounded::BoundedList, identity::Secret};
 use serde::{Deserialize, Serialize};
 
+/// Opaque public authentication-request input, in pinned positional field order.
+/// Required strings can be empty. Borrow escaped strings from decoded caller-owned scratch.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthRequestCreateRequest<'a> {
+    pub access_code: &'a str,
+    pub device_identifier: &'a str,
+    pub email: &'a str,
+    pub public_key: &'a str,
+}
+impl core::fmt::Debug for AuthRequestCreateRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AuthRequestCreateRequest")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Explicit eleven-field projection. Internal access code, owner and device ID never appear.
+pub struct AuthRequestResponse<'a> {
+    record: crate::auth_requests::AuthRequestRecord<'a>,
+    origin: &'a str,
+    created: bool,
+}
+impl<'a> AuthRequestResponse<'a> {
+    /// Creation forces requestApproved=false and null key/hash/responseDate, independently
+    /// of the stored optional approval state. Supply an already-authorized provider record.
+    pub const fn created(
+        record: crate::auth_requests::AuthRequestRecord<'a>,
+        origin: &'a str,
+    ) -> Self {
+        Self {
+            record,
+            origin,
+            created: true,
+        }
+    }
+    /// Authenticated retrieval preserves all stored optional response fields exactly.
+    pub const fn stored(
+        record: crate::auth_requests::AuthRequestRecord<'a>,
+        origin: &'a str,
+    ) -> Self {
+        Self {
+            record,
+            origin,
+            created: false,
+        }
+    }
+}
+impl core::fmt::Debug for AuthRequestResponse<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AuthRequestResponse")
+            .finish_non_exhaustive()
+    }
+}
+impl Serialize for AuthRequestResponse<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut value = serializer.serialize_struct("AuthRequestResponse", 11)?;
+        value.serialize_field("id", self.record.id)?;
+        value.serialize_field("publicKey", self.record.public_key)?;
+        value.serialize_field(
+            "requestDeviceType",
+            crate::auth_requests::device_type_name(self.record.device_type),
+        )?;
+        value.serialize_field("requestIpAddress", self.record.request_ip)?;
+        value.serialize_field("key", &if self.created { None } else { self.record.key })?;
+        value.serialize_field(
+            "masterPasswordHash",
+            &if self.created {
+                None
+            } else {
+                self.record.master_password_hash
+            },
+        )?;
+        value.serialize_field("creationDate", self.record.creation_date)?;
+        value.serialize_field(
+            "responseDate",
+            &if self.created {
+                None
+            } else {
+                self.record.response_date
+            },
+        )?;
+        value.serialize_field(
+            "requestApproved",
+            &if self.created {
+                Some(false)
+            } else {
+                self.record.approved
+            },
+        )?;
+        value.serialize_field("origin", self.origin)?;
+        value.serialize_field("object", "auth-request")?;
+        value.end()
+    }
+}
+
+/// Streaming pending-only list. None is pending; both Some(false) and Some(true) are omitted.
+pub struct AuthRequestListResponse<'a, D: crate::auth_requests::AuthRequestListData> {
+    records: D,
+    origin: &'a str,
+}
+impl<'a, D: crate::auth_requests::AuthRequestListData> AuthRequestListResponse<'a, D> {
+    /// Supply a stable owner-authorized view; VaultService validates it before projection.
+    pub const fn new(records: D, origin: &'a str) -> Self {
+        Self { records, origin }
+    }
+}
+impl<D: crate::auth_requests::AuthRequestListData> core::fmt::Debug
+    for AuthRequestListResponse<'_, D>
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AuthRequestListResponse")
+            .field("record_count", &self.records.len())
+            .finish_non_exhaustive()
+    }
+}
+impl<D: crate::auth_requests::AuthRequestListData> Serialize for AuthRequestListResponse<'_, D> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{Error, SerializeSeq, SerializeStruct};
+        struct Entries<'a, D> {
+            records: &'a D,
+            origin: &'a str,
+        }
+        impl<D: crate::auth_requests::AuthRequestListData> Serialize for Entries<'_, D> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                let mut count = 0;
+                for index in 0..self.records.len() {
+                    let record = self
+                        .records
+                        .get(index)
+                        .ok_or_else(|| S::Error::custom("The auth request view is incomplete."))?;
+                    if record.approved.is_none() {
+                        count += 1;
+                    }
+                }
+                let mut entries = serializer.serialize_seq(Some(count))?;
+                for index in 0..self.records.len() {
+                    let record = self
+                        .records
+                        .get(index)
+                        .ok_or_else(|| S::Error::custom("The auth request view is incomplete."))?;
+                    if record.approved.is_none() {
+                        entries
+                            .serialize_element(&AuthRequestResponse::stored(record, self.origin))?;
+                    }
+                }
+                entries.end()
+            }
+        }
+        let mut value = serializer.serialize_struct("AuthRequestListResponse", 3)?;
+        value.serialize_field(
+            "data",
+            &Entries {
+                records: &self.records,
+                origin: self.origin,
+            },
+        )?;
+        value.serialize_field("object", "list")?;
+        value.serialize_field("continuationToken", &None::<&str>)?;
+        value.end()
+    }
+}
+
 /// Required opaque push token. Empty strings are values, not absence or a clear operation.
 /// Borrow escaped JSON strings from caller-owned decoded scratch storage when needed.
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -996,6 +1160,110 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auth_request_create_wire_keeps_four_required_opaque_strings_and_positional_order() {
+        let input = r#"["code","device","email","key"]"#;
+        let request: AuthRequestCreateRequest<'_> = serde_json::from_str(input).unwrap();
+        assert_eq!(
+            (
+                request.access_code,
+                request.device_identifier,
+                request.email,
+                request.public_key
+            ),
+            ("code", "device", "email", "key")
+        );
+        let empty: AuthRequestCreateRequest<'_> = serde_json::from_str(
+            r#"{"accessCode":"","deviceIdentifier":"","email":"","publicKey":"","ignored":true}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(empty).unwrap(),
+            serde_json::json!({"accessCode":"","deviceIdentifier":"","email":"","publicKey":""})
+        );
+        for input in [
+            "{}",
+            "[]",
+            r#"["a","b","c"]"#,
+            r#"["a","b","c","d",null]"#,
+            r#"{"accessCode":null,"deviceIdentifier":"d","email":"e","publicKey":"p"}"#,
+            r#"{"accessCode":"a","deviceIdentifier":7,"email":"e","publicKey":"p"}"#,
+            r#"{"accessCode":"a","deviceIdentifier":"d","email":false,"publicKey":"p"}"#,
+            r#"{"accessCode":"a","deviceIdentifier":"d","email":"e","publicKey":[]}"#,
+            r#"{"accessCode":"a","accessCode":"b","deviceIdentifier":"d","email":"e","publicKey":"p"}"#,
+        ] {
+            assert!(serde_json::from_str::<AuthRequestCreateRequest<'_>>(input).is_err());
+        }
+        let opaque = AuthRequestCreateRequest {
+            access_code: "hidden-code\0雪",
+            public_key: "future:\"hidden-key\n",
+            ..request
+        };
+        let encoded = serde_json::to_value(opaque).unwrap();
+        assert_eq!(encoded["accessCode"], opaque.access_code);
+        assert_eq!(encoded["publicKey"], opaque.public_key);
+        assert!(!std::format!("{opaque:?}").contains("hidden"));
+    }
+
+    #[test]
+    fn auth_request_response_projections_distinguish_creation_false_from_stored_null_and_hide_internal_fields()
+     {
+        use crate::auth_requests::{AuthRequestContext, AuthRequestRecord};
+        let record = AuthRequestRecord {
+            id: "visible-id",
+            owner_id: "hidden-owner",
+            request_device_identifier: "hidden-device",
+            device_type: 25,
+            request_ip: "192.0.2.1",
+            access_code: "hidden-code",
+            public_key: "visible-public-key",
+            key: Some("explicit-key"),
+            master_password_hash: Some("explicit-hash"),
+            approved: None,
+            creation_date: "created",
+            response_date: Some("responded"),
+        };
+        let created = AuthRequestResponse::created(record, "configured-origin");
+        let value = serde_json::to_value(&created).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"id":"visible-id","publicKey":"visible-public-key","requestDeviceType":"Linux CLI","requestIpAddress":"192.0.2.1","key":null,"masterPasswordHash":null,"creationDate":"created","responseDate":null,"requestApproved":false,"origin":"configured-origin","object":"auth-request"})
+        );
+        let stored =
+            serde_json::to_value(AuthRequestResponse::stored(record, "configured-origin")).unwrap();
+        assert_eq!(stored.as_object().unwrap().len(), 11);
+        assert!(stored["requestApproved"].is_null());
+        assert_eq!(stored["key"], "explicit-key");
+        assert_eq!(stored["masterPasswordHash"], "explicit-hash");
+        assert_eq!(stored["responseDate"], "responded");
+        let records = [
+            record,
+            AuthRequestRecord {
+                approved: Some(false),
+                ..record
+            },
+            AuthRequestRecord {
+                approved: Some(true),
+                ..record
+            },
+        ];
+        let list = AuthRequestListResponse::new(records.as_slice(), "configured-origin");
+        let projected = serde_json::to_value(&list).unwrap();
+        assert_eq!(projected.as_object().unwrap().len(), 3);
+        assert_eq!(projected["data"], serde_json::json!([stored]));
+        assert!(projected["continuationToken"].is_null());
+        assert_eq!(projected["object"], "list");
+        assert!(!serde_json::to_string(&created).unwrap().contains("hidden"));
+        let context = AuthRequestContext {
+            device_type: 25,
+            request_ip: "hidden-ip",
+            origin: "hidden-origin",
+        };
+        let debug = std::format!("{record:?} {context:?} {created:?} {list:?}");
+        assert!(!debug.contains("hidden"));
+        assert!(!debug.contains("explicit"));
+    }
 
     #[test]
     fn push_token_requests_require_one_opaque_string_and_redact_debug() {

@@ -120,6 +120,8 @@ pub struct Record {
     pub name: String,
     pub device_type: i32,
     pub created: String,
+    pending_id: Option<String>,
+    pending_created: Option<String>,
 }
 impl Record {
     pub fn view(&self) -> DeviceRecord<'_> {
@@ -129,7 +131,16 @@ impl Record {
             name: &self.name,
             device_type: self.device_type,
             creation_date: &self.created,
-            pending_auth_request: None,
+            pending_auth_request: self
+                .pending_id
+                .as_deref()
+                .zip(self.pending_created.as_deref())
+                .map(
+                    |(id, creation_date)| no_warden::devices::PendingDeviceAuthRequest {
+                        id,
+                        creation_date,
+                    },
+                ),
         }
     }
 }
@@ -150,10 +161,12 @@ fn record(row: &rusqlite::Row<'_>) -> rusqlite::Result<Record> {
         name: row.get(2)?,
         device_type: row.get(3)?,
         created: row.get(4)?,
+        pending_id: row.get(5)?,
+        pending_created: row.get(6)?,
     })
 }
 pub fn list(db: &Connection, owner: &str) -> rusqlite::Result<Registry> {
-    let mut statement = db.prepare("SELECT owner,identifier,name,device_type,created FROM device_registry WHERE owner=?1 ORDER BY rowid")?;
+    let mut statement = db.prepare("SELECT d.owner,d.identifier,d.name,d.device_type,d.created,p.id,p.creation_date FROM device_registry d LEFT JOIN auth_requests p ON p.id=(SELECT r.id FROM auth_requests r WHERE r.owner=d.owner AND r.request_device_identifier=d.identifier AND r.approved IS NULL ORDER BY r.creation_date DESC LIMIT 1) WHERE d.owner=?1 ORDER BY d.rowid")?;
     Ok(Registry(
         statement
             .query_map([owner], record)?
@@ -161,7 +174,7 @@ pub fn list(db: &Connection, owner: &str) -> rusqlite::Result<Registry> {
     ))
 }
 pub fn load(db: &Connection, owner: &str, identifier: &str) -> rusqlite::Result<Option<Record>> {
-    db.query_row("SELECT owner,identifier,name,device_type,created FROM device_registry WHERE owner=?1 AND identifier=?2", params![owner,identifier], record).optional()
+    db.query_row("SELECT owner,identifier,name,device_type,created,NULL,NULL FROM device_registry WHERE owner=?1 AND identifier=?2", params![owner,identifier], record).optional()
 }
 fn activity_now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true)

@@ -3,6 +3,7 @@ use no_warden::{
     Storage,
     account_keys::{AccountKeyState, AccountKeyStorage},
     account_profile::AccountProfileStorage,
+    auth_requests::{AuthRequestContext, AuthRequestRecord, AuthRequestStorage},
     bulk::{CipherBulkOperation, CipherBulkStorage, ValidatedCipherBulk},
     device_push::{ClearedDevicePush, DevicePushState, DevicePushStorage},
     devices::{DeviceRecord, DeviceRegistration, DeviceStorage},
@@ -11,8 +12,8 @@ use no_warden::{
     import::{ImportData, ImportStorage, ValidatedImport},
     service::ItemMetadata,
     wire::{
-        AccountKeys, ApiKeyResponse, AvatarUpdateRequest, CipherRequest, DevicePushTokenRequest,
-        FolderRequest, ProfileUpdateRequest, RegisterRequest,
+        AccountKeys, ApiKeyResponse, AuthRequestCreateRequest, AvatarUpdateRequest, CipherRequest,
+        DevicePushTokenRequest, FolderRequest, ProfileUpdateRequest, RegisterRequest,
     },
 };
 use rand::{
@@ -38,6 +39,8 @@ pub struct Store {
     device_list_cache: crate::devices::Registry,
     device_cache: Option<crate::devices::Record>,
     device_push_token_cache: Option<String>,
+    auth_request_cache: Option<crate::auth_requests::Record>,
+    auth_requests_cache: crate::auth_requests::Requests,
 }
 
 // Owned query results keep the optional core response borrows tied to this
@@ -186,6 +189,8 @@ impl Store {
             CREATE TABLE IF NOT EXISTS sessions(access TEXT PRIMARY KEY, refresh TEXT UNIQUE NOT NULL, owner TEXT NOT NULL REFERENCES accounts(id), access_expires INTEGER NOT NULL, refresh_expires INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS device_registry(owner TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, identifier TEXT NOT NULL, name TEXT NOT NULL, device_type INTEGER NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, PRIMARY KEY(owner,identifier));
             CREATE TABLE IF NOT EXISTS device_push_tokens(owner TEXT NOT NULL, identifier TEXT NOT NULL, token TEXT NOT NULL, PRIMARY KEY(owner,identifier), FOREIGN KEY(owner,identifier) REFERENCES device_registry(owner,identifier) ON DELETE CASCADE);
+            CREATE TABLE IF NOT EXISTS auth_requests(id TEXT PRIMARY KEY, owner TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, request_device_identifier TEXT NOT NULL, device_type INTEGER NOT NULL, request_ip TEXT NOT NULL, access_code TEXT NOT NULL, public_key TEXT NOT NULL, encrypted_key TEXT, master_password_hash TEXT, approved INTEGER, creation_date TEXT NOT NULL, response_date TEXT, response_device_id TEXT, authentication_date TEXT);
+            CREATE INDEX IF NOT EXISTS auth_requests_owner_device ON auth_requests(owner,request_device_identifier,creation_date DESC);
             CREATE TABLE IF NOT EXISTS session_devices(access TEXT PRIMARY KEY REFERENCES sessions(access) ON DELETE CASCADE, owner TEXT NOT NULL, identifier TEXT NOT NULL, FOREIGN KEY(owner,identifier) REFERENCES device_registry(owner,identifier) ON DELETE CASCADE);")?;
         // SQLite inherits the private database mode for new sidecars. Also
         // narrow sidecars left behind by an earlier permissive installation.
@@ -207,6 +212,8 @@ impl Store {
             device_list_cache: crate::devices::Registry::default(),
             device_cache: None,
             device_push_token_cache: None,
+            auth_request_cache: None,
+            auth_requests_cache: crate::auth_requests::Requests::default(),
         })
     }
 
@@ -613,6 +620,49 @@ impl CipherBulkStorage for Store {
     }
 }
 
+impl AuthRequestStorage for Store {
+    type OwnerId = String;
+    type Requests<'a> = &'a crate::auth_requests::Requests;
+    fn auth_request_owner(&mut self, email: &str) -> rusqlite::Result<Option<String>> {
+        self.db
+            .query_row(
+                "SELECT id FROM accounts WHERE email=?1",
+                [email.to_lowercase()],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+    fn create_auth_request(
+        &mut self,
+        owner: &str,
+        request: &AuthRequestCreateRequest<'_>,
+        context: &AuthRequestContext<'_>,
+    ) -> rusqlite::Result<AuthRequestRecord<'_>> {
+        let record = crate::auth_requests::create(&mut self.db, owner, request, context)?;
+        self.auth_request_cache = Some(record);
+        Ok(self
+            .auth_request_cache
+            .as_ref()
+            .expect("Committed auth-request cache.")
+            .view())
+    }
+    fn auth_request(
+        &mut self,
+        owner: &str,
+        id: &str,
+    ) -> rusqlite::Result<Option<AuthRequestRecord<'_>>> {
+        self.auth_request_cache = crate::auth_requests::load(&self.db, owner, id)?;
+        Ok(self
+            .auth_request_cache
+            .as_ref()
+            .map(crate::auth_requests::Record::view))
+    }
+    fn auth_requests(&mut self, owner: &str) -> rusqlite::Result<Self::Requests<'_>> {
+        self.auth_requests_cache = crate::auth_requests::list(&self.db, owner)?;
+        Ok(&self.auth_requests_cache)
+    }
+}
+
 impl DevicePushStorage for Store {
     type PushId = String;
 
@@ -970,6 +1020,360 @@ mod tests {
     use serde::Deserialize;
 
     const CIPHERTEXT: &str = "2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+    fn auth_request_fixture() -> Store {
+        let mut store = profile_fixture();
+        for (owner, identifier, device_type) in [
+            ("alice", "Request-Device", 8),
+            ("bob", "Request-Device", 8),
+            ("alice", "Other-Device", 14),
+            ("alice", "Unknown-Device", -7),
+            ("alice", "", 14),
+        ] {
+            VaultService::new(&mut store)
+                .register_device(
+                    owner,
+                    &DeviceRegistration {
+                        identifier,
+                        name: "Original",
+                        device_type,
+                    },
+                )
+                .unwrap();
+        }
+        store
+    }
+    fn auth_request_rows(store: &Store) -> Vec<String> {
+        store.db.prepare("SELECT id||':'||owner||':'||request_device_identifier||':'||device_type||':'||request_ip||':'||access_code||':'||public_key||':'||COALESCE(encrypted_key,'null')||':'||COALESCE(master_password_hash,'null')||':'||COALESCE(approved,'null')||':'||creation_date||':'||COALESCE(response_date,'null')||':'||COALESCE(response_device_id,'null')||':'||COALESCE(authentication_date,'null') FROM auth_requests ORDER BY id").unwrap().query_map([],|row|row.get(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
+    }
+    fn create_fixture_auth_request(
+        store: &mut Store,
+        email: &str,
+        identifier: &str,
+        device_type: i32,
+    ) -> Result<Value, no_warden::ApiError> {
+        let context = AuthRequestContext {
+            device_type,
+            request_ip: "203.0.113.27",
+            origin: "https://origin.example.test",
+        };
+        let request = AuthRequestCreateRequest {
+            access_code: "NUL\0private-access-sentinel",
+            device_identifier: identifier,
+            email,
+            public_key: "opaque-public\0café 雪",
+        };
+        serde_json::to_value(VaultService::new(store).create_auth_request(&request, &context)?)
+            .map_err(|_| {
+                no_warden::ApiError::invalid("fixture", "Auth-request serialization failed")
+            })
+    }
+    #[test]
+    fn auth_request_creation_preserves_account_authority_devices_and_private_code_projection() {
+        let mut store = auth_request_fixture();
+        let before = snapshot(&store);
+        let authority = account_authority_snapshot(&store);
+        let devices = device_rows(&store);
+        let pushes = device_push_rows(&store);
+        let created =
+            create_fixture_auth_request(&mut store, "ALICE@EXAMPLE.TEST", "Request-Device", 8)
+                .unwrap();
+        assert_eq!(created.as_object().unwrap().len(), 11);
+        assert!(
+            created["requestApproved"] == false
+                && created["requestDeviceType"] == "Linux"
+                && created["requestIpAddress"] == "203.0.113.27"
+                && created["origin"] == "https://origin.example.test"
+        );
+        assert!(
+            created["publicKey"] == "opaque-public\0café 雪"
+                && created["key"].is_null()
+                && created["masterPasswordHash"].is_null()
+                && created["responseDate"].is_null()
+        );
+        assert!(uuid::Uuid::parse_str(created["id"].as_str().unwrap()).is_ok());
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(created["creationDate"].as_str().unwrap()).is_ok()
+        );
+        assert!(!created.to_string().contains("private-access-sentinel"));
+        let id = created["id"].as_str().unwrap();
+        let read = serde_json::to_value(
+            VaultService::new(&mut store)
+                .get_auth_request("alice", id, "https://origin.example.test")
+                .unwrap(),
+        )
+        .unwrap();
+        let mut expected = created.clone();
+        expected["requestApproved"] = Value::Null;
+        assert!(read == expected && !read.to_string().contains("private-access-sentinel"));
+        assert!(
+            VaultService::new(&mut store)
+                .get_auth_request("bob", id, "https://origin.example.test")
+                .is_err()
+        );
+        let state = AuthRequestStorage::auth_request(&mut store, "alice", id)
+            .unwrap()
+            .unwrap();
+        assert!(
+            state.access_code == "NUL\0private-access-sentinel"
+                && state.approved.is_none()
+                && state.request_device_identifier == "Request-Device"
+        );
+        assert!(
+            snapshot(&store) == before
+                && account_authority_snapshot(&store) == authority
+                && device_rows(&store) == devices
+                && device_push_rows(&store) == pushes,
+            "Auth-request creation changed unrelated stored state."
+        );
+        assert_eq!(auth_request_rows(&store).len(), 1);
+        let unknown =
+            create_fixture_auth_request(&mut store, "alice@example.test", "Unknown-Device", -7)
+                .unwrap();
+        assert!(unknown["requestDeviceType"] == "Unknown Browser");
+        let empty = create_fixture_auth_request(&mut store, "alice@example.test", "", 14).unwrap();
+        assert!(empty["requestDeviceType"] == "Unknown Browser");
+    }
+    #[test]
+    fn auth_request_verification_rejections_and_failed_insert_or_commit_preserve_state() {
+        let mut store = auth_request_fixture();
+        let before = snapshot(&store);
+        let devices = device_rows(&store);
+        for (email, id, kind) in [
+            (" alice@example.test", "Request-Device", 8),
+            ("alice@example.test ", "Request-Device", 8),
+            ("missing@example.test", "Request-Device", 8),
+            ("alice@example.test", "request-device", 8),
+            ("alice@example.test", "Request-Device", 14),
+            ("bob@example.test", "Other-Device", 14),
+        ] {
+            assert!(create_fixture_auth_request(&mut store, email, id, kind).is_err());
+            assert!(
+                auth_request_rows(&store).is_empty()
+                    && snapshot(&store) == before
+                    && device_rows(&store) == devices
+            );
+        }
+        store
+            .db
+            .execute(
+                "UPDATE accounts SET email='śnieg@example.test' WHERE id='alice'",
+                [],
+            )
+            .unwrap();
+        assert!(
+            create_fixture_auth_request(&mut store, "ŚNIEG@EXAMPLE.TEST", "Request-Device", 8)
+                .is_ok()
+        );
+        for trigger in [
+            "CREATE TRIGGER reject_auth_request AFTER INSERT ON auth_requests BEGIN UPDATE accounts SET revision='corrupt' WHERE id=NEW.owner; SELECT RAISE(FAIL,'injected auth-request insert failure'); END;",
+            "CREATE TABLE failed_auth_commit(owner TEXT REFERENCES accounts(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER reject_auth_request_commit AFTER INSERT ON auth_requests BEGIN INSERT INTO failed_auth_commit(owner) VALUES('missing'); END;",
+        ] {
+            let mut store = auth_request_fixture();
+            let before = snapshot(&store);
+            let authority = account_authority_snapshot(&store);
+            let devices = device_rows(&store);
+            store.db.execute_batch(trigger).unwrap();
+            assert!(
+                create_fixture_auth_request(&mut store, "alice@example.test", "Request-Device", 8)
+                    .is_err()
+            );
+            assert!(
+                auth_request_rows(&store).is_empty()
+                    && snapshot(&store) == before
+                    && account_authority_snapshot(&store) == authority
+                    && device_rows(&store) == devices,
+                "Failed auth-request create changed persisted state."
+            );
+            assert!(store.db.is_autocommit());
+        }
+    }
+    #[test]
+    fn auth_request_pending_list_filters_approval_and_devices_show_latest_owned_request_only() {
+        let mut store = auth_request_fixture();
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            ids.push(
+                create_fixture_auth_request(&mut store, "alice@example.test", "Request-Device", 8)
+                    .unwrap()["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            );
+        }
+        let foreign =
+            create_fixture_auth_request(&mut store, "bob@example.test", "Request-Device", 8)
+                .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+        for (index, id) in ids.iter().enumerate() {
+            store
+                .db
+                .execute(
+                    "UPDATE auth_requests SET creation_date=?1 WHERE id=?2",
+                    params![format!("2026-10-18T00:00:0{index}.000000Z"), id],
+                )
+                .unwrap();
+        }
+        store
+            .db
+            .execute(
+                "UPDATE auth_requests SET creation_date='2026-10-18T00:00:09.000000Z' WHERE id=?1",
+                [&foreign],
+            )
+            .unwrap();
+        let list = serde_json::to_value(
+            VaultService::new(&mut store)
+                .list_auth_requests("alice", "https://origin.example.test")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(list["data"].as_array().unwrap().len(), 3);
+        assert!(
+            list["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|item| item["requestApproved"].is_null() && item["id"] != foreign)
+        );
+        let projected =
+            serde_json::to_value(VaultService::new(&mut store).list_devices("alice").unwrap())
+                .unwrap();
+        let device = projected["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == "Request-Device")
+            .unwrap();
+        assert!(
+            device["devicePendingAuthRequest"]
+                == json!({"id":ids[2],"creationDate":"2026-10-18T00:00:02.000000Z"})
+        );
+        assert_eq!(device.as_object().unwrap().len(), 10);
+        assert_eq!(
+            device["devicePendingAuthRequest"]
+                .as_object()
+                .unwrap()
+                .len(),
+            2
+        );
+        store.db.execute("UPDATE auth_requests SET approved=0,encrypted_key='opaque-key',master_password_hash='opaque-hash',response_date='2026-10-18T00:00:10.000000Z' WHERE id=?1",[&ids[2]]).unwrap();
+        store
+            .db
+            .execute("UPDATE auth_requests SET approved=1 WHERE id=?1", [&ids[1]])
+            .unwrap();
+        let list = serde_json::to_value(
+            VaultService::new(&mut store)
+                .list_auth_requests("alice", "https://origin.example.test")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(list["data"].as_array().unwrap().len() == 1 && list["data"][0]["id"] == ids[0]);
+        let read = serde_json::to_value(
+            VaultService::new(&mut store)
+                .get_auth_request("alice", &ids[2], "https://origin.example.test")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            read["requestApproved"] == false
+                && read["key"] == "opaque-key"
+                && read["masterPasswordHash"] == "opaque-hash"
+                && read["responseDate"] == "2026-10-18T00:00:10.000000Z"
+        );
+        let projected =
+            serde_json::to_value(VaultService::new(&mut store).list_devices("alice").unwrap())
+                .unwrap();
+        let device = projected["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == "Request-Device")
+            .unwrap();
+        assert!(device["devicePendingAuthRequest"]["id"] == ids[0]);
+        let single = serde_json::to_value(
+            VaultService::new(&mut store)
+                .get_device("alice", "Request-Device")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(single.as_object().unwrap().len(), 7);
+        assert!(single.get("devicePendingAuthRequest").is_none());
+    }
+    #[test]
+    fn auth_request_private_state_survives_reopen_and_document_extras_have_no_authority() {
+        let directory =
+            std::env::temp_dir().join(format!("no-warden-auth-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("vault.db");
+        let mut store = Store::open(path.to_str().unwrap()).unwrap();
+        store.db.execute("INSERT INTO accounts(id,email,document,password,revision) VALUES('alice','alice@example.test','{\"authRequests\":[{\"id\":\"forged\"}]}','preserved',?1)",[now()]).unwrap();
+        let before = serde_json::to_value(
+            VaultService::new(&mut store)
+                .list_auth_requests("alice", "https://origin.example.test")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(before["data"].as_array().unwrap().is_empty());
+        let registration = json!({"email":"new-auth@example.test","name":"fixture","key":CIPHERTEXT,"masterPasswordHash":"fixture-hash","_password":"prepared-fixture-verifier","authRequests":[{"id":"forged-registration-request"}],"devices":[{"identifier":"forged-registration-device"}]});
+        let request = RegisterRequest::deserialize(&registration).unwrap();
+        store.pending = registration.clone();
+        Storage::insert_account(&mut store, "new-auth-account", &request).unwrap();
+        let registered = serde_json::to_value(
+            VaultService::new(&mut store)
+                .list_auth_requests("new-auth-account", "https://origin.example.test")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(registered["data"].as_array().unwrap().is_empty());
+        assert!(
+            !DeviceStorage::known_device(
+                &mut store,
+                "new-auth@example.test",
+                "forged-registration-device"
+            )
+            .unwrap()
+        );
+        VaultService::new(&mut store)
+            .register_device(
+                "alice",
+                &DeviceRegistration {
+                    identifier: "Request-Device",
+                    name: "Original",
+                    device_type: 8,
+                },
+            )
+            .unwrap();
+        let created =
+            create_fixture_auth_request(&mut store, "alice@example.test", "Request-Device", 8)
+                .unwrap();
+        let records = auth_request_rows(&store);
+        let authority = snapshot(&store);
+        drop(store);
+        let mut reopened = Store::open(path.to_str().unwrap()).unwrap();
+        assert!(auth_request_rows(&reopened) == records && snapshot(&reopened) == authority);
+        let read = serde_json::to_value(
+            VaultService::new(&mut reopened)
+                .get_auth_request(
+                    "alice",
+                    created["id"].as_str().unwrap(),
+                    "https://origin.example.test",
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(read["publicKey"] == created["publicKey"] && read["requestApproved"].is_null());
+        let devices = serde_json::to_value(
+            VaultService::new(&mut reopened)
+                .list_devices("alice")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(devices["data"][0]["devicePendingAuthRequest"]["id"] == created["id"]);
+        drop(reopened);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     fn device_push_rows(store: &Store) -> Vec<String> {
         store.db.prepare("SELECT owner||':'||identifier||':'||token FROM device_push_tokens ORDER BY owner,identifier").unwrap().query_map([],|row|row.get(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
