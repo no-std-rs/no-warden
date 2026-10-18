@@ -33,8 +33,11 @@ valid Bitwarden PBKDF2, AES-CBC/HMAC, and RSA keys. The CLI uses a temporary
 does not access an existing user's CLI account or vault. Account passwords,
 session tokens, and vault contents are never printed.
 
-CLI subprocess stdout goes through a temporary 0600 regular file inside a 0700
-directory, which is deleted in `finally`. This avoids the documented Node.js
+CLI subprocess stdout goes through a regular file descriptor explicitly set to
+0600 inside a 0700 directory. Its pathname is unlinked before the child starts,
+so terminating the parent during a synchronous CLI call leaves no named stdout
+file behind. The helper reads the descriptor at explicit offsets, then closes it
+and removes the empty directory in `finally`. This avoids the documented Node.js
 pipe-write hazard when the unmodified CLI exits immediately after printing.
 The helper retains a 90-second timeout, the 4 MiB stderr buffer limit, and a 4 MiB
 stdout size check before reading the captured file. An empty login result still

@@ -1,4 +1,4 @@
-/** Capture unmodified CLI stdout through a private regular file.
+/** Capture unmodified CLI stdout through an unlinked private regular file.
  *
  * The official CLI can call process.exit() immediately after stdout.write().
  * Node writes to regular files synchronously; POSIX pipe writes can be async:
@@ -6,7 +6,8 @@
  */
 import { spawnSync } from "node:child_process";
 import {
-  chmodSync, closeSync, fstatSync, mkdtempSync, openSync, readFileSync, rmSync,
+  chmodSync, closeSync, fchmodSync, fstatSync, mkdtempSync, openSync, readSync,
+  rmSync, unlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,7 +27,10 @@ export function runCliProcess(binary, args, {
   try {
     chmodSync(directory, 0o700);
     const path = join(directory, "stdout");
-    descriptor = openSync(path, "wx", 0o600);
+    descriptor = openSync(path, "wx+", 0o600);
+    fchmodSync(descriptor, 0o600);
+    // No stdout pathname survives once the child can write sensitive output.
+    unlinkSync(path);
     const result = spawnSync(binary, args, {
       env, cwd, encoding: "utf8", timeout,
       maxBuffer: maxOutputBytes,
@@ -39,9 +43,21 @@ export function runCliProcess(binary, args, {
       error.stdoutBytes = stdoutBytes;
       throw error;
     }
+    const output = Buffer.alloc(stdoutBytes);
+    let offset = 0;
+    while (offset < stdoutBytes) {
+      // The child shares this descriptor's offset, which is now at EOF.
+      const count = readSync(descriptor, output, offset, stdoutBytes - offset, offset);
+      if (count === 0) {
+        const error = new Error("CLI stdout changed while reading its capture.");
+        error.code = "ERR_CLI_STDOUT_CHANGED";
+        throw error;
+      }
+      offset += count;
+    }
     return {
       ...result,
-      stdout: readFileSync(path, "utf8"),
+      stdout: output.toString("utf8"),
       stdoutBytes,
       stderrBytes: Buffer.byteLength(result.stderr ?? "", "utf8"),
     };
