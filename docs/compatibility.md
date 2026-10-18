@@ -44,6 +44,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Personal `client_credentials` at `POST /identity/connect/token` | `user.<id>`, exact `api` scope, access token without refresh token | Real CLI API login, password unlock and decryption; core and HTTP comparison with upstream |
 | `POST /api/accounts/key-management/user-key-id` | One-time key-ID migration | SDK login and HTTP |
 | Profile, revision date, sync | Personal account and opaque encrypted vault | CLI and HTTP |
+| `PUT`/`POST /api/accounts/profile`, `PUT /api/accounts/avatar` | Exact profile names and nullable avatar colors with UTF-8 byte limits | Core/provider contracts, host rollback tests, and eight matching Rust HTTP cases on both servers; no CLI mutation claim |
 | Folder CRUD and POST aliases | Opaque names, four-field responses, owner isolation, clear references without changing cipher revisions | CLI baseline; core/host tests and the focused HTTP comparison described below |
 | Cipher CRUD | Opaque ciphertext and unknown JSON fields | CLI, HTTP, storage tests |
 | Personal v2 attachment reservation and multipart upload | Opaque encrypted metadata and bytes; declared/measured size checks | Core, real CLI on both servers, matching HTTP |
@@ -65,12 +66,12 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Provider conflict errors | `Storage::map_error` can preserve an HTTP 409 conflict | Core provider tests |
 
 The allocation-free core's models include login, secure note, card, identity,
-and SSH-key items, plus optional opaque blob data. Its 56 unit tests cover the
+and SSH-key items, plus optional opaque blob data. Its 80 unit tests cover the
 typed fields, bounded collections and import decoding, validation, ownership,
 lifecycle rules, folder mapping, the atomic import and bulk provider contracts,
 API-key proof selection and authorization, and attachment lifecycle and provider
-rules. A compile-fail doctest verifies
-that `Secret` cannot be serialized through the general Serde interface.
+rules, account-key initialization, and profile/avatar byte validation. A compile-fail
+doctest verifies that `Secret` cannot be serialized through the general Serde interface.
 Real-client import evidence covers the types listed above; broader operations
 for those types and blob encryption need their own client fixtures. Keeping
 encrypted passkey records in a login item does not
@@ -85,7 +86,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 22 Rust host tests pass and cover storage and transport rules.
+All 42 Rust host tests pass and cover storage and transport rules.
 These establish wire preservation and authorization for the new shapes,
 aliases, and personal imports independently of the CLI evidence.
 They do not prove that a real client can decrypt a blob or use stored passkey
@@ -99,6 +100,28 @@ per run. It exercises complete and missing pairs, strict private/public response
 projections, opaque initialization, JSON rejection and positional field order,
 authenticated cross-user public lookup, UUID guards, and nonmutating repeated
 initialization. The folder group still passes its 220 requests against both.
+
+The profile/avatar group passes all eight Rust HTTP cases against the same two
+servers: 425 counted requests including two password logins. The combined Rust
+HTTP binary passes 24 cases with 887 requests and seven logins; these counts
+exclude fixture registrations. It preserves exact empty, whitespace, control,
+and Unicode names, with a maximum of 50 UTF-8 bytes. Present avatar colors must
+contain exactly seven UTF-8 bytes, without hexadecimal or `#` validation.
+An omitted/null object field or `[null]` clears the avatar; `[]` rejects with
+422, and surplus positional elements reject with 400. Profile GET, mutation
+responses, and sync return the stored name directly, including an empty string.
+New registrations discard avatar extras. Non-string avatar extras retained in
+older account documents project as null, preserving the response field's
+string/null type without rewriting those documents.
+
+`AccountProfileStorage` supplies atomic field/revision writes through the
+reusable `update_profile` and `update_avatar` services. The provider preserves
+keys, credentials, sessions, vault contents, and foreign accounts, including on
+failure. Registration validation remains unchanged. Complete profile responses
+remain adapter-built; these three new routes add no typed core full-profile
+response or CLI mutation claim. The unchanged 120-command CLI baseline also
+passes a fresh regression against the updated adapter. Full account lifecycle
+and upstream API parity remain open.
 
 `AccountKeyStorage` provides borrowed state and atomic initialization for embedding
 applications. Empty strings count as present keys. A partial pair prevents

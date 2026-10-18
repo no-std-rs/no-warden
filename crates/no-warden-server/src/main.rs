@@ -23,8 +23,9 @@ use no_warden::{
     route::{self, Route},
     validation::FolderNamePolicy,
     wire::{
-        AccountKeys, CipherRequest, ClientCredentialsRequest, FolderRelationship, FolderRequest,
-        FolderWriteRequest, ImportFolderRequest, PasswordOrOtpRequest, RegisterRequest,
+        AccountKeys, AvatarUpdateRequest, CipherRequest, ClientCredentialsRequest,
+        FolderRelationship, FolderRequest, FolderWriteRequest, ImportFolderRequest,
+        PasswordOrOtpRequest, ProfileUpdateRequest, RegisterRequest,
     },
 };
 use rand::{RngCore, rngs::OsRng};
@@ -141,6 +142,25 @@ struct AccountKeysInput {
 }
 
 fn parse_account_keys_input(body: &[u8]) -> Result<AccountKeysInput, Failure> {
+    serde_json::from_slice(body).map_err(json_guard_error)
+}
+
+#[derive(Deserialize)]
+struct ProfileInput {
+    name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AvatarInput {
+    avatar_color: Option<String>,
+}
+
+fn parse_profile_input(body: &[u8]) -> Result<ProfileInput, Failure> {
+    serde_json::from_slice(body).map_err(json_guard_error)
+}
+
+fn parse_avatar_input(body: &[u8]) -> Result<AvatarInput, Failure> {
     serde_json::from_slice(body).map_err(json_guard_error)
 }
 
@@ -356,6 +376,22 @@ async fn dispatch(
     let owner = owner.ok_or_else(unauthorized)?;
     let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
     match route {
+        Route::ProfileUpdate => {
+            let input = parse_profile_input(&body)?;
+            let request = ProfileUpdateRequest { name: &input.name };
+            VaultService::new(&mut *store).update_profile(&owner, &request)?;
+            let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
+            Ok(json_response(protocol::profile(&account)))
+        }
+        Route::AvatarUpdate => {
+            let input = parse_avatar_input(&body)?;
+            let request = AvatarUpdateRequest {
+                avatar_color: input.avatar_color.as_deref(),
+            };
+            VaultService::new(&mut *store).update_avatar(&owner, &request)?;
+            let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
+            Ok(json_response(protocol::profile(&account)))
+        }
         Route::AccountKeysGet => {
             let mut service = VaultService::new(&mut *store);
             let response = service.get_account_keys(&owner)?;
@@ -805,6 +841,276 @@ fn issue_token_grant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_and_avatar_inputs_match_upstream_schema_escapes_and_sequence_shapes() {
+        for (body, expected) in [
+            (br#"{"name":""}"#.as_slice(), ""),
+            (br#"["name"]"#.as_slice(), "name"),
+            (
+                br#"{"name":"quoted \" \u00e9\u0000\n","id":"ignored","culture":"ignored"}"#
+                    .as_slice(),
+                "quoted \" é\0\n",
+            ),
+        ] {
+            let input = parse_profile_input(body)
+                .unwrap_or_else(|_| panic!("Valid profile input was rejected."));
+            assert!(input.name == expected);
+        }
+        for body in [
+            br#"{}"#.as_slice(),
+            br#"{"avatarColor":null}"#.as_slice(),
+            br#"[null]"#.as_slice(),
+        ] {
+            let input = parse_avatar_input(body)
+                .unwrap_or_else(|_| panic!("Valid avatar clear input was rejected."));
+            assert!(input.avatar_color.is_none());
+        }
+        for body in [
+            br#"{"avatarColor":"\u00e9abcde","id":"ignored","name":"ignored"}"#.as_slice(),
+            br#"["\u00e9abcde"]"#.as_slice(),
+        ] {
+            let input = parse_avatar_input(body)
+                .unwrap_or_else(|_| panic!("Valid avatar string input was rejected."));
+            assert!(input.avatar_color.as_deref() == Some("éabcde"));
+        }
+        for (profile, body, status) in [
+            (true, b"{".as_slice(), StatusCode::BAD_REQUEST),
+            (
+                true,
+                br#"["name","extra"]"#.as_slice(),
+                StatusCode::BAD_REQUEST,
+            ),
+            (true, br#"{}"#.as_slice(), StatusCode::UNPROCESSABLE_ENTITY),
+            (true, br#"[]"#.as_slice(), StatusCode::UNPROCESSABLE_ENTITY),
+            (
+                true,
+                br#"{"name":null}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                true,
+                br#"{"name":7}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                true,
+                br#"{"name":"first","na\u006de":"second"}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (false, b"{".as_slice(), StatusCode::BAD_REQUEST),
+            (false, br#"[null,null]"#.as_slice(), StatusCode::BAD_REQUEST),
+            (false, br#"[]"#.as_slice(), StatusCode::UNPROCESSABLE_ENTITY),
+            (
+                false,
+                br#"null"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                false,
+                br#"{"avatarColor":7}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                false,
+                br#"{"avatarColor":false}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                false,
+                br#"{"avatarColor":[]}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                false,
+                br#"{"avatarColor":null,"avatarColor":null}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+        ] {
+            let error = if profile {
+                parse_profile_input(body).err()
+            } else {
+                parse_avatar_input(body).err()
+            }
+            .expect("Invalid profile metadata input was accepted.");
+            assert_eq!(error.0, status);
+            assert_eq!(error.1, "Invalid request");
+        }
+    }
+
+    #[tokio::test]
+    async fn profile_http_mutations_use_authenticated_identity_and_persist_into_get_and_sync() {
+        let app = App {
+            store: Arc::new(Mutex::new(Store::open(":memory:").unwrap())),
+            base: "http://127.0.0.1".into(),
+            signing_key: [1; 32],
+        };
+        {
+            let store = app.store.lock().unwrap();
+            for owner in ["alice", "bob"] {
+                let account = json!({"id":owner,"email":format!("{owner}@example.test"),"name":"initial","avatarColor":"#123456","key":"preserved-user-key","keys":{"publicKey":"preserved-public","encryptedPrivateKey":"preserved-private"},"userKeyId":"preserved-key-id","securityStamp":"preserved-stamp","futureField":{"preserved":true}});
+                store.db.execute("INSERT INTO accounts(id,email,document,password,revision) VALUES(?1,?2,?3,'preserved-password-verifier',?4)",params![owner,format!("{owner}@example.test"),account.to_string(),store::now()]).unwrap();
+                store.db.execute("INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES(?1,?2,?3,4000000000,4000000000)",params![digest(&format!("fixture-profile-{owner}")),format!("fixture-refresh-{owner}"),owner]).unwrap();
+            }
+        }
+        let original = app
+            .store
+            .lock()
+            .unwrap()
+            .account("id", "alice")
+            .unwrap()
+            .unwrap();
+        let foreign = app
+            .store
+            .lock()
+            .unwrap()
+            .account("id", "bob")
+            .unwrap()
+            .unwrap();
+        for (method, path, body) in [
+            (
+                Method::PUT,
+                "/api/accounts/profile",
+                br#"{"name":"x"}"#.as_slice(),
+            ),
+            (
+                Method::POST,
+                "/api/accounts/profile",
+                br#"{"name":"x"}"#.as_slice(),
+            ),
+            (
+                Method::PUT,
+                "/api/accounts/avatar",
+                br#"{"avatarColor":null}"#.as_slice(),
+            ),
+        ] {
+            let result = dispatch(
+                State(app.clone()),
+                method,
+                path.parse().unwrap(),
+                HeaderMap::new(),
+                Bytes::copy_from_slice(body),
+            )
+            .await;
+            let Err(error) = result else {
+                panic!("Anonymous profile mutation succeeded.")
+            };
+            assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        }
+        for (method,path,body,name,avatar) in [
+            (Method::POST,"/api/accounts/profile",br#"{"name":"","id":"bob","owner":"bob","email":"forged@example.test","culture":"forged","key":"forged","keys":{"publicKey":"forged"},"avatarColor":"forged"}"#.as_slice(),"","#123456"),
+            (Method::PUT,"/api/accounts/profile",br#"{"name":"quoted \" \u00e9"}"#.as_slice(),"quoted \" é","#123456"),
+            (Method::PUT,"/api/accounts/avatar",br#"{"avatarColor":"\u00e9abcde","id":"bob","name":"forged","key":"forged"}"#.as_slice(),"quoted \" é","éabcde"),
+        ] {
+            let mut headers=HeaderMap::new();
+            headers.insert("authorization","Bearer fixture-profile-alice".parse().unwrap());
+            let response=dispatch(State(app.clone()),method,path.parse().unwrap(),headers,Bytes::copy_from_slice(body)).await
+                .unwrap_or_else(|_|panic!("Valid profile mutation failed."));
+            assert_eq!(response.status(),StatusCode::OK);
+            let bytes=axum::body::to_bytes(response.into_body(),MAX_REQUEST_BYTES).await.unwrap();
+            let response:Value=serde_json::from_slice(&bytes).unwrap();
+            assert!(response["name"]==name);
+            assert!(response["avatarColor"]==avatar);
+            assert!(response["id"]=="alice");
+            assert!(response["email"]=="alice@example.test");
+            assert_eq!(response["culture"],"en-US");
+            let store=app.store.lock().unwrap();
+            let account=store.account("id","alice").unwrap().unwrap();
+            for field in ["id","email","key","keys","userKeyId","securityStamp","futureField"] {
+                assert!(account[field]==original[field],"Profile mutation trusted an unrelated request field.");
+            }
+            assert!(store.account("id","bob").unwrap().unwrap()==foreign,"Profile mutation modified a foreign account.");
+        }
+        for path in ["/api/accounts/profile", "/api/sync"] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                "authorization",
+                "Bearer fixture-profile-alice".parse().unwrap(),
+            );
+            let response = dispatch(
+                State(app.clone()),
+                Method::GET,
+                path.parse().unwrap(),
+                headers,
+                Bytes::new(),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("Profile metadata read failed."));
+            let bytes = axum::body::to_bytes(response.into_body(), MAX_REQUEST_BYTES)
+                .await
+                .unwrap();
+            let response: Value = serde_json::from_slice(&bytes).unwrap();
+            let profile = if path == "/api/sync" {
+                &response["profile"]
+            } else {
+                &response
+            };
+            assert!(profile["name"] == "quoted \" é");
+            assert!(profile["avatarColor"] == "éabcde");
+        }
+        let before = app
+            .store
+            .lock()
+            .unwrap()
+            .account("id", "alice")
+            .unwrap()
+            .unwrap();
+        for (path, body, status) in [
+            (
+                "/api/accounts/avatar",
+                br#"[]"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                "/api/accounts/profile",
+                br#"{"name":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}"#.as_slice(),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "/api/accounts/avatar",
+                br#"{"avatarColor":""}"#.as_slice(),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "/api/accounts/profile",
+                br#"{"name":null}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                "/api/accounts/avatar",
+                br#"{"avatarColor":null,"avatarColor":null}"#.as_slice(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                "authorization",
+                "Bearer fixture-profile-alice".parse().unwrap(),
+            );
+            let result = dispatch(
+                State(app.clone()),
+                Method::PUT,
+                path.parse().unwrap(),
+                headers,
+                Bytes::copy_from_slice(body),
+            )
+            .await;
+            let Err(error) = result else {
+                panic!("Invalid profile metadata mutation succeeded.")
+            };
+            assert_eq!(error.0, status);
+            assert!(
+                app.store
+                    .lock()
+                    .unwrap()
+                    .account("id", "alice")
+                    .unwrap()
+                    .unwrap()
+                    == before,
+                "Rejected profile mutation changed account state."
+            );
+        }
+    }
 
     #[test]
     fn account_key_input_matches_upstream_string_schema_and_sequence_order() {

@@ -5,8 +5,9 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The core has 71 unit tests and a compile-fail doctest proving that `Secret`
-cannot be serialized implicitly. The host has 35 Rust tests on Unix, including
+The workspace has 163 active Rust tests: 80 core, 42 host, and 41 conformance
+support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
+that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
 The Node HTTP suite has 61 tests,
 including imports, bulk lifecycle/archive contracts, and API-key reauthentication,
@@ -19,16 +20,22 @@ credentials, rotation, access-only sessions, exact attachment bytes and metadata
 unexpired download capabilities, and permanent-deletion cleanup.
 The core's minimum Rust version is 1.85; the standalone
 server and host-only `no-warden-conformance` support library are checked with
-their minimum version, 1.89. The Rust conformance crate has 38 active tests and
-one ignored subprocess fixture; capture, encrypted account fixtures, and loopback
-TLS tests run in the workspace suite. The default real-client
+their minimum version, 1.89. The Rust conformance crate's capture, encrypted
+account fixtures, and loopback TLS tests run in the workspace suite. The default real-client
 entry point, `tools/e2e.sh`, runs the Rust binary and invokes the pinned official
 CLI as an external process in the required `bitwarden-cli` job. The separate
 `no-warden-http-conformance` Rust binary runs eight folder contract cases in that
 job, including response projection, opaque names, JSON guards, ownership, UUID
 paths, and deletion revision effects. It also runs eight account-key contract
-cases across all three account/private/public-key patterns. The existing HTTP, restart-persistence, and
-client-inventory orchestration still uses JavaScript, so the broader migration
+cases across all three account/private/public-key patterns, followed by eight
+profile/avatar cases covering both profile aliases, raw UTF-8 byte limits,
+nullable avatar updates, JSON guards, and preservation of unrelated state.
+The same 24 cases pass against the adapter and Vaultwarden `1.37.4`, with 887
+counted requests including seven password logins; fixture registrations are
+excluded. The profile group accounts for 425 requests and two of those logins.
+The unchanged 120-command CLI flow also passes against the updated adapter.
+The existing HTTP, restart-persistence, and client-inventory orchestration still
+uses JavaScript, so the broader migration
 remains unfinished.
 Bare-metal compilation and the allocator-free consumer link pass independently
 of the host suites.

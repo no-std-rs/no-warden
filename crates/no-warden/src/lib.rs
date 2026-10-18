@@ -9,6 +9,7 @@
 #![deny(missing_debug_implementations)]
 
 pub mod account_keys;
+pub mod account_profile;
 pub mod attachment;
 pub mod bounded;
 pub mod bulk;

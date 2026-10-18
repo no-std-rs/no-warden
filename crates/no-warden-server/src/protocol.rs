@@ -124,7 +124,7 @@ pub fn profile(account: &Value) -> Value {
         "providers": [],
         "providerOrganizations": [],
         "forcePasswordReset": false,
-        "avatarColor": null,
+        "avatarColor": account["avatarColor"].as_str(),
         "usesKeyConnector": false,
         "creationDate": account["creationDate"],
         "object": "profile",
@@ -202,6 +202,35 @@ pub fn api_key_token_fields(account: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_projects_raw_empty_names_and_authoritative_avatar_without_extensions() {
+        for (avatar, expected) in [
+            (Value::Null, Value::Null),
+            (json!(""), json!("")),
+            (json!("abcdefg"), json!("abcdefg")),
+            (json!("éabcde"), json!("éabcde")),
+            (json!("legacy string"), json!("legacy string")),
+            (json!({"legacy":true}), Value::Null),
+            (json!(7), Value::Null),
+            (json!(true), Value::Null),
+            (json!(["legacy"]), Value::Null),
+        ] {
+            let account = json!({"id":"alice","email":"alice@example.test","name":"","avatarColor":avatar,"untrustedExtension":"private"});
+            let response = profile(&account);
+            assert!(
+                response["name"] == "",
+                "Empty names must not fall back to email."
+            );
+            assert!(
+                response["avatarColor"] == expected,
+                "Avatar projection must preserve strings and map legacy non-string values to null."
+            );
+            assert!(response["email"] == "alice@example.test");
+            assert_eq!(response["culture"], "en-US");
+            assert!(response.get("untrustedExtension").is_none());
+        }
+    }
 
     #[test]
     fn legacy_account_key_projection_preserves_partial_and_empty_states() {
