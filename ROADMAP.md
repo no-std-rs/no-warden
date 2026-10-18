@@ -6,7 +6,10 @@ Full API parity is the finish line. The completed foundation below is an initial
 slice, and the standalone vault is a conformance adapter for the reusable core.
 Continue through the remaining API families in small, green, squash-merged PRs.
 
-- [ ] Pinned, exhaustive upstream route inventory with implementation and test evidence.
+- [x] Pinned exhaustive Vaultwarden route registrations, including configuration variants.
+- [x] Audited current route/model/service/HTTP/client evidence with source drift checks.
+- [ ] Resolve the remaining shipped CLI/SDK reachability and dynamic-call obligations.
+- [ ] Implement every inventoried API contract and verify its behavior in green PRs.
 
 - [x] Allocation-free core: borrowed wire types, routing, policy, storage traits.
 - [x] Standalone Rust adapter: persistent SQLite, registration, authentication.

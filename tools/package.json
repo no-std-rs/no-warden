@@ -2,11 +2,18 @@
   "name": "no-warden-compatibility-tools",
   "private": true,
   "description": "Pinned real-client compatibility checks for no-warden",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "test": "node e2e.mjs",
     "test:http": "node --test server-tests.mjs",
     "test:persistence": "node persistence.mjs"
   },
-  "dependencies": { "@bitwarden/cli": "2026.10.0" }
+  "dependencies": {
+    "@bitwarden/cli": "2026.10.0"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
 }
