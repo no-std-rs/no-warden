@@ -37,7 +37,10 @@ decryption, encrypted folder and login item CRUD, custom fields, Unicode notes,
 sync, lock/unlock, trash/restore, permanent deletion, and a fresh local cache
 after logout/login. The HTTP suite checks authentication, cross-account
 isolation, owner references, malformed input, refresh token rotation, and
-preservation of unknown JSON extensions.
+preservation of unknown JSON extensions. It also verifies stored key-ID
+enforcement, escaped opaque cipher blobs, encrypted FIDO2 records, clone
+wrappers, legacy folder aliases, organization alias rejection, and preservation
+of archived dates.
 
 The persistence test starts its own standalone server twice on a free loopback
 port, using one temporary SQLite database. It verifies graceful shutdown,
@@ -72,7 +75,7 @@ CLI `2026.10.0` commands passed against both no-warden and upstream Vaultwarden
 `ghcr.io/dani-garcia/vaultwarden` image, pinned by digest
 `sha256:efb3cde962015fcc036b2ea625242248611943b27212ebf4392841fb30fad055`
 (source revision `7c188967e7a467b19b2757bc3326f9cf3ccae327`). The standalone
-HTTP suite also passed all 12 tests, and the standalone restart durability check
+HTTP suite also passed all 19 tests, and the standalone restart durability check
 passed. These checks establish the tested personal
 vault lifecycle; they do not establish compatibility with every Bitwarden API.
 

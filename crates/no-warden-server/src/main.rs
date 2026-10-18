@@ -325,9 +325,17 @@ async fn dispatch(
             VaultService::new(&mut *store).delete_folder(&owner, id)?;
             Ok(StatusCode::NO_CONTENT.into_response())
         }
-        Route::CipherCreate | Route::CipherUpdate(_) => {
+        Route::CipherCreate | Route::CipherCreateWrapped | Route::CipherUpdate(_) => {
             let document: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
-            let request = CipherRequest::deserialize(&document).map_err(|_| invalid())?;
+            let payload = if route == Route::CipherCreateWrapped {
+                document
+                    .get("cipher")
+                    .or_else(|| document.get("Cipher"))
+                    .ok_or_else(invalid)?
+            } else {
+                &document
+            };
+            let request = CipherRequest::deserialize(payload).map_err(|_| invalid())?;
             let id = match route {
                 Route::CipherUpdate(id) => id.to_owned(),
                 _ => uuid::Uuid::new_v4().to_string(),
@@ -344,10 +352,14 @@ async fn dispatch(
                     ));
                 }
             }
-            store.pending = document.clone();
+            store.pending = payload.clone();
             let mut service = VaultService::new(&mut *store);
             if matches!(route, Route::CipherUpdate(_)) {
                 service.update_cipher(&owner, &id, &request)?;
+            } else if route == Route::CipherCreateWrapped {
+                let wrapper = no_warden::wire::CipherCreateRequest::deserialize(&document)
+                    .map_err(|_| invalid())?;
+                service.create_cipher_wrapped(&owner, &id, &wrapper)?;
             } else {
                 service.create_cipher(&owner, &id, &request)?;
             }

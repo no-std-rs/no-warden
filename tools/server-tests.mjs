@@ -153,6 +153,173 @@ await test("standalone adapter enforces authentication, isolation, and JSON pres
     assert.deepEqual(sync.ciphers.find(candidate => candidate.id === item.id).futureProtocolExtension, { ...future, version: 18 });
   });
 
+  await t.test("persisted user-key IDs reject mismatched encryption metadata before mutation", async () => {
+    const user = await account();
+    const token = user.token.access_token;
+    const userKeyId = randomBytes(32).toString("base64");
+    ok(await request("/api/accounts/key-management/user-key-id", {
+      method: "POST", token, body: { userKeyId },
+    }), "key-matching fixture migration");
+    const before = ok(await request("/api/sync", { token }), "key-matching fixture sync");
+    assert.equal(before.userDecryption.userKeyId, userKeyId);
+    const revision = ok(await request("/api/accounts/revision-date", { token }), "pre-rejection revision");
+    denied(await request("/api/ciphers", {
+      method: "POST", token,
+      body: cipher(user, { encryptedFor: before.profile.id, encryptedByKeyId: `${userKeyId}-incorrect` }),
+    }), "mismatched encryptedByKeyId", [400, 422]);
+    assert.deepEqual(ok(await request("/api/sync", { token }), "post-rejection sync").ciphers, []);
+    assert.equal(ok(await request("/api/accounts/revision-date", { token }), "post-rejection revision"), revision);
+    const matched = ok(await request("/api/ciphers", {
+      method: "POST", token,
+      body: cipher(user, { encryptedFor: before.profile.id, encryptedByKeyId: userKeyId }),
+    }), "matching encryptedByKeyId");
+    assert.equal(matched.encryptedByKeyId, userKeyId);
+    const legacy = ok(await request("/api/ciphers", { method: "POST", token, body: cipher(user) }), "legacy omitted key ID");
+    assert(legacy.id);
+    assert.notEqual(legacy.id, matched.id);
+  });
+
+  await t.test("opaque cipher blobs preserve escaped JSON strings through create, get, edit, and sync", async () => {
+    const blob = JSON.stringify({
+      format_version: 1, wrapped_cek: 'opaque "quoted" \\ café 🔐',
+      envelope: "sealed-ciphertext", unknownExtension: { enabled: true },
+    });
+    const item = ok(await request("/api/ciphers", {
+      method: "POST", token: aliceToken,
+      body: { type: 1, data: blob, name: null, key: alice.registration.key, organizationId: null },
+    }), "blob create");
+    assert.equal(item.data, blob);
+    assert.equal(item.name, null);
+    assert.equal(item.key, alice.registration.key);
+    assert.equal(ok(await request(`/api/ciphers/${item.id}`, { token: aliceToken }), "blob get").data, blob);
+    const changedBlob = JSON.stringify({ ...JSON.parse(blob), envelope: 'updated "sealed" \\ 🔑' });
+    const updated = ok(await request(`/api/ciphers/${item.id}`, {
+      method: "PUT", token: aliceToken,
+      body: { ...item, data: changedBlob, lastKnownRevisionDate: item.revisionDate },
+    }), "blob edit");
+    assert.equal(updated.data, changedBlob);
+    assert.equal(updated.key, alice.registration.key);
+    const sync = ok(await request("/api/sync", { token: aliceToken }), "blob sync");
+    assert.equal(sync.ciphers.find(candidate => candidate.id === item.id).data, changedBlob);
+  });
+
+  await t.test("encrypted FIDO2 records preserve every stored field through create, update, and sync", async () => {
+    const credential = {
+      credentialId: alice.registration.key,
+      keyType: alice.registration.key,
+      keyAlgorithm: alice.registration.key,
+      keyCurve: alice.registration.key,
+      keyValue: alice.registration.key,
+      rpId: alice.registration.key,
+      rpName: alice.registration.key,
+      counter: alice.registration.key,
+      userHandle: alice.registration.key,
+      userName: alice.registration.key,
+      userDisplayName: alice.registration.key,
+      discoverable: alice.registration.key,
+      creationDate: "2026-01-01T00:00:00.000Z",
+      futureEncryptedExtension: alice.registration.keys.encryptedPrivateKey,
+    };
+    const body = cipher(alice);
+    body.login.fido2Credentials = [credential];
+    const item = ok(await request("/api/ciphers", { method: "POST", token: aliceToken, body }), "FIDO2 create");
+    assert.deepEqual(item.login.fido2Credentials, [credential]);
+    assert.deepEqual(ok(await request(`/api/ciphers/${item.id}`, { token: aliceToken }), "FIDO2 get").login.fido2Credentials, [credential]);
+    const changed = { ...credential, counter: alice.registration.keys.encryptedPrivateKey, creationDate: "2026-02-01T00:00:00.000Z" };
+    const records = [changed, { ...credential, userName: alice.registration.keys.encryptedPrivateKey }];
+    const updated = ok(await request(`/api/ciphers/${item.id}`, {
+      method: "PUT", token: aliceToken,
+      body: { ...item, login: { ...item.login, fido2Credentials: records }, lastKnownRevisionDate: item.revisionDate },
+    }), "FIDO2 update");
+    assert.deepEqual(updated.login.fido2Credentials, records);
+    const sync = ok(await request("/api/sync", { token: aliceToken }), "FIDO2 sync");
+    assert.deepEqual(sync.ciphers.find(candidate => candidate.id === item.id).login.fido2Credentials, records);
+  });
+
+  await t.test("wrapped clone creation allocates a fresh ID and rejects unsupported ownership", async () => {
+    const source = ok(await request("/api/ciphers", { method: "POST", token: aliceToken, body: cipher(alice) }), "clone source");
+    const body = { cipher: { ...source, lastKnownRevisionDate: "2000-01-01T00:00:00.000Z" }, collectionIds: [] };
+    denied(await request("/api/ciphers/create", { method: "POST", body }), "anonymous wrapped clone", [401, 403]);
+    const clone = ok(await request("/api/ciphers/create", { method: "POST", token: aliceToken, body }), "wrapped clone");
+    assert(clone.id);
+    assert.notEqual(clone.id, source.id);
+    assert.equal(clone.name, source.name);
+    assert.equal(clone.lastKnownRevisionDate ?? null, null);
+    assert.equal(clone.cipher, undefined);
+    assert.deepEqual(ok(await request(`/api/ciphers/${source.id}`, { token: aliceToken }), "unchanged clone source"), source);
+    const alias = ok(await request("/api/ciphers/create", {
+      method: "POST", token: aliceToken, body: { Cipher: body.cipher, CollectionIds: [] },
+    }), "PascalCase wrapped clone");
+    assert.notEqual(alias.id, source.id);
+    assert.notEqual(alias.id, clone.id);
+    assert.equal(alias.lastKnownRevisionDate ?? null, null);
+    denied(await request("/api/ciphers/create", { token: aliceToken }), "reserved create path is not an item ID", [404]);
+    const before = ok(await request("/api/sync", { token: aliceToken }), "pre-rejection clone sync");
+    const revision = ok(await request("/api/accounts/revision-date", { token: aliceToken }), "pre-rejection clone revision");
+    for (const invalid of [
+      source,
+      { ...body, collectionIds: [randomUUID()] },
+      { ...body, cipher: { ...body.cipher, organizationId: randomUUID() } },
+    ]) {
+      denied(await request("/api/ciphers/create", {
+        method: "POST", token: aliceToken, body: invalid,
+      }), "invalid cloned cipher request", [400, 403, 404, 422]);
+    }
+    assert.deepEqual(ok(await request("/api/sync", { token: aliceToken }), "post-rejection clone sync").ciphers, before.ciphers);
+    assert.equal(ok(await request("/api/accounts/revision-date", { token: aliceToken }), "post-rejection clone revision"), revision);
+  });
+
+  await t.test("legacy POST folder update and delete aliases enforce owner isolation", async () => {
+    const folder = ok(await request("/api/folders", {
+      method: "POST", token: bobToken, body: { name: bob.registration.key },
+    }), "folder alias fixture");
+    denied(await request(`/api/folders/${folder.id}`, {
+      method: "POST", token: aliceToken, body: { name: alice.registration.key },
+    }), "cross-user POST folder update", [403, 404]);
+    denied(await request(`/api/folders/${folder.id}/delete`, {
+      method: "POST", token: aliceToken,
+    }), "cross-user POST folder delete", [403, 404]);
+    assert.deepEqual(ok(await request(`/api/folders/${folder.id}`, { token: bobToken }), "folder after rejected aliases"), folder);
+    const updated = ok(await request(`/api/folders/${folder.id}`, {
+      method: "POST", token: bobToken, body: { name: bob.registration.keys.encryptedPrivateKey },
+    }), "owner POST folder update");
+    assert.equal(updated.name, bob.registration.keys.encryptedPrivateKey);
+    ok(await request(`/api/folders/${folder.id}/delete`, { method: "POST", token: bobToken }), "owner POST folder delete");
+    denied(await request(`/api/folders/${folder.id}`, { token: bobToken }), "deleted aliased folder", [404]);
+    const sync = ok(await request("/api/sync", { token: bobToken }), "folder alias sync");
+    assert.equal(sync.folders.some(candidate => candidate.id === folder.id), false);
+  });
+
+  await t.test("archivedDate survives cipher creation, update, and sync", async () => {
+    const archivedDate = "2026-01-01T00:00:00.000Z";
+    const item = ok(await request("/api/ciphers", {
+      method: "POST", token: aliceToken, body: cipher(alice, { archivedDate }),
+    }), "archived cipher create");
+    assert.equal(item.archivedDate, archivedDate);
+    const changed = "2026-02-01T00:00:00.000Z";
+    const updated = ok(await request(`/api/ciphers/${item.id}`, {
+      method: "PUT", token: aliceToken, body: { ...item, archivedDate: changed, lastKnownRevisionDate: item.revisionDate },
+    }), "archived cipher update");
+    assert.equal(updated.archivedDate, changed);
+    const sync = ok(await request("/api/sync", { token: aliceToken }), "archived cipher sync");
+    assert.equal(sync.ciphers.find(candidate => candidate.id === item.id).archivedDate, changed);
+  });
+
+  await t.test("organizationID alias cannot bypass personal-vault ownership validation", async () => {
+    const body = cipher(alice, { organizationID: randomUUID() });
+    delete body.organizationId;
+    const before = ok(await request("/api/sync", { token: aliceToken }), "pre-alias-rejection sync");
+    for (const path of ["/api/ciphers", `/api/ciphers/${created.id}`]) {
+      denied(await request(path, {
+        method: path === "/api/ciphers" ? "POST" : "PUT", token: aliceToken, body,
+      }), "organizationID owner bypass", [400, 403, 422]);
+    }
+    denied(await request("/api/ciphers/create", {
+      method: "POST", token: aliceToken, body: { cipher: body, collectionIds: [] },
+    }), "wrapped organizationID owner bypass", [400, 403, 422]);
+    assert.deepEqual(ok(await request("/api/sync", { token: aliceToken }), "post-alias-rejection sync").ciphers, before.ciphers);
+  });
+
   await t.test("concurrent edits with the same revision allow only one update", async () => {
     const item = ok(await request("/api/ciphers", {
       method: "POST", token: aliceToken, body: cipher(alice),

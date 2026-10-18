@@ -10,6 +10,7 @@ pub struct Store {
     pub db: Connection,
     pub pending: Value,
     owner: String,
+    key_id: Option<String>,
 }
 
 pub fn now() -> String {
@@ -80,6 +81,7 @@ impl Store {
             db,
             pending: Value::Null,
             owner: String::new(),
+            key_id: None,
         })
     }
 
@@ -171,6 +173,21 @@ impl Store {
 
 impl Storage for Store {
     type Error = rusqlite::Error;
+
+    fn user_key_id(&mut self, owner: &str) -> Result<Option<&str>, Self::Error> {
+        // SQLite owns the query result only for the duration of the row callback.
+        // Retain an owned copy so the returned slice borrows this adapter instead.
+        self.key_id = self
+            .db
+            .query_row(
+                "SELECT json_extract(document,'$.userKeyId') FROM accounts WHERE id=?1",
+                [owner],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(self.key_id.as_deref())
+    }
 
     fn account_exists(&mut self, email: &str) -> Result<bool, Self::Error> {
         Ok(self.account("email", email)?.is_some())
@@ -275,6 +292,8 @@ impl Storage for Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use no_warden::{ErrorKind, VaultService};
+    use serde::Deserialize;
 
     const CIPHERTEXT: &str = "2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
@@ -311,6 +330,76 @@ mod tests {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap()
+    }
+
+    #[test]
+    fn key_id_lookup_reads_current_account_and_clears_legacy_scratch() {
+        let mut store = setup();
+        store
+            .db
+            .execute(
+                "UPDATE accounts SET document=json_set(document,'$.userKeyId',?1) WHERE id='alice'",
+                ["opaque:key/id"],
+            )
+            .unwrap();
+        assert_eq!(store.user_key_id("alice").unwrap(), Some("opaque:key/id"));
+        assert_eq!(store.user_key_id("bob").unwrap(), None);
+        assert_eq!(store.user_key_id("alice").unwrap(), Some("opaque:key/id"));
+        assert_eq!(store.user_key_id("missing-account").unwrap(), None);
+        store
+            .db
+            .execute(
+                "UPDATE accounts SET document=json_set(document,'$.userKeyId',NULL) WHERE id='alice'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(store.user_key_id("alice").unwrap(), None);
+    }
+
+    #[test]
+    fn service_checks_persisted_key_id_before_creating_cipher() {
+        let mut store = setup();
+        store
+            .db
+            .execute(
+                "UPDATE accounts SET document=json_set(document,'$.userKeyId','current-key') WHERE id='alice'",
+                [],
+            )
+            .unwrap();
+        let document = json!({
+            "type": 2, "name": CIPHERTEXT, "secureNote": {"type": 0},
+            "encryptedFor": "alice", "encryptedByKeyId": "wrong-key",
+        });
+        let request = CipherRequest::deserialize(&document).unwrap();
+        store.pending = document.clone();
+        let before = snapshot(&store);
+        let error = VaultService::new(&mut store)
+            .create_cipher("alice", "rejected-key", &request)
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::InvalidRequest);
+        assert_eq!(error.field, Some("encryptedByKeyId"));
+        assert_eq!(snapshot(&store), before);
+
+        for (owner, id, candidate) in [
+            ("alice", "matching-key", Some("current-key")),
+            ("alice", "omitted-key", None),
+            ("bob", "unmigrated-account", Some("unknown-key")),
+        ] {
+            let mut document = json!({
+                "type": 2, "name": CIPHERTEXT, "secureNote": {"type": 0},
+                "encryptedFor": owner,
+            });
+            if let Some(candidate) = candidate {
+                document["encryptedByKeyId"] = json!(candidate);
+            }
+            let request = CipherRequest::deserialize(&document).unwrap();
+            store.pending = document.clone();
+            VaultService::new(&mut store)
+                .create_cipher(owner, id, &request)
+                .unwrap();
+            let saved = store.item(owner, id, "cipher").unwrap().unwrap();
+            assert_eq!(saved["encryptedByKeyId"].as_str(), candidate);
+        }
     }
 
     #[test]

@@ -24,6 +24,10 @@ with `/api`, and identity paths with `/identity`. The token endpoint takes
 `application/x-www-form-urlencoded`; vault endpoints take JSON. Authenticated
 API requests carry `Authorization: Bearer <access_token>`.
 
+The HTTP URL describes the local adapter. The real CLI suite uses a temporary
+trusted loopback TLS proxy because CLI 2026.10.0 requires HTTPS; certificate
+validation remains enabled.
+
 The server stores client ciphertext. A folder name, cipher name, login username,
 password, notes, and many nested fields are encrypted strings, not plaintext.
 The client performs decryption with the recovered user key or an individual
@@ -273,7 +277,9 @@ Sources: [Vaultwarden profile](https://github.com/dani-garcia/vaultwarden/blob/5
 A folder response has `id`, `name`, `revisionDate`, and `object: "folder"`.
 A list response is `{"data":[...],"object":"list","continuationToken":null}`.
 Deleting a folder clears its association without deleting the stored vault
-items. IDs belonging to another account must not be usable by the caller.
+items. IDs belonging to another account must not be usable by the caller. The
+core classifies both legacy POST aliases in the table, as well as PUT updates
+and DELETE removal.
 
 Source: [Vaultwarden folders](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/folders.rs).
 
@@ -285,6 +291,7 @@ Source: [Vaultwarden folders](https://github.com/dani-garcia/vaultwarden/blob/58
 | `GET /api/ciphers/{id}` | One accessible cipher |
 | `GET /api/ciphers/{id}/details` | Details alias |
 | `POST /api/ciphers` | Create encrypted cipher |
+| `POST /api/ciphers/create` | Create/clone from the wrapped request below |
 | `PUT /api/ciphers/{id}` | Replace encrypted cipher |
 | `POST /api/ciphers/{id}` | Update alias |
 | `PUT /api/ciphers/{id}/delete` | Move to trash |
@@ -292,23 +299,77 @@ Source: [Vaultwarden folders](https://github.com/dani-garcia/vaultwarden/blob/58
 | `DELETE /api/ciphers/{id}` | Permanent deletion |
 | `POST /api/ciphers/{id}/delete` | Permanent deletion alias |
 
-Modern write requests carry `encryptedFor` (the user UUID) and optionally
-`encryptedByKeyId`, as well as `type`, encrypted `name`, `notes`, `folderId`,
-`organizationId`, `favorite`, `reprompt`, `fields`, `passwordHistory`, optional
-individual encrypted `key`, and one type-specific object. Existing-item writes
-may contain `lastKnownRevisionDate`; reject stale writes before mutating storage.
+Legacy field-level write requests carry `type`, encrypted `name`, `notes`,
+`folderId`, `organizationId`, `favorite`, `reprompt`, `fields`, `passwordHistory`,
+optional individual encrypted `key`, and one type-specific object. Modern
+requests also carry `encryptedFor` (the user UUID) and optionally the opaque
+`encryptedByKeyId`. The core retains both and checks `encryptedFor` against the
+authenticated owner. On creation, `Storage::user_key_id` supplies the account's
+current key ID when available; different supplied IDs are rejected. Embeddings
+that support key-ID backfill must override the default provider returning None.
+
+Existing-item writes may contain `lastKnownRevisionDate`; reject stale writes
+before mutating storage. A provider can override `Storage::map_error` to map a
+known conditional-write conflict to `ErrorKind::Conflict` (HTTP 409), while
+keeping unknown failures generic. The revision check and write must share the
+same lock or transaction. Fresh creates discard a source item's revision.
+
+The clone endpoint accepts `{"cipher":{...},"collectionIds":[]}`. The core's
+borrowed `CipherCreateRequest` uses a bounded collection and delegates personal
+creates to the same validation and ownership rules. Nonempty collection IDs
+are rejected by the personal-vault service.
+
 For an initial personal vault, reject non-null organization IDs until the
-organization authorization model is implemented.
+organization authorization model is implemented. Both `organizationId` and the
+upstream alias `organizationID` are recognized; the standalone HTTP suite
+verifies rejection through direct and wrapped writes.
 
 Type-specific object names are `login` (1), `secureNote` (2), `card` (3),
 `identity` (4), `sshKey` (5), `bankAccount` (6), `driversLicense` (7), and
 `passport` (8). The CLI release under test knows all eight request shapes.
-Opaque storage alone does not establish end-to-end support for each type.
+The core currently models field-level types 1–5. Its opaque blob path permits
+type metadata 1–8 without interpreting the encrypted contents. Opaque storage
+alone does not establish end-to-end support for each type.
 
-A login can include encrypted `username`, `password`, `totp`, `uris`,
-`passwordRevisionDate`, `autofillOnPageLoad`, and `fido2Credentials`. A URI
-contains encrypted `uri`, numeric/null `match`, and encrypted `uriChecksum`.
-Keep this nested JSON intact even when the core does not interpret it.
+A login can include encrypted `username`, `password`, `totp`, URI records, and
+`fido2Credentials`, plus plaintext metadata `passwordRevisionDate` and
+`autofillOnPageLoad`. A URI contains encrypted `uri`, numeric/null `match`, and
+encrypted `uriChecksum`. Keep this nested JSON intact even when the core does
+not interpret it.
+
+Stored FIDO2 credential fields `credentialId`, `keyType`, `keyAlgorithm`,
+`keyCurve`, `keyValue`, `rpId`, `rpName`, `counter`, `userHandle`, `userName`,
+`userDisplayName`, and `discoverable` contain encrypted strings, including the
+fields whose names suggest counters or booleans. `creationDate` is plaintext
+ISO date metadata and can be null. The borrowed core model preserves these
+optional fields in a list capped at 16 credentials. This cap is a project
+resource policy, not an upstream protocol limit. Stored credential support
+does not implement WebAuthn/passkey login or demonstrate authenticator use.
+HTTP tests verify that all these fields, including unknown nested extensions,
+survive create/get/update/sync unchanged.
+
+Sources: [CLI encrypted credential writes](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/vault/models/request/cipher.request.ts),
+[CLI credential domain model](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/vault/models/domain/fido2-credential.ts).
+
+Blob-encryption clients put sensitive content into optional `data` and omit
+legacy `name` and type-specific objects. The SDK's blob value is an **opaque JSON
+string** containing `format_version`, `wrapped_cek`, and `envelope`; it is not
+itself an EncString. The core preserves nonempty blob data up to its
+1,048,576-byte field-size bound and conditionally requires legacy fields only when data is
+absent. It does not parse or authenticate the inner blob. Escaped inner JSON
+requires an application-owned decoding buffer when the transport decoder
+cannot borrow the decoded string. The standalone host first decodes owned JSON,
+then borrows from those decoded strings for core validation.
+
+Separately, an encrypted wrapped key can use `7.<Base64(COSE_Encrypt0 bytes)>`.
+The core checks the nonempty base64 envelope and keeps the bytes opaque;
+it does not validate CBOR structure or implement COSE encryption. SDK schema
+support is not a claim that the pinned Vaultwarden version supports blob
+ciphers, or that a real-client blob round trip has passed here.
+
+Sources: [SDK blob encryption](https://github.com/bitwarden/sdk-internal/blob/c159ee882654e65dd885014001c7f3253d1a170e/crates/bitwarden-vault/src/cipher/blob/encryption.rs),
+[SDK sealed blob string](https://github.com/bitwarden/sdk-internal/blob/c159ee882654e65dd885014001c7f3253d1a170e/crates/bitwarden-vault/src/cipher/blob/sealed.rs),
+[SDK EncString formats](https://github.com/bitwarden/sdk-internal/blob/c159ee882654e65dd885014001c7f3253d1a170e/crates/bitwarden-crypto/src/enc_string/symmetric.rs).
 
 Personal cipher responses add server `id`, UTC `creationDate`, `revisionDate`,
 `deletedDate` (null or trash time), `archivedDate`, `attachments`,
@@ -323,20 +384,26 @@ ownership, creation time, revision time, or permission booleans as authority.
 Mutations must enforce account ownership, folder ownership, and revision checks
 before committing a change.
 
+`archivedDate` is client-supplied metadata retained by the adapter. HTTP tests
+cover its preservation across create/update/sync; the dedicated archive and
+unarchive action endpoints are outside the current route set.
+
 Sources: [Vaultwarden cipher routes](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs),
 [Vaultwarden response shape](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/cipher.rs),
 [CLI cipher writes](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/vault/models/request/cipher.request.ts).
 
 ## Compatibility evidence still needed
 
-A useful real-client acceptance sequence is configuration, password login,
-empty sync, encrypted folder creation, encrypted login creation, item read,
-item edit, fresh-client sync, trash, restore, permanent deletion, folder
-deletion, logout, and another password login after server restart. Also verify
-bad credentials, invalid refresh, expired tokens, cross-account IDs, stale
-revisions, oversized input, and persistence without plaintext vault data.
+The baseline personal-vault CLI result and its scope are recorded in
+[verified compatibility](compatibility.md). The expanded HTTP suite passes 19
+tests covering the new shapes, route aliases, ownership checks, and escaped
+blob preservation. Further real-client evidence is needed for blob encryption,
+Argon2 account fixtures, additional cipher types, and stored passkey use.
+Restart, invalid credentials,
+refresh expiry, cross-account IDs, stale revisions, oversized input, and
+persistence without plaintext vault data remain ongoing regression requirements.
 
 Browser/mobile clients, organizations, attachments, Send, two-factor login,
-device approval, SSO, passkeys, key rotation, push notifications, and recovery
-need separate implementation and actual-client evidence. A passing personal
+device approval, SSO, passkey authentication, key rotation, push notifications,
+and recovery need separate implementation and actual-client evidence. A passing personal
 CLI test must not be described as complete Bitwarden or Vaultwarden parity.
