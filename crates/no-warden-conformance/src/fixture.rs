@@ -34,6 +34,7 @@ enum Failure {
     InvalidIterations,
     Randomness,
     Rsa,
+    HttpClient,
     RegistrationRequest,
     RegistrationRejected,
     VerificationRequest,
@@ -48,6 +49,7 @@ impl FixtureError {
             Failure::InvalidIterations => "Registration requires a nonzero PBKDF2 iteration count.",
             Failure::Randomness => "Fixture generation could not obtain secure randomness.",
             Failure::Rsa => "Fixture RSA key generation failed.",
+            Failure::HttpClient => "Registration HTTP client initialization failed.",
             Failure::RegistrationRequest => "Account registration request failed.",
             Failure::RegistrationRejected => "The server rejected account registration.",
             Failure::VerificationRequest => "Registration verification request failed.",
@@ -235,7 +237,15 @@ pub fn registration(email: &str, password: &str, iterations: u32) -> Result<Valu
     }))
 }
 
-fn post_registration(client: &Client, server: &str, body: &Value) -> Result<(), FixtureError> {
+fn post_registration(server: &str, body: &Value) -> Result<(), FixtureError> {
+    // Registration bodies include password hashes, wrapped keys, and, in the
+    // finish phase, verification tokens. Own the transport policy so callers
+    // cannot enable redirects that replay those bodies at another origin.
+    let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .build()
+        .map_err(|_| FixtureError(Failure::HttpClient))?;
     let server = server.trim_end_matches('/');
     let response = client
         .post(format!("{server}/api/accounts/register"))
@@ -295,15 +305,11 @@ fn post_registration(client: &Client, server: &str, body: &Value) -> Result<(), 
 ///
 /// This supports both the legacy registration route and newer upstream's
 /// verification-token/finish flow; it requires email verification to be disabled
-/// on a disposable test server. Returned values contain credentials.
-pub fn seed_account(
-    client: &Client,
-    server: &str,
-    email: &str,
-    password: &str,
-) -> Result<Value, FixtureError> {
+/// on a disposable test server. Redirects and environment proxies are disabled
+/// for every registration phase. Returned values contain credentials.
+pub fn seed_account(server: &str, email: &str, password: &str) -> Result<Value, FixtureError> {
     let body = registration(email, password, REGISTRATION_ITERATIONS)?;
-    post_registration(client, server, &body)?;
+    post_registration(server, &body)?;
     Ok(body)
 }
 
@@ -315,6 +321,10 @@ mod tests {
         error::Error as _,
         io::{BufRead, BufReader, Read},
         net::TcpListener,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
         thread,
     };
 
@@ -491,6 +501,7 @@ mod tests {
             Failure::InvalidIterations,
             Failure::Randomness,
             Failure::Rsa,
+            Failure::HttpClient,
             Failure::RegistrationRequest,
             Failure::RegistrationRejected,
             Failure::VerificationRequest,
@@ -516,25 +527,46 @@ mod tests {
     }
 
     fn server(replies: Vec<Reply>) -> (String, thread::JoinHandle<Vec<(String, Value)>>) {
+        server_with_redirect(replies, None)
+    }
+
+    fn server_with_redirect(
+        replies: Vec<Reply>,
+        location: Option<String>,
+    ) -> (String, thread::JoinHandle<Vec<(String, Value)>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
         let handle = thread::spawn(move || {
             let mut requests = Vec::new();
             for reply in replies {
-                let (mut stream, _) = listener.accept().unwrap();
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                let (mut stream, _) = loop {
+                    match listener.accept() {
+                        Ok(connection) => break connection,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(
+                                std::time::Instant::now() < deadline,
+                                "Fixture origin request timed out."
+                            );
+                            thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(_) => panic!("Fixture origin listener failed."),
+                    }
+                };
                 stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut first_line = String::new();
-                reader.read_line(&mut first_line).unwrap();
+                assert!(reader.read_line(&mut first_line).unwrap() > 0);
                 assert_eq!(first_line.split_whitespace().next(), Some("POST"));
                 let path = first_line.split_whitespace().nth(1).unwrap().to_owned();
                 assert_eq!(path, reply.path);
                 let mut length = None;
                 loop {
                     let mut line = String::new();
-                    reader.read_line(&mut line).unwrap();
+                    assert!(reader.read_line(&mut line).unwrap() > 0);
                     if line == "\r\n" {
                         break;
                     }
@@ -546,7 +578,12 @@ mod tests {
                 let mut body = vec![0; length.unwrap()];
                 reader.read_exact(&mut body).unwrap();
                 requests.push((path, serde_json::from_slice(&body).unwrap()));
-                write!(stream, "HTTP/1.1 {} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", reply.status, reply.body.len(), reply.body).unwrap();
+                let location_header = location
+                    .as_ref()
+                    .filter(|_| matches!(reply.status, 307 | 308))
+                    .map(|location| format!("Location: {location}\r\n"))
+                    .unwrap_or_default();
+                write!(stream, "HTTP/1.1 {} Test\r\n{location_header}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", reply.status, reply.body.len(), reply.body).unwrap();
             }
             requests
         });
@@ -565,7 +602,7 @@ mod tests {
             body: "not-json",
         }]);
         let body = request_fixture();
-        post_registration(&Client::new(), &format!("{server}/"), &body).unwrap();
+        post_registration(&format!("{server}/"), &body).unwrap();
         let requests = handle.join().unwrap();
         assert!(requests[0].1 == body);
     }
@@ -590,7 +627,7 @@ mod tests {
             },
         ]);
         let body = request_fixture();
-        post_registration(&Client::new(), &server, &body).unwrap();
+        post_registration(&server, &body).unwrap();
         let requests = handle.join().unwrap();
         assert_eq!(requests.len(), 3);
         assert!(requests[0].1 == body);
@@ -680,7 +717,7 @@ mod tests {
             ),
         ] {
             let (server, handle) = server(replies);
-            let error = post_registration(&Client::new(), &server, &request_fixture()).unwrap_err();
+            let error = post_registration(&server, &request_fixture()).unwrap_err();
             assert!(error.0 == expected);
             assert!(!format!("{error} {error:?}").contains("server-secret-marker"));
             assert!(!format!("{error} {error:?}").contains("synthetic-verification-secret"));
@@ -690,13 +727,132 @@ mod tests {
 
     #[test]
     fn transport_failures_are_static_and_do_not_echo_the_server_url() {
-        let error = post_registration(
-            &Client::new(),
-            "not-a-url-with-secret-marker",
-            &request_fixture(),
-        )
-        .unwrap_err();
+        let error =
+            post_registration("not-a-url-with-secret-marker", &request_fixture()).unwrap_err();
         assert!(error.0 == Failure::RegistrationRequest);
         assert!(!format!("{error} {error:?}").contains("secret-marker"));
+    }
+
+    fn redirect_destination() -> (String, Arc<AtomicBool>, thread::JoinHandle<usize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let handle = thread::spawn(move || {
+            let mut requests = 0;
+            let deadline = std::time::Instant::now() + Duration::from_secs(60);
+            while !thread_stop.load(Ordering::Acquire) {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Redirect destination observation timed out."
+                );
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        requests += 1;
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(5)))
+                            .unwrap();
+                        let mut reader = BufReader::new(stream.try_clone().unwrap());
+                        let mut length = 0;
+                        loop {
+                            let mut line = String::new();
+                            assert!(reader.read_line(&mut line).unwrap() > 0);
+                            if line == "\r\n" {
+                                break;
+                            }
+                            if let Some((name, value)) = line.split_once(':')
+                                && name.eq_ignore_ascii_case("content-length")
+                            {
+                                length = value.trim().parse::<usize>().unwrap();
+                            }
+                        }
+                        // Drain any replayed body without exposing its contents.
+                        let mut discarded = vec![0; length];
+                        reader.read_exact(&mut discarded).unwrap();
+                        let body = "\"synthetic-verification-secret\"";
+                        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(_) => panic!("Redirect destination listener failed."),
+                }
+            }
+            requests
+        });
+        (format!("http://{address}/redirected"), stop, handle)
+    }
+
+    fn rejects_cross_origin_redirects(phase: usize) {
+        let paths = [
+            "/api/accounts/register",
+            "/identity/accounts/register/send-verification-email",
+            "/identity/accounts/register/finish",
+        ];
+        let mut forwarded_statuses = Vec::new();
+        let mut accepted_statuses = Vec::new();
+        for status in [307, 308] {
+            let (destination, stop, destination_handle) = redirect_destination();
+            let mut replies = Vec::new();
+            if phase > 0 {
+                replies.push(Reply {
+                    path: paths[0],
+                    status: 404,
+                    body: "{}",
+                });
+            }
+            if phase > 1 {
+                replies.push(Reply {
+                    path: paths[1],
+                    status: 200,
+                    body: "\"synthetic-verification-secret\"",
+                });
+            }
+            replies.push(Reply {
+                path: paths[phase],
+                status,
+                body: "",
+            });
+            let (origin, origin_handle) = server_with_redirect(replies, Some(destination));
+            let body = json!({
+                "email":"fixture@example.test",
+                "name":"fixture",
+                "masterPasswordHash":"synthetic-password-hash",
+                "key":"synthetic-encrypted-key",
+            });
+            let result = post_registration(&origin, &body);
+            origin_handle.join().unwrap();
+            stop.store(true, Ordering::Release);
+            if destination_handle.join().unwrap() != 0 {
+                forwarded_statuses.push(status);
+            }
+            if result.is_ok() {
+                accepted_statuses.push(status);
+            }
+        }
+        assert!(
+            forwarded_statuses.is_empty(),
+            "Registration forwarded cross-origin requests for HTTP {forwarded_statuses:?}."
+        );
+        assert!(
+            accepted_statuses.is_empty(),
+            "Registration accepted redirect responses for HTTP {accepted_statuses:?}."
+        );
+    }
+
+    #[test]
+    fn legacy_registration_rejects_cross_origin_307_and_308_redirects() {
+        rejects_cross_origin_redirects(0);
+    }
+
+    #[test]
+    fn verification_registration_rejects_cross_origin_307_and_308_redirects() {
+        rejects_cross_origin_redirects(1);
+    }
+
+    #[test]
+    fn finish_registration_rejects_cross_origin_307_and_308_redirects() {
+        rejects_cross_origin_redirects(2);
     }
 }

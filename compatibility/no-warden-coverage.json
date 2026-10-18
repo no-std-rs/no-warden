@@ -464,7 +464,7 @@
 "checks/no-alloc/src/main.rs": "2960dc2a8d48d0675cabda70ba56e7b822ec71c22123de70bfc6f38bfe168c53",
 "crates/no-warden-conformance/Cargo.toml": "07f41b135ba4382c81b56fef56b78a82d78cd85fb47464ca1450324edc2bca07",
 "crates/no-warden-conformance/src/capture.rs": "4a8897be8409bbb25f59ce3f7d9bbd5b0be6036465e298ee9d2e2ae6b36b1eb9",
-"crates/no-warden-conformance/src/fixture.rs": "9fa203cdab15d17491fa78d839964cffc0128733f33e1850adc1c383523c9949",
+"crates/no-warden-conformance/src/fixture.rs": "3752ac84d996bcff3bbc9711edc4dd260bb3249a51caf9037b4fd7311eabb4a3",
 "crates/no-warden-conformance/src/lib.rs": "e5946e4238829adeb086e72c5687fb555445429afa44d81dd496ddf76b90774e",
 "crates/no-warden-conformance/src/transport.rs": "8395c48046570be5ce031d7f285601e64f0993d1fb852f3796eeba11893d5f26",
 "crates/no-warden-server/Cargo.toml": "963ee1c72887ce439c86453b917aa9b74ee90424449302d8f28dc44a954e9494",
