@@ -213,12 +213,27 @@ pub fn validate_cipher(request: &CipherRequest<'_>) -> Result<(), ApiError> {
             "Unsupported reprompt policy.",
         ));
     }
-    validate_encrypted_string(request.name)
-        .map_err(|_| ApiError::invalid("name", "An encrypted cipher name is required."))?;
     if let Some(key) = request.key {
         validate_encrypted_string(key)
             .map_err(|_| ApiError::invalid("key", "An encrypted cipher key is required."))?;
     }
+    if let Some(data) = request.data {
+        if data.is_empty() || data.len() > MAX_ENCRYPTED_FIELD_BYTES {
+            return Err(ApiError::invalid(
+                "data",
+                "An opaque cipher blob within size limits is required.",
+            ));
+        }
+        if !(1..=8).contains(&request.kind) {
+            return Err(ApiError::invalid("type", "Unsupported cipher type."));
+        }
+        return Ok(());
+    }
+    validate_encrypted_string(request.name.ok_or(ApiError::invalid(
+        "name",
+        "An encrypted cipher name is required.",
+    ))?)
+    .map_err(|_| ApiError::invalid("name", "An encrypted cipher name is required."))?;
     optional_encrypted(request.notes)?;
     match request.kind {
         1 => {
@@ -238,6 +253,26 @@ pub fn validate_cipher(request: &CipherRequest<'_>) -> Result<(), ApiError> {
                             "login.uris.match",
                             "Unsupported URI match type.",
                         ));
+                    }
+                }
+            }
+            if let Some(credentials) = &login.fido2_credentials {
+                for credential in credentials.iter() {
+                    for value in [
+                        credential.credential_id,
+                        credential.key_type,
+                        credential.key_algorithm,
+                        credential.key_curve,
+                        credential.key_value,
+                        credential.rp_id,
+                        credential.rp_name,
+                        credential.counter,
+                        credential.user_handle,
+                        credential.user_name,
+                        credential.user_display_name,
+                        credential.discoverable,
+                    ] {
+                        optional_encrypted(value)?;
                     }
                 }
             }
@@ -330,7 +365,7 @@ fn optional_encrypted(value: Option<&str>) -> Result<(), ApiError> {
 }
 
 /// Validate an EncString envelope, never its authenticity or plaintext.
-/// Supports AES/RSA formats numbered 0 through 6 and the headerless AES-256 form.
+/// Supports AES/RSA 0 through 6, opaque COSE type 7, and headerless AES-256.
 pub fn validate_encrypted_string(value: &str) -> Result<(), ApiError> {
     let invalid = || ApiError::invalid("encryptedValue", "Invalid encrypted value envelope.");
     if value.len() > MAX_ENCRYPTED_FIELD_BYTES {
@@ -360,6 +395,11 @@ pub fn validate_encrypted_string(value: &str) -> Result<(), ApiError> {
         }
         "5" | "6" => {
             if first < 128 || decoded_base64_len(parts.next().ok_or_else(invalid)?) != Some(32) {
+                return Err(invalid());
+            }
+        }
+        "7" => {
+            if first == 0 {
                 return Err(invalid());
             }
         }
@@ -409,6 +449,7 @@ fn base64_digit(byte: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
     pub(crate) const ENCRYPTED: &str = "2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
     #[test]
@@ -493,6 +534,28 @@ mod tests {
             let request: CipherRequest<'_> = serde_json::from_str(&input).unwrap();
             assert!(validate_cipher(&request).is_ok());
         }
+    }
+
+    #[test]
+    fn opaque_blobs_cose_keys_and_passkey_envelopes_validate_without_decryption() {
+        assert!(validate_encrypted_string("7.AAECAw==").is_ok());
+        for value in ["7.", "7.invalid", "7.AAECAw==|extra"] {
+            assert!(validate_encrypted_string(value).is_err());
+        }
+        let mut document =
+            serde_json::json!({"type":1,"data":"opaque sealed JSON","key":"7.AAECAw=="});
+        assert!(validate_cipher(&CipherRequest::deserialize(&document).unwrap()).is_ok());
+        document["data"] = serde_json::json!("");
+        assert_eq!(
+            validate_cipher(&CipherRequest::deserialize(&document).unwrap())
+                .unwrap_err()
+                .field,
+            Some("data")
+        );
+        document = serde_json::json!({"type":1,"name":ENCRYPTED,"login":{"fido2Credentials":[{"keyValue":"plaintext"}]}});
+        assert!(validate_cipher(&CipherRequest::deserialize(&document).unwrap()).is_err());
+        document["login"]["fido2Credentials"][0]["keyValue"] = serde_json::json!(ENCRYPTED);
+        assert!(validate_cipher(&CipherRequest::deserialize(&document).unwrap()).is_ok());
     }
 
     #[test]

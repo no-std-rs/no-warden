@@ -39,6 +39,7 @@ pub enum Route<'a> {
     FolderDelete(&'a str),
     Ciphers,
     CipherCreate,
+    CipherCreateWrapped,
     CipherGet(&'a str),
     CipherUpdate(&'a str),
     CipherSoftDelete(&'a str),
@@ -80,12 +81,21 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (Post, "/api/folders") => Some(FolderCreate),
         (Get, "/api/ciphers") => Some(Ciphers),
         (Post, "/api/ciphers") => Some(CipherCreate),
+        (Post, "/api/ciphers/create") => Some(CipherCreateWrapped),
+        (_, "/api/ciphers/create") => None,
         _ => {
             if let Some(tail) = path.strip_prefix("/api/folders/") {
+                if let Some((id, "delete")) = tail.split_once('/') {
+                    return if method == Post && valid_segment(id) {
+                        Some(FolderDelete(id))
+                    } else {
+                        None
+                    };
+                }
                 if valid_segment(tail) {
                     return match method {
                         Get => Some(FolderGet(tail)),
-                        Put => Some(FolderUpdate(tail)),
+                        Put | Post => Some(FolderUpdate(tail)),
                         Delete => Some(FolderDelete(tail)),
                         _ => None,
                     };
@@ -130,6 +140,22 @@ mod tests {
     use super::*;
     #[test]
     fn routes_authentication_and_actions() {
+        assert_eq!(
+            classify(Method::Post, "/api/folders/folder-id"),
+            Some(Route::FolderUpdate("folder-id"))
+        );
+        assert_eq!(
+            classify(Method::Post, "/api/folders/folder-id/delete"),
+            Some(Route::FolderDelete("folder-id"))
+        );
+        assert_eq!(classify(Method::Post, "/api/folders/../delete"), None);
+        assert_eq!(
+            classify(Method::Post, "/api/ciphers/create"),
+            Some(Route::CipherCreateWrapped)
+        );
+        for method in [Method::Get, Method::Put, Method::Delete] {
+            assert_eq!(classify(method, "/api/ciphers/create"), None);
+        }
         assert_eq!(
             classify(Method::Post, "/api/ciphers/item-id"),
             Some(Route::CipherUpdate("item-id"))

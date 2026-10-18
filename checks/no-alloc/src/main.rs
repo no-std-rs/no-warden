@@ -6,7 +6,7 @@
 use core::{hint::black_box, panic::PanicInfo};
 use no_warden::{
     route::{Method, classify},
-    wire::{PreloginRequest, PreloginResponse},
+    wire::{CipherRequest, PreloginRequest, PreloginResponse},
 };
 
 #[unsafe(no_mangle)]
@@ -24,6 +24,15 @@ pub extern "C" fn _start() -> ! {
         &mut output,
     ));
     black_box(output);
+    let cipher = serde_json_core::from_slice::<CipherRequest<'_>>(black_box(
+        br#"{"type":1,"data":"opaque sealed blob"}"#,
+    ));
+    if let Ok((cipher, _)) = cipher {
+        let _ = black_box(no_warden::validation::validate_cipher(&cipher));
+        let mut encoded = [0u8; 2048];
+        let _ = black_box(serde_json_core::to_slice(&cipher, &mut encoded));
+        black_box(encoded);
+    }
     loop {
         core::hint::spin_loop();
     }

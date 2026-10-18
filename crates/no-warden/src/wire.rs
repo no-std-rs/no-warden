@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 pub const MAX_URIS: usize = 32;
 pub const MAX_FIELDS: usize = 64;
 pub const MAX_PASSWORD_HISTORY: usize = 32;
+pub const MAX_FIDO2_CREDENTIALS: usize = 16;
+pub const MAX_COLLECTION_IDS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -114,6 +116,27 @@ pub struct Login<'a> {
     pub uris: Option<BoundedList<LoginUri<'a>, MAX_URIS>>,
     pub password_revision_date: Option<&'a str>,
     pub autofill_on_page_load: Option<bool>,
+    #[serde(borrow)]
+    pub fido2_credentials: Option<BoundedList<Fido2Credential<'a>, MAX_FIDO2_CREDENTIALS>>,
+}
+
+/// Stored passkey material is already encrypted by the client. Creation time is plaintext.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Fido2Credential<'a> {
+    pub credential_id: Option<&'a str>,
+    pub key_type: Option<&'a str>,
+    pub key_algorithm: Option<&'a str>,
+    pub key_curve: Option<&'a str>,
+    pub key_value: Option<&'a str>,
+    pub rp_id: Option<&'a str>,
+    pub rp_name: Option<&'a str>,
+    pub counter: Option<&'a str>,
+    pub user_handle: Option<&'a str>,
+    pub user_name: Option<&'a str>,
+    pub user_display_name: Option<&'a str>,
+    pub discoverable: Option<&'a str>,
+    pub creation_date: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -187,7 +210,9 @@ pub struct PasswordHistory<'a> {
 pub struct CipherRequest<'a> {
     #[serde(rename = "type")]
     pub kind: u8,
-    pub name: &'a str,
+    pub name: Option<&'a str>,
+    /// Opaque sealed JSON string used by blob-encryption clients.
+    pub data: Option<&'a str>,
     pub notes: Option<&'a str>,
     pub folder_id: Option<&'a str>,
     pub organization_id: Option<&'a str>,
@@ -217,6 +242,16 @@ pub struct CipherRequest<'a> {
     pub last_known_revision_date: Option<&'a str>,
 }
 
+/// The clone/create endpoint wraps the cipher instead of accepting it directly.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CipherCreateRequest<'a> {
+    #[serde(borrow, alias = "Cipher")]
+    pub cipher: CipherRequest<'a>,
+    #[serde(borrow, default, alias = "CollectionIds")]
+    pub collection_ids: Option<BoundedList<&'a str, MAX_COLLECTION_IDS>>,
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListResponse<'a, T: Serialize> {
@@ -238,6 +273,7 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::string::ToString;
     #[test]
     fn borrowed_requests_and_bitwarden_field_names() {
         let request: RegisterRequest<'_> = serde_json::from_str(
@@ -280,5 +316,30 @@ mod tests {
         assert_eq!(serialized["encryptedFor"], "alice");
         assert_eq!(serialized["encryptedByKeyId"], "opaque:key/id");
         assert_eq!(serialized["key"], "wrapped-cipher-key");
+    }
+
+    #[test]
+    fn stored_passkeys_are_bounded_and_lossless() {
+        let credential = serde_json::json!({"credentialId":"opaque","keyType":"type","keyAlgorithm":"algorithm","keyCurve":"curve","keyValue":"key","rpId":"rp","rpName":"name","counter":"counter","userHandle":"handle","userName":"username","userDisplayName":"display","discoverable":"discoverable","creationDate":"2026-01-01T00:00:00Z"});
+        let input=serde_json::json!({"type":1,"name":"encrypted","login":{"fido2Credentials":[credential.clone()]}}).to_string();
+        let request: CipherRequest<'_> = serde_json::from_str(&input).unwrap();
+        let output = serde_json::to_value(&request).unwrap();
+        assert_eq!(output["login"]["fido2Credentials"][0], credential);
+        let too_many=serde_json::json!({"type":1,"login":{"fido2Credentials":std::vec![credential;MAX_FIDO2_CREDENTIALS+1]}}).to_string();
+        assert!(serde_json::from_str::<CipherRequest<'_>>(&too_many).is_err());
+    }
+
+    #[test]
+    fn blob_payload_borrows_a_callers_decoded_scratch_buffer() {
+        let blob = r#"{"format_version":1,"wrapped_cek":"opaque","envelope":"opaque"}"#;
+        let scratch = serde_json::json!({"type":1,"name":null,"data":blob});
+        let request = CipherRequest::deserialize(&scratch).unwrap();
+        assert!(request.name.is_none());
+        assert_eq!(request.data, Some(blob));
+        assert_eq!(serde_json::to_value(&request).unwrap()["data"], blob);
+        assert!(crate::validation::validate_cipher(&request).is_ok());
+        let wrapped = serde_json::json!({"Cipher":scratch,"CollectionIds":[]});
+        let request = CipherCreateRequest::deserialize(&wrapped).unwrap();
+        assert_eq!(request.cipher.data, Some(blob));
     }
 }
