@@ -25,6 +25,7 @@ pub mod domains;
 pub mod error;
 pub mod identity;
 pub mod import;
+pub mod purge;
 pub mod registration;
 pub mod route;
 pub mod service;

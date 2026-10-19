@@ -15,6 +15,7 @@ use no_warden::{
     domains::{DomainSettingsData, DomainSettingsStorage},
     identity::{ApiKeyDevice, IdentityStorage, ReauthenticationProof, Secret},
     import::{ImportData, ImportStorage, ValidatedImport},
+    purge::VaultPurgeStorage,
     registration::{RegistrationState, RegistrationStorage, ValidatedRegistration},
     service::ItemMetadata,
     wire::{
@@ -779,6 +780,22 @@ impl AccountKdfStorage for Store {
         // old refresh tokens upstream. Preserve device records and push data.
         tx.execute("DELETE FROM sessions WHERE owner=?1", [owner])?;
         tx.commit()
+    }
+}
+
+impl VaultPurgeStorage for Store {
+    fn verify_vault_purge_proof(
+        &mut self,
+        owner: &str,
+        proof: ReauthenticationProof<'_>,
+    ) -> rusqlite::Result<bool> {
+        // Protected-action OTP support remains opt-in. The existing provider
+        // rejects it; a TOTP, API secret or bearer is never a replacement proof.
+        self.verify_reauthentication(owner, proof)
+    }
+
+    fn purge_personal_vault(&mut self, owner: &str) -> rusqlite::Result<()> {
+        crate::purge::personal(&mut self.db, owner)
     }
 }
 
@@ -2327,6 +2344,236 @@ mod tests {
                 .is_none()
         );
         assert!(reopened.account("id", "alice").unwrap().unwrap()["key"] == winner);
+        drop(reopened);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    fn purge_fixture() -> Store {
+        let mut store = account_security_fixture();
+        save(
+            &mut store,
+            "alice",
+            "purge-trash",
+            "cipher",
+            Some("profile-folder"),
+        );
+        save(&mut store, "alice", "purge-archive", "cipher", None);
+        save(&mut store, "alice", "purge-folder", "folder", None);
+        save(&mut store, "bob", "purge-foreign-folder", "folder", None);
+        store.db.execute_batch("UPDATE items SET deleted=1,document=json_set(document,'$.deletedDate','2026-01-01T00:00:00.000Z') WHERE id='purge-trash';
+            INSERT OR REPLACE INTO cipher_archives(cipher_id,owner,archived_at) VALUES('purge-archive','alice','2026-01-01T00:00:00.000Z'),('profile-foreign','bob','2026-01-01T00:00:00.000Z');
+            INSERT INTO attachments(id,cipher_id,file_name,key,size,data) VALUES('purge-trash-bytes','purge-trash','opaque','opaque',3,x'00ff7f'),('purge-foreign-bytes','profile-foreign','opaque','opaque',3,x'00ff7f');
+            INSERT INTO attachment_downloads(token,attachment_id,expires) VALUES('purge-trash-capability','purge-trash-bytes',4000000000),('purge-foreign-capability','purge-foreign-bytes',4000000000);
+            INSERT INTO items(id,owner,kind,document,deleted,revision,created) VALUES('purge-future-record','alice','future','{}',0,'2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z');
+            INSERT INTO account_domains(owner,excluded_globals,equivalent_domains) VALUES('alice','[2]','[[\"opaque\"]]'),('bob','[]','[]');
+            INSERT INTO registration_metadata(owner,email_verified) VALUES('alice',1),('bob',0);
+            INSERT INTO registration_signing_key(singleton,secret) VALUES(1,randomblob(32));
+            INSERT INTO account_auth_policy(owner,enabled) VALUES('alice',1),('bob',0);
+            INSERT INTO account_password_exceptions(owner,stamp,generation,expires) VALUES('alice','preserved-exception','preserved-generation',4000000000);
+            INSERT INTO account_password_access(access,owner,identifier,stamp,access_expires) VALUES('purge-historical-access','alice','Request-Device','preserved-exception',4000000000);").unwrap();
+        store
+    }
+
+    // Snapshot strings stay inside tests; boolean comparisons never format private
+    // documents, verifier strings, token capabilities or attachment bytes on failure.
+    fn purge_snapshot(store: &Store) -> Vec<String> {
+        let mut rows = account_security_snapshot(store);
+        rows.extend(store.db.prepare("SELECT 'domains:'||owner||':'||excluded_globals||':'||equivalent_domains FROM account_domains
+            UNION ALL SELECT 'policy:'||owner||':'||enabled FROM account_auth_policy
+            UNION ALL SELECT 'registration:'||owner||':'||email_verified FROM registration_metadata
+            UNION ALL SELECT 'signer:'||singleton||':'||hex(secret) FROM registration_signing_key ORDER BY 1").unwrap().query_map([],|row|row.get::<_,String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap());
+        rows
+    }
+
+    fn purge_preserved_rows(store: &Store) -> Vec<String> {
+        purge_snapshot(store)
+            .into_iter()
+            .filter(|row| {
+                !row.starts_with("account:alice:")
+                    && ![
+                        "item:profile-folder:",
+                        "item:profile-cipher:",
+                        "item:purge-trash:",
+                        "item:purge-archive:",
+                        "item:purge-folder:",
+                        "archive:purge-archive:",
+                        "archive:profile-cipher:",
+                        "archive:purge-trash:",
+                        "attachment:profile-attachment:",
+                        "attachment:purge-trash-bytes:",
+                        "download:profile-capability:",
+                        "download:purge-trash-capability:",
+                    ]
+                    .iter()
+                    .any(|prefix| row.starts_with(prefix))
+            })
+            .collect()
+    }
+
+    fn purge_verified(store: &mut Store) -> Result<(), no_warden::ApiError> {
+        no_warden::VaultService::new(store).purge_personal_vault(
+            "alice",
+            &no_warden::wire::PasswordOrOtpRequest {
+                master_password_hash: Some(Secret::new("security-proof\0雪")),
+                otp: None,
+            },
+        )
+    }
+
+    #[test]
+    fn personal_purge_erases_every_owned_state_and_capability_preserving_account_and_foreign_data()
+    {
+        let mut store = purge_fixture();
+        let preserved = purge_preserved_rows(&store);
+        let account = store.account("id", "alice").unwrap().unwrap();
+        purge_verified(&mut store).unwrap();
+        assert!(purge_preserved_rows(&store) == preserved);
+        assert!(store.items("alice", "cipher").unwrap().is_empty());
+        assert!(store.items("alice", "folder").unwrap().is_empty());
+        assert!(
+            store
+                .item("alice", "purge-future-record", "future")
+                .unwrap()
+                .is_some()
+        );
+        let mut after = store.account("id", "alice").unwrap().unwrap();
+        assert!(after["revisionDate"] != account["revisionDate"]);
+        after["revisionDate"] = account["revisionDate"].clone();
+        assert!(after == account);
+        let old_capabilities: i64 = store.db.query_row("SELECT COUNT(*) FROM attachment_downloads WHERE token IN ('profile-capability','purge-trash-capability')",[],|row|row.get(0)).unwrap();
+        assert_eq!(old_capabilities, 0);
+        let foreign_capabilities: i64 = store
+            .db
+            .query_row(
+                "SELECT COUNT(*) FROM attachment_downloads WHERE token='purge-foreign-capability'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(foreign_capabilities, 1);
+        assert!(
+            store
+                .db
+                .prepare("PRAGMA foreign_key_check")
+                .unwrap()
+                .query([])
+                .unwrap()
+                .next()
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn personal_purge_rejects_proof_errors_without_mutations_and_repeated_empty_purge_advances_revision()
+     {
+        let mut store = purge_fixture();
+        let before = purge_snapshot(&store);
+        let changes = store.db.total_changes();
+        for (owner, request) in [
+            (
+                "alice",
+                no_warden::wire::PasswordOrOtpRequest {
+                    master_password_hash: Some(Secret::new("wrong")),
+                    otp: None,
+                },
+            ),
+            (
+                "bob",
+                no_warden::wire::PasswordOrOtpRequest {
+                    master_password_hash: Some(Secret::new("security-proof\0雪")),
+                    otp: None,
+                },
+            ),
+            (
+                "alice",
+                no_warden::wire::PasswordOrOtpRequest {
+                    master_password_hash: None,
+                    otp: Some(Secret::new("unsupported-otp")),
+                },
+            ),
+            (
+                "alice",
+                no_warden::wire::PasswordOrOtpRequest {
+                    master_password_hash: None,
+                    otp: None,
+                },
+            ),
+            (
+                "alice",
+                no_warden::wire::PasswordOrOtpRequest {
+                    master_password_hash: Some(Secret::new("security-proof\0雪")),
+                    otp: Some(Secret::new("unsupported-otp")),
+                },
+            ),
+        ] {
+            assert!(
+                no_warden::VaultService::new(&mut store)
+                    .purge_personal_vault(owner, &request)
+                    .is_err()
+            );
+            assert!(purge_snapshot(&store) == before && store.db.total_changes() == changes);
+        }
+        purge_verified(&mut store).unwrap();
+        for _ in 0..2 {
+            let revision = store.account("id", "alice").unwrap().unwrap()["revisionDate"].clone();
+            let preserved = purge_preserved_rows(&store);
+            purge_verified(&mut store).unwrap();
+            assert!(store.account("id", "alice").unwrap().unwrap()["revisionDate"] != revision);
+            assert!(purge_preserved_rows(&store) == preserved);
+        }
+    }
+
+    #[test]
+    fn personal_purge_rolls_back_cascade_folder_revision_and_deferred_commit_failures() {
+        for phase in 0..7 {
+            let mut store = purge_fixture();
+            let before = purge_snapshot(&store);
+            store.db.execute_batch(match phase {
+                0=>"CREATE TRIGGER reject_purge BEFORE DELETE ON items WHEN OLD.kind='cipher' BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                1=>"CREATE TRIGGER reject_purge BEFORE DELETE ON attachments BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                2=>"CREATE TRIGGER reject_purge BEFORE DELETE ON attachment_downloads BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                3=>"CREATE TRIGGER reject_purge BEFORE DELETE ON items WHEN OLD.kind='folder' BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                4=>"CREATE TRIGGER reject_purge BEFORE UPDATE OF revision ON accounts BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                5=>"CREATE TRIGGER reject_purge AFTER DELETE ON items WHEN OLD.kind='folder' BEGIN SELECT RAISE(FAIL,'fixture'); END;",
+                _=>"CREATE TABLE failed_purge_commit(owner TEXT REFERENCES accounts(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER reject_purge AFTER UPDATE OF revision ON accounts BEGIN INSERT INTO failed_purge_commit(owner) VALUES('missing'); END;",
+            }).unwrap();
+            assert!(purge_verified(&mut store).is_err());
+            assert!(
+                purge_snapshot(&store) == before,
+                "A failed purge leaked a partial mutation."
+            );
+            store.db.execute_batch("DROP TRIGGER reject_purge").unwrap();
+            purge_verified(&mut store).unwrap();
+        }
+    }
+
+    #[test]
+    fn personal_purge_cleanup_and_preserved_authority_survive_private_database_reopen() {
+        let directory = std::env::temp_dir().join(format!(
+            "no-warden-purge-persistence-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let path = directory.join("vault.db");
+        let mut store = purge_fixture();
+        purge_verified(&mut store).unwrap();
+        let before = purge_snapshot(&store);
+        store
+            .db
+            .execute("VACUUM INTO ?1", [path.to_str().unwrap()])
+            .unwrap();
+        drop(store);
+        let mut reopened = Store::open(path.to_str().unwrap()).unwrap();
+        assert!(purge_snapshot(&reopened) == before);
+        let preserved = purge_preserved_rows(&reopened);
+        purge_verified(&mut reopened).unwrap();
+        assert!(purge_preserved_rows(&reopened) == preserved);
         drop(reopened);
         std::fs::remove_dir_all(directory).unwrap();
     }

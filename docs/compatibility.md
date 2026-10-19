@@ -36,6 +36,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | API surface | Standalone behavior | Verification |
 | --- | --- | --- |
 | `GET /api/config` | Endpoint discovery | Real CLI |
+| `POST /api/ciphers/purge` | Password-reauthenticated personal cipher/folder/attachment cleanup, revision advance and preserved account authority | Six matching Rust HTTP cases on both actual servers; core/provider and local rollback/reopen tests; no CLI purge caller claim |
 | `GET /api/webauthn` | Fixed empty credential metadata, authenticated owned-device access and existing previous-stamp guards | Six matching Rust HTTP cases against both actual servers; no passkey or CLI call claim |
 | `POST /api/accounts/register` | Legacy strict registration with encrypted keys | Cryptographic fixture |
 | `POST /identity/accounts/register/send-verification-email`, `POST /identity/accounts/register/finish` | No-SMTP new-account verification token and canonical atomic completion; old/current credential shapes | Eight matching corrected Rust HTTP cases on both actual servers; borrowed opt-in core/provider and host parser, token, rollback/reopen and HTTP-dispatch tests; fresh unchanged CLI regression remains separate |
@@ -74,7 +75,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Provider conflict errors | `Storage::map_error` can preserve an HTTP 409 conflict | Core provider tests |
 
 The allocation-free core's models include login, secure note, card, identity,
-and SSH-key items, plus optional opaque blob data. Its 182 unit tests cover the
+and SSH-key items, plus optional opaque blob data. Its 190 unit tests cover the
 typed fields, bounded collections and import decoding, validation, ownership,
 lifecycle rules, folder mapping, the atomic import and bulk provider contracts,
 API-key proof selection and authorization, and attachment lifecycle and provider
@@ -98,7 +99,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 406 active workspace unit tests pass: 182 core, 149 host and 75 support,
+All 422 active workspace unit tests pass: 190 core, 156 host and 76 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -765,7 +766,7 @@ HTTP requests and one password grant exclude bootstrap and CLI-internal HTTP.
 No CLI-posted password endpoint or captured request trace is inferred.
 
 
-The final local regression passes all 104 HTTP cases with 4499 tracked
+The preceding password milestone passed all 104 local HTTP cases with 4499 tracked
 requests across thirteen groups, including real authentication-request and
 password-exception expiry. The unchanged official CLI 2026.10.0 baseline passes
 all 120 commands against each actual server, separately from the focused KDF
@@ -790,3 +791,30 @@ Primary references and exclusions are recorded in the
 [API parity notes](api-parity.md#webauthn-credential-metadata-subset). Current-bearer
 device recreation, generic HEAD/OPTIONS behavior, JWT leeway, complete transport
 errors and actual passkey operations remain unverified or unsupported.
+
+## Personal vault purge
+
+`POST /api/ciphers/purge` has an allocation-free proof/provider contract and a
+personal-only adapter implementation. Exactly one existing password or
+protected-action OTP proof is selected before mutation; the host supports the
+password branch. Success removes the owner's active, trashed and archived
+personal ciphers, all owned folders and removed-item attachments/capabilities,
+then advances revision even for an empty vault. Credentials, keys, sessions,
+devices, settings, auth requests and foreign vault state survive.
+
+The local provider commits cleanup and revision atomically, stronger than the
+sequential upstream failure behavior. Separate proof consumption does not gain
+an automatic rollback guarantee. Recognized organization-query roots select
+organization authorization and cannot silently purge the personal vault; that
+organization operation remains unimplemented. All six selected Rust HTTP cases
+pass against the actual adapter and Vaultwarden 1.37.4: 327 counted requests each,
+six identity requests (five successful grants and one refresh), three auth-request
+creations, three polls and eight successful purges. Two shared fixture
+registrations are excluded; the single peer stays below unchanged reference
+limits. The suite verifies empty active/trash/archive lists, foreign bytes and
+authority preservation, and direct Rust decryption of a newly created post-purge
+item. Fresh capability URLs return exact bytes before purge, then owned URLs
+fail while foreign bytes remain available within a 30-second proof window.
+Physical BLOB/grant/row deletion remains separate local SQL evidence. Source references and scope limits are recorded in the
+[parity notes](api-parity.md#personal-vault-purge-subset); the existing CLI120
+baseline adds no purge caller or route trace.

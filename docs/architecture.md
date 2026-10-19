@@ -660,3 +660,36 @@ writes. Upstream event logging before semantic validation, logout notifications,
 remembered 2FA and all missing exception routes remain adapter gaps. The inherited
 strict access-expiry check does not implement upstream JWT's 30-second leeway;
 no exception extends a token's original access lifetime.
+
+## Reauthenticated personal vault purge
+
+The opt-in `purge::VaultPurgeStorage` extends `Storage` with independent proof
+verification and personal-vault persistence operations. The allocation-free
+`VaultService::purge_personal_vault` first requires an authenticated owner, then
+selects exactly one proof from the existing borrowed `PasswordOrOtpRequest`.
+It calls `verify_vault_purge_proof` before `purge_personal_vault`; no API-key or
+account-security provider trait is required. The core owns no HTTP query parser,
+password verifier, clock, token issuer, database or allocator.
+
+The adapter resolves personal versus organization scope before allowing the
+personal service. A recognized `organizationId` query root cannot authorize a
+personal deletion, even if its string is empty or not a UUID. The provider owns
+all cleanup: personal cipher/folder rows, attachment bytes and download grants,
+and associated folder/archive state. It advances account revision even for an
+empty vault, while preserving credentials, key material, stamp/exception,
+sessions, devices, API secrets, auth requests, settings and foreign state.
+
+The provider contract makes the purge mutation and revision atomic. This is
+stronger than upstream's sequential cipher/folder deletions and final revision
+write, including filesystem failures after earlier database changes. Proof
+verification is a separate operation: a protected-action OTP may be consumed
+before a later purge failure, and the core does not promise rollback of that
+consumption. Providers can supply a stronger combined transaction. The standalone
+host supports password proofs; successful protected-action OTP and notification
+delivery remain separate capabilities. Six direct Rust cases pass against the
+actual adapter and Vaultwarden 1.37.4, including empty server lists, fresh
+capability revocation within a 30-second window and preserved authority followed
+by authenticated decryption of a newly created item. Local
+SQL tests establish physical BLOB/grant/row deletion, rollback and durable reopen;
+they establish provider guarantees
+without asserting identical upstream failure semantics.

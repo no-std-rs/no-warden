@@ -39,11 +39,11 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 83 routed patterns, 47 with typed requests, 71 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 84 routed patterns, 48 with typed requests, 72 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 80 partial and 214 unimplemented. Query/rank/configuration
+status: 81 partial and 213 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
@@ -54,8 +54,8 @@ responses, and attachment responses. Bulk cipher lists use the generic `ListResp
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 75 patterns, negative
-HTTP evidence for 74, 171 named HTTP cases, and 31 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 76 patterns, negative
+HTTP evidence for 75, 177 named HTTP cases, and 31 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -848,7 +848,7 @@ HTTP requests and one password grant exclude bootstrap and CLI-internal HTTP.
 No CLI-posted password endpoint or captured request trace is inferred.
 
 
-The final local regression passes all 104 HTTP cases with 4499 tracked
+The preceding password milestone passed all 104 local HTTP cases with 4499 tracked
 requests across thirteen groups, including real authentication-request and
 password-exception expiry. The unchanged official CLI 2026.10.0 baseline passes
 all 120 commands against each actual server, separately from the focused KDF
@@ -893,3 +893,53 @@ seconds before proving one-time cleanup. Current-bearer device recreation,
 isolated JWT expiry/leeway, generic HEAD/OPTIONS behavior, full transport/error/configuration variants, actual
 passkey operations and the contacts/rotation contracts remain separate gaps.
 Full-parity and captured-request-trace claims remain false.
+
+## Personal vault purge subset
+
+`POST /api/ciphers/purge` adds a substantive personal-vault operation using the
+existing borrowed `PasswordOrOtpRequest` and new `purge::VaultPurgeStorage`.
+`VaultService::purge_personal_vault` verifies the authenticated owner and exactly
+one proof before invoking the provider. Success is a unit result and empty HTTP
+200; there is no new typed JSON response. The core remains allocation-free.
+
+The [pinned handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L1703-L1775)
+and [Vaultwarden 1.37.4 release](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/ciphers.rs#L1703-L1775)
+match exactly. Personal purge removes all owned personal ciphers and folders and
+updates revision even when already empty. The provider also cleans attachments,
+download capabilities and association/annotation rows, while preserving account,
+credential, session, device, key and authentication-request authority. Local
+atomic mutation/revision rollback is stronger than upstream's sequential failure
+behavior. OTP consumption is not implicitly included in that rollback promise.
+
+The ranked organization handler remains a separate unimplemented entry among
+all 294 inventoried handlers. Query selection is case-sensitive and uses Rocket
+form-name roots and string parsing, not path UUID validation. Present empty or
+non-UUID `organizationId` values still select organization authorization and fail
+401 for a personal account. Missing, unrelated or differently cased fields select
+the personal handler. See the [protocol notes](protocol.md#personal-vault-purge)
+for the proof schema and guard distinctions. These rejection checks do not
+implement organization purge.
+
+The [shared TS API](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/services/api.service.ts#L435-L443)
+and [generated bundled SDK](https://github.com/bitwarden/sdk-internal/blob/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6/crates/bitwarden-api-api/src/apis/ciphers_api.rs#L857-L877)
+construct this authenticated request. No actual CLI purge caller has been
+established. The existing official CLI regression remains separate evidence,
+without a new purge call or captured request trace.
+
+All six selected Rust cases pass against the actual adapter and Vaultwarden
+1.37.4: 327 counted HTTP requests per server, six identity requests (five
+successful grants and one refresh), three authentication-request creations and
+three public polls. Eight successful purge requests cover initial cleanup,
+repeated empty operations, alias/positional proofs and unknown/wrong-case query
+selection. The two shared fixture registrations are excluded. All six identity
+requests use one direct loopback peer under the unchanged ten-attempt limit.
+The suite checks all eleven recognized organization-query forms reject without
+mutation; empty active/trash/archive server lists; foreign attachment bytes and
+account authority; and direct Rust decryption of a fresh post-purge item.
+The suite obtains fresh capabilities for three owned attachments and one
+foreign attachment, verifies exact bytes with successful pre-purge downloads,
+then proves owned URLs return 404 while the foreign URL remains byte-exact 200.
+The entire issuance/check/purge sequence must finish within 30 seconds, before
+the source's 60-second capability expiry. Physical attachment BLOB/grant/row
+deletion is established separately by local SQL tests. Full parity, organization purge, successful protected-action
+OTP, notifications and complete transport/error variants remain open.
