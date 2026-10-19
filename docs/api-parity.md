@@ -39,25 +39,25 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 102 routed patterns, 54 with typed requests, 95 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 105 routed patterns, 55 with typed requests, 98 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 99 partial and 195 unimplemented. Query/rank/configuration
+status: 102 partial and 192 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
 
-47 local patterns have some typed response representation, including
+50 local patterns have some typed response representation, including
 the domain settings projections and empty mutation response, explicit API-key
 responses, and attachment responses. Bulk cipher lists use the generic `ListResponse`
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 96 patterns, negative
-HTTP evidence for 95, 233 named HTTP cases, and 46 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 99 patterns, negative
+HTTP evidence for 98, 239 named HTTP cases, and 49 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -1266,8 +1266,36 @@ password logins, one direct setup login and thirteen direct HTTP requests,
 excluding one registration. It verifies membership and decrypted initial
 collections after login, unlock and fresh-cache login, with preserved personal
 note decryption. Cached reads do not prove direct discovery endpoint calls.
-The ledger binds 119 source hashes and adds two existing CLI command forms to
-its catalog: organization and collection lists. Full-parity and captured-trace
+At that milestone the ledger bound 119 source hashes and added two CLI command
+forms: organization and collection lists. Full-parity and captured-trace
 catalogs stay empty. Corrected raw-segment classification passes dotted-ID
 401/422 and percent-encoded valid-UUID regression checks in the expanded
 137-request comparison.
+
+## Organization-scoped collection subset
+
+Three more registered handlers cover organization collection list, creation and
+single access-details. `OrganizationCollectionStorage` and borrowed service
+contracts apply confirmed-manager, full-access, reference and association checks
+without allocation. The typed responses are a basic collection list,
+`collectionDetails` on creation and the distinct thirteen-field
+`collectionAccessDetails` on a single read. Existing profile/sync responses
+remain adapter-built; their collection components do not complete either route.
+
+Source pin and release 1.37.4 agree on these contracts. List/create use loose
+manager guards; single read requires global manageability before path guards
+and then enforces organization association. Atomic local collection/grant/revision
+persistence strengthens upstream sequential writes. Owner creation does not
+implement invitations, arbitrary member/group administration, collection
+update/delete, aggregate access-details, organization ciphers or full policies.
+All six selected HTTP cases pass both actual servers with 194 counted requests,
+two password logins and two refreshes, excluding two modern fixtures/four
+registration requests. They include five collection creates and preserve full
+membership arrays and foreign/same-owner-other-organization collection baselines.
+The separate official CLI `2026.10.0` comparison passes nineteen commands on both:
+production list/create/get, decrypted collection names and fresh-cache recovery,
+with fourteen direct HTTP requests, two CLI logins and one direct login. One
+registration/two requests is excluded; client internals are uncounted and untraced.
+The ledger binds 124 source hashes. All 294 handler identities, partial variants
+and remaining families stay on the delivery roadmap; no full or captured-trace
+status is enabled.

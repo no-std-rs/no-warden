@@ -993,3 +993,26 @@ records. Whole profile and sync responses remain adapter-built. An
 organization-aware deletion provider must reject a last confirmed owner before
 cleanup. General administration, invitations, sharing and policy management are
 outside this boundary.
+
+## Organization-scoped collections
+
+`OrganizationCollectionStorage` extends the opt-in organization provider without
+changing existing implementations. Borrowed `CollectionCreateData` views have
+no intrinsic count cap; `OrganizationCollectionCreateRequest<G, U>` offers a
+caller-bounded decoder. `VaultService` separates confirmed-manager guards,
+global collection manageability and handler association checks. Public list,
+create-details and access-details serializers retain their distinct seven,
+ten and thirteen-field projections. ACL response flags come from trusted
+effective permissions, not raw request authority.
+
+The host authenticates a current device before raw path/query guards and JSON
+decoding. Creation validates group references before membership references,
+skips direct writes for `access_all` selections, and atomically stages collection,
+direct grants, affected account revisions and the response before commit.
+Owner/Admin role shortcuts differ from revision propagation, which uses
+`access_all` and explicit grants. This atomic boundary is stronger than upstream
+sequential persistence. Imported ACL states have local provider tests; the
+portable scope is created owners, not an implemented member-administration
+lifecycle. The adapter has no group rows or administration and rejects unknown
+groups rather than discarding requested grants. Generic providers remain
+responsible for group storage, configured policy and effective permissions.

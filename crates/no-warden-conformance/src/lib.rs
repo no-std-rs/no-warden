@@ -22,6 +22,8 @@ pub mod file_sends;
 pub mod file_sends_cli;
 pub mod fixture;
 pub mod folders;
+pub mod organization_collections;
+pub mod organization_collections_cli;
 pub mod organization_owner;
 pub mod organization_owner_cli;
 pub mod password_login;

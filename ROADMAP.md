@@ -45,6 +45,7 @@ invoke the pinned official Bitwarden CLI as an external process.
 - [ ] Device sessions, token rotation, revocation, account lifecycle and recovery.
 - [ ] Organizations, collections, sharing and permissions.
 - [x] Organization-owner creation/discovery subset: allocation-free policy/provider and typed membership/collection projections, six matching actual HTTP cases and nineteen matching official CLI commands with collection decryption. General administration and sharing remain open.
+- [x] Organization collection create/list/single-detail subset: allocation-free opt-in provider and typed 7/10/13-field projections, six matching actual HTTP cases and nineteen matching official CLI commands with encrypted-name decryption and fresh-cache reads. Updates/deletes, general ACL/group lifecycle and sharing remain open.
 - [ ] Attachments, Sends, event notifications and websocket transport.
 - [ ] Two-factor authentication, passkeys, SSO and administrative APIs.
 - [ ] Full import/export compatibility, remaining formats and variants, and upstream protocol regression fixtures.

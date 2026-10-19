@@ -54,6 +54,9 @@ pub enum Route<'a> {
     Sync,
     OrganizationCreate,
     OrganizationGet(&'a str),
+    OrganizationCollections(&'a str),
+    OrganizationCollectionCreate(&'a str),
+    OrganizationCollectionDetails(&'a str, &'a str),
     Collections,
     SendList,
     SendGet(&'a str),
@@ -225,6 +228,22 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         ) => None,
         _ => {
             if let Some(id) = path.strip_prefix("/api/organizations/") {
+                if let Some((organization, action)) = id.split_once('/') {
+                    if organization.is_empty() {
+                        return None;
+                    }
+                    return match (method, action) {
+                        (Get, "collections") => Some(OrganizationCollections(organization)),
+                        (Post, "collections") => Some(OrganizationCollectionCreate(organization)),
+                        (Get, action) => {
+                            let rest = action.strip_prefix("collections/")?;
+                            let collection = rest.strip_suffix("/details")?;
+                            (!collection.is_empty() && !collection.contains('/'))
+                                .then_some(OrganizationCollectionDetails(organization, collection))
+                        }
+                        _ => None,
+                    };
+                }
                 // Request authentication and the adapter's decoded UUID guard run
                 // before rejecting malformed IDs, including owned query fallbacks.
                 return (method == Get && !id.is_empty() && !id.contains('/'))
@@ -416,7 +435,7 @@ mod tests {
         for path in [
             "/api/organizations/",
             "/api/organizations//",
-            "/api/organizations/bad.id/collections",
+            "/api/organizations/bad.id/collections/unknown",
         ] {
             assert_eq!(classify(Method::Get, path), None);
         }
@@ -449,8 +468,57 @@ mod tests {
             (Method::Put, "/api/organizations/raw-id"),
             (Method::Delete, "/api/organizations/raw-id"),
             (Method::Post, "/api/collections"),
-            (Method::Get, "/api/organizations/raw-id/collections"),
+            (Method::Get, "/api/organizations/raw-id/collections/unknown"),
             (Method::Get, "/api/organizations//"),
+        ] {
+            assert_eq!(classify(method, path), None);
+        }
+    }
+
+    #[test]
+    fn organization_collection_routes_preserve_raw_guard_inputs_and_exact_shapes() {
+        for org in [
+            "bad.id",
+            "%300000000-0000-0000-0000-000000000001",
+            "malformed%",
+        ] {
+            for (method, suffix, expected) in [
+                (
+                    Method::Get,
+                    "collections",
+                    Route::OrganizationCollections(org),
+                ),
+                (
+                    Method::Post,
+                    "collections",
+                    Route::OrganizationCollectionCreate(org),
+                ),
+                (
+                    Method::Get,
+                    "collections/bad.col/details",
+                    Route::OrganizationCollectionDetails(org, "bad.col"),
+                ),
+            ] {
+                let path = std::format!("/api/organizations/{org}/{suffix}/?organizationId=owned");
+                assert_eq!(classify(method, &path), Some(expected));
+                assert!(expected.requires_authentication());
+            }
+        }
+        for (method, path) in [
+            (Method::Put, "/api/organizations/org/collections"),
+            (Method::Delete, "/api/organizations/org/collections"),
+            (
+                Method::Post,
+                "/api/organizations/org/collections/col/details",
+            ),
+            (Method::Get, "/api/organizations/org/collections/details"),
+            (Method::Get, "/api/organizations/org/collections/col"),
+            (Method::Get, "/api/organizations/org/collections//details"),
+            (Method::Get, "/api/organizations//collections"),
+            (
+                Method::Get,
+                "/api/organizations/org/collections/col/extra/details",
+            ),
         ] {
             assert_eq!(classify(method, path), None);
         }

@@ -1984,6 +1984,11 @@ impl Serialize for CollectionResponse<'_> {
 pub struct CollectionDetailsResponse<'a> {
     record: crate::organizations::UserCollectionRecord<'a>,
 }
+impl<'a> CollectionDetailsResponse<'a> {
+    pub(crate) const fn new(record: crate::organizations::UserCollectionRecord<'a>) -> Self {
+        Self { record }
+    }
+}
 impl Serialize for CollectionDetailsResponse<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
@@ -2265,6 +2270,180 @@ impl<L: crate::organizations::OrganizationProfileListData> Serialize
             }
         }
         seq.end()
+    }
+}
+
+/// Required selection flags and raw group/membership identifier, in positional source order.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionSelectionRequest<'a> {
+    pub hide_passwords: bool,
+    pub id: &'a str,
+    pub read_only: bool,
+    pub manage: bool,
+}
+impl core::fmt::Debug for CollectionSelectionRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("CollectionSelectionRequest([REDACTED])")
+    }
+}
+
+/// Optional bounded decoder. Caps belong to its caller, not the collection service.
+/// Hosts with owned vectors can instead implement CollectionCreateData without a cap.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizationCollectionCreateRequest<'a, const G: usize, const U: usize> {
+    pub name: &'a str,
+    #[serde(borrow)]
+    pub groups: crate::bounded::BoundedList<CollectionSelectionRequest<'a>, G>,
+    #[serde(borrow)]
+    pub users: crate::bounded::BoundedList<CollectionSelectionRequest<'a>, U>,
+    pub external_id: Option<&'a str>,
+}
+impl<const G: usize, const U: usize> core::fmt::Debug
+    for OrganizationCollectionCreateRequest<'_, G, U>
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationCollectionCreateRequest([REDACTED])")
+    }
+}
+
+/// Organization-wide basic collection list after full-access authorization.
+pub struct OrganizationCollectionListResponse<L> {
+    records: L,
+}
+impl<L> OrganizationCollectionListResponse<L> {
+    pub(crate) const fn new(records: L) -> Self {
+        Self { records }
+    }
+}
+impl<L> core::fmt::Debug for OrganizationCollectionListResponse<L> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationCollectionListResponse([REDACTED])")
+    }
+}
+impl<L: crate::organization_collections::CollectionListData> Serialize
+    for OrganizationCollectionListResponse<L>
+{
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(3))?;
+        map.serialize_entry("data", &OrganizationCollectionArray(&self.records))?;
+        map.serialize_entry("object", "list")?;
+        map.serialize_entry("continuationToken", &Option::<&str>::None)?;
+        map.end()
+    }
+}
+struct OrganizationCollectionArray<'a, L>(&'a L);
+impl<L: crate::organization_collections::CollectionListData> Serialize
+    for OrganizationCollectionArray<'_, L>
+{
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
+        for index in 0..self.0.len() {
+            let record = self.0.get(index).ok_or_else(|| {
+                serde::ser::Error::custom("Incomplete organization collection view")
+            })?;
+            seq.serialize_element(&CollectionResponse::new(record))?;
+        }
+        seq.end()
+    }
+}
+
+/// Single-collection 13-field access details. No aggregate-only unmanaged field or
+/// synthesized manage-all members are inserted. Internal associations never serialize.
+pub struct CollectionAccessDetailsResponse<D> {
+    details: D,
+}
+impl<D> CollectionAccessDetailsResponse<D> {
+    pub(crate) const fn new(details: D) -> Self {
+        Self { details }
+    }
+}
+impl<D> core::fmt::Debug for CollectionAccessDetailsResponse<D> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("CollectionAccessDetailsResponse([REDACTED])")
+    }
+}
+impl<D: crate::organization_collections::CollectionAccessData> Serialize
+    for CollectionAccessDetailsResponse<D>
+{
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let row = self.details.collection();
+        let mut map = serializer.serialize_map(Some(13))?;
+        map.serialize_entry("id", row.collection.id)?;
+        map.serialize_entry("organizationId", row.collection.organization_id)?;
+        map.serialize_entry("name", row.collection.name)?;
+        map.serialize_entry("externalId", &row.collection.external_id)?;
+        map.serialize_entry("type", &0)?;
+        map.serialize_entry("defaultUserCollectionEmail", &Option::<&str>::None)?;
+        map.serialize_entry("object", "collectionAccessDetails")?;
+        map.serialize_entry("readOnly", &row.read_only)?;
+        map.serialize_entry("hidePasswords", &row.hide_passwords)?;
+        map.serialize_entry("manage", &row.manage)?;
+        map.serialize_entry("assigned", &self.details.assigned())?;
+        map.serialize_entry(
+            "users",
+            &CollectionAccessSelections {
+                details: &self.details,
+                groups: false,
+            },
+        )?;
+        map.serialize_entry(
+            "groups",
+            &CollectionAccessSelections {
+                details: &self.details,
+                groups: true,
+            },
+        )?;
+        map.end()
+    }
+}
+struct CollectionAccessSelections<'a, D> {
+    details: &'a D,
+    groups: bool,
+}
+impl<D: crate::organization_collections::CollectionAccessData> Serialize
+    for CollectionAccessSelections<'_, D>
+{
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let len = if self.groups {
+            if self.details.groups_enabled() {
+                self.details.groups_len()
+            } else {
+                0
+            }
+        } else {
+            self.details.users_len()
+        };
+        let mut seq = serializer.serialize_seq(Some(len))?;
+        for index in 0..len {
+            let entry = if self.groups {
+                self.details.group(index)
+            } else {
+                self.details.user(index)
+            }
+            .ok_or_else(|| serde::ser::Error::custom("Incomplete collection selection view"))?;
+            seq.serialize_element(&CollectionAccessSelectionResponse(entry))?;
+        }
+        seq.end()
+    }
+}
+struct CollectionAccessSelectionResponse<'a>(
+    crate::organization_collections::CollectionAccessEntry<'a>,
+);
+impl Serialize for CollectionAccessSelectionResponse<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(4))?;
+        map.serialize_entry("id", self.0.id)?;
+        map.serialize_entry("readOnly", &self.0.read_only)?;
+        map.serialize_entry("hidePasswords", &self.0.hide_passwords)?;
+        map.serialize_entry("manage", &self.0.manage)?;
+        map.end()
     }
 }
 

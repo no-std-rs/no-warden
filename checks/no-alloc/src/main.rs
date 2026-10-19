@@ -14,6 +14,10 @@ use no_warden::{
     devices::{DeviceRecord, PendingDeviceAuthRequest},
     domains::{DomainProjection, DomainSettingsView, GlobalDomain},
     identity::Secret,
+    organization_collections::{
+        CollectionAccessData, CollectionAccessEntry, CollectionCreateData, CollectionListData,
+        OrganizationCollectionMembership, OrganizationCollectionStorage, ValidatedCollectionCreate,
+    },
     organizations::{
         CollectionRecord, OrganizationCreationPolicy, OrganizationFeatures, OrganizationMembership,
         OrganizationProfileListData, OrganizationProfileRecord, OrganizationRecord,
@@ -42,14 +46,14 @@ use no_warden::{
         DeviceResponse, DomainSettingsRequest, DomainSettingsResponse,
         DomainSettingsUpdateResponse, FileSendRequest, FolderRequest, ImportRequest,
         InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
-        MasterPasswordPolicy, MasterPasswordPolicyResponse, OrganizationCreateRequest,
-        OrganizationPlanType, PasswordLoginRequest, PasswordOrOtpRequest, PreloginKdfSettings,
-        PreloginRequest, PreloginResponse, ProfileUpdateRequest, RefreshTokenRequest,
-        RegisterRequest, RegistrationAuthentication, RegistrationCredentials,
-        RegistrationFinishRequest, RegistrationFinishResponse, RegistrationUnlock,
-        RegistrationVerificationRequest, RegistrationVerificationToken, SecretVerificationRequest,
-        SendAccessTokenRequest, SendFileData, TextSendRequest, UserKeyIdRequest,
-        UserPublicKeyResponse, WebAuthnCredentialsResponse,
+        MasterPasswordPolicy, MasterPasswordPolicyResponse, OrganizationCollectionCreateRequest,
+        OrganizationCreateRequest, OrganizationPlanType, PasswordLoginRequest,
+        PasswordOrOtpRequest, PreloginKdfSettings, PreloginRequest, PreloginResponse,
+        ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest, RegistrationAuthentication,
+        RegistrationCredentials, RegistrationFinishRequest, RegistrationFinishResponse,
+        RegistrationUnlock, RegistrationVerificationRequest, RegistrationVerificationToken,
+        SecretVerificationRequest, SendAccessTokenRequest, SendFileData, TextSendRequest,
+        UserKeyIdRequest, UserPublicKeyResponse, WebAuthnCredentialsResponse,
     },
 };
 
@@ -75,6 +79,11 @@ struct PurgeProbe {
     collection_name: [u8; 64],
     collection_name_len: usize,
     organization_keys: bool,
+    added_collection: bool,
+    added_collection_name: [u8; 64],
+    added_collection_name_len: usize,
+    added_external: [u8; 64],
+    added_external_len: Option<usize>,
 }
 impl PurgeProbe {
     fn organization_record(&self) -> OrganizationRecord<'_> {
@@ -196,20 +205,7 @@ impl UserCollectionListData for OrganizationProbeCollections<'_> {
         usize::from(self.0.organization_present)
     }
     fn get(&self, index: usize) -> Option<UserCollectionRecord<'_>> {
-        (index == 0 && self.0.organization_present).then(|| UserCollectionRecord {
-            collection: CollectionRecord {
-                id: "embedded-collection",
-                organization_id: "embedded-org",
-                name: core::str::from_utf8(&self.0.collection_name[..self.0.collection_name_len])
-                    .unwrap_or_default(),
-                external_id: None,
-            },
-            membership: self.0.membership(),
-            readable: true,
-            read_only: false,
-            hide_passwords: false,
-            manage: true,
-        })
+        (index == 0 && self.0.organization_present).then(|| self.0.initial_collection_row())
     }
 }
 impl OrganizationStorage for PurgeProbe {
@@ -274,6 +270,168 @@ impl OrganizationStorage for PurgeProbe {
     }
     fn profile_organizations(&mut self, _: &str) -> Result<Self::Profiles<'_>, ()> {
         Ok(OrganizationProbeProfiles(self))
+    }
+}
+
+struct OrgCollectionProbe<'a>(&'a PurgeProbe);
+impl CollectionListData for OrgCollectionProbe<'_> {
+    fn len(&self) -> usize {
+        usize::from(self.0.organization_present) + usize::from(self.0.added_collection)
+    }
+    fn get(&self, index: usize) -> Option<CollectionRecord<'_>> {
+        match index {
+            0 if self.0.organization_present => Some(self.0.initial_collection_row().collection),
+            1 if self.0.added_collection => Some(self.0.added_collection_record()),
+            _ => None,
+        }
+    }
+}
+struct OrgCollectionDetailsProbe<'a> {
+    provider: &'a PurgeProbe,
+    added: bool,
+}
+impl CollectionAccessData for OrgCollectionDetailsProbe<'_> {
+    fn collection(&self) -> UserCollectionRecord<'_> {
+        if self.added {
+            self.provider.added_collection_row()
+        } else {
+            self.provider.initial_collection_row()
+        }
+    }
+    fn assigned(&self) -> bool {
+        true
+    }
+    fn users_len(&self) -> usize {
+        0
+    }
+    fn user(&self, _: usize) -> Option<CollectionAccessEntry<'_>> {
+        None
+    }
+    fn groups_enabled(&self) -> bool {
+        false
+    }
+    fn groups_len(&self) -> usize {
+        0
+    }
+    fn group(&self, _: usize) -> Option<CollectionAccessEntry<'_>> {
+        None
+    }
+}
+impl PurgeProbe {
+    fn initial_collection_row(&self) -> UserCollectionRecord<'_> {
+        UserCollectionRecord {
+            collection: CollectionRecord {
+                id: "embedded-collection",
+                organization_id: "embedded-org",
+                name: core::str::from_utf8(&self.collection_name[..self.collection_name_len])
+                    .unwrap_or_default(),
+                external_id: None,
+            },
+            membership: self.membership(),
+            readable: true,
+            read_only: false,
+            hide_passwords: false,
+            manage: true,
+        }
+    }
+    fn added_collection_record(&self) -> CollectionRecord<'_> {
+        CollectionRecord {
+            id: "embedded-added-collection",
+            organization_id: "embedded-org",
+            name: core::str::from_utf8(
+                &self.added_collection_name[..self.added_collection_name_len],
+            )
+            .unwrap_or_default(),
+            external_id: self
+                .added_external_len
+                .map(|len| core::str::from_utf8(&self.added_external[..len]).unwrap_or_default()),
+        }
+    }
+    fn added_collection_row(&self) -> UserCollectionRecord<'_> {
+        UserCollectionRecord {
+            collection: self.added_collection_record(),
+            membership: self.membership(),
+            readable: true,
+            read_only: false,
+            hide_passwords: false,
+            manage: true,
+        }
+    }
+}
+impl OrganizationCollectionStorage for PurgeProbe {
+    type OrgCollections<'a> = OrgCollectionProbe<'a>;
+    type AccessDetails<'a> = OrgCollectionDetailsProbe<'a>;
+    fn collection_membership(
+        &mut self,
+        owner: &str,
+        organization: &str,
+    ) -> Result<Option<OrganizationCollectionMembership<'_>>, ()> {
+        Ok((self.organization_present
+            && owner == "embedded-owner"
+            && organization == "embedded-org")
+            .then(|| OrganizationCollectionMembership {
+                membership: self.membership(),
+                access_all: true,
+            }))
+    }
+    fn org_collections(&mut self, _: &str) -> Result<Self::OrgCollections<'_>, ()> {
+        Ok(OrgCollectionProbe(self))
+    }
+    fn can_manage_collection(&mut self, owner: &str, collection: &str) -> Result<bool, ()> {
+        Ok(owner == "embedded-owner"
+            && ((collection == "embedded-collection" && self.organization_present)
+                || (collection == "embedded-added-collection" && self.added_collection)))
+    }
+    fn collection_access_details(
+        &mut self,
+        _: &str,
+        collection: &str,
+    ) -> Result<Option<Self::AccessDetails<'_>>, ()> {
+        Ok(match collection {
+            "embedded-collection" if self.organization_present => Some(OrgCollectionDetailsProbe {
+                provider: self,
+                added: false,
+            }),
+            "embedded-added-collection" if self.added_collection => {
+                Some(OrgCollectionDetailsProbe {
+                    provider: self,
+                    added: true,
+                })
+            }
+            _ => None,
+        })
+    }
+    fn collection_group_exists(&mut self, _: &str, _: &str) -> Result<bool, ()> {
+        Ok(false)
+    }
+    fn collection_member_exists(&mut self, organization: &str, member: &str) -> Result<bool, ()> {
+        Ok(organization == "embedded-org" && member == "embedded-member")
+    }
+    fn create_collection<D: CollectionCreateData + ?Sized>(
+        &mut self,
+        owner: &str,
+        organization: &str,
+        plan: &ValidatedCollectionCreate<'_, D>,
+    ) -> Result<UserCollectionRecord<'_>, ()> {
+        let name = plan.request().name().as_bytes();
+        let external = plan.external_id().map(str::as_bytes);
+        if owner != "embedded-owner"
+            || organization != "embedded-org"
+            || name.len() > self.added_collection_name.len()
+            || external.is_some_and(|value| value.len() > self.added_external.len())
+        {
+            return Err(());
+        }
+        self.added_collection_name[..name.len()].copy_from_slice(name);
+        self.added_collection_name_len = name.len();
+        self.added_external_len = external.map(|value| {
+            self.added_external[..value.len()].copy_from_slice(value);
+            value.len()
+        });
+        // This compile probe's only valid member is access_all, so no direct link is written.
+        self.added_collection = true;
+        self.revision += 1;
+        Ok(self.added_collection_row())
     }
 }
 impl PreloginStorage for PurgeProbe {
@@ -673,6 +831,11 @@ pub extern "C" fn _start() -> ! {
             collection_name: [0; 64],
             collection_name_len: 0,
             organization_keys: false,
+            added_collection: false,
+            added_collection_name: [0; 64],
+            added_collection_name_len: 0,
+            added_external: [0; 64],
+            added_external_len: None,
         };
         let organization = OrganizationCreateRequest {
             billing_email: "owner@example.com",
@@ -719,6 +882,18 @@ pub extern "C" fn _start() -> ! {
                 &response.accepted_and_confirmed(),
                 &mut organization_output,
             ));
+        }
+        if let Ok((request, _)) = serde_json_core::from_slice::<OrganizationCollectionCreateRequest<'_, 1, 1>>(black_box(br#"{"name":"opaque collection","groups":[],"users":[{"hidePasswords":false,"id":"embedded-member","readOnly":true,"manage":false}],"externalId":" "}"#)) {
+            let _ = black_box(serde_json_core::to_slice(&request, &mut organization_output));
+            if let Ok(response) = organization_service.create_org_collection("embedded-owner", "embedded-org", &request) {
+                let _ = black_box(serde_json_core::to_slice(&response, &mut organization_output));
+            }
+            if let Ok(response) = organization_service.list_org_collections("embedded-owner", "embedded-org") {
+                let _ = black_box(serde_json_core::to_slice(&response, &mut organization_output));
+            }
+            if let Ok(response) = organization_service.get_org_collection_details("embedded-owner", "embedded-org", "embedded-added-collection") {
+                let _ = black_box(serde_json_core::to_slice(&response, &mut organization_output));
+            }
         }
         black_box(organization_output);
         for email in black_box(["bare-metal@example.com", ""]) {
