@@ -11,6 +11,7 @@ use no_warden::{
     auth_requests::{AuthRequestContext, AuthRequestRecord, AuthRequestStorage},
     auth_responses::AuthRequestResponseStorage,
     bulk::{CipherBulkOperation, CipherBulkStorage, ValidatedCipherBulk},
+    cipher_reads::CipherReadStorage,
     device_push::{ClearedDevicePush, DevicePushState, DevicePushStorage},
     devices::{DeviceRecord, DeviceRegistration, DeviceStorage},
     domains::{DomainSettingsData, DomainSettingsStorage},
@@ -783,6 +784,10 @@ impl AccountKdfStorage for Store {
         tx.commit()
     }
 }
+
+// The default read-access hook uses trusted personal ownership metadata. An
+// organization adapter can supply readable access independently of write access.
+impl CipherReadStorage for Store {}
 
 impl AccountDeletionStorage for Store {
     fn verify_account_deletion_proof(

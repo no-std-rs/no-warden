@@ -223,7 +223,7 @@ await test("standalone adapter enforces authentication, isolation, and JSON pres
     ]) {
       denied(await request(`/api/ciphers/${created.id}${operation.suffix}`, {
         method: operation.method, token: bobToken, body: operation.body,
-      }), `cross-user ${operation.method} ${operation.suffix}`, [403, 404]);
+      }), `cross-user ${operation.method} ${operation.suffix}`, operation.method === "GET" ? [400] : [403, 404]);
     }
     const own = ok(await request(`/api/ciphers/${created.id}`, { token: aliceToken }), "owner read");
     assert.equal(own.name, alice.registration.key);
@@ -398,7 +398,7 @@ await test("standalone adapter enforces authentication, isolation, and JSON pres
     assert.notEqual(alias.id, source.id);
     assert.notEqual(alias.id, clone.id);
     assert.equal(alias.lastKnownRevisionDate ?? null, null);
-    denied(await request("/api/ciphers/create", { token: aliceToken }), "reserved create path is not an item ID", [404]);
+    denied(await request("/api/ciphers/create", { token: aliceToken }), "reserved create path fails the read UUID guard", [422]);
     const before = ok(await request("/api/sync", { token: aliceToken }), "pre-rejection clone sync");
     const revision = ok(await request("/api/accounts/revision-date", { token: aliceToken }), "pre-rejection clone revision");
     for (const invalid of [
@@ -485,7 +485,7 @@ await test("standalone adapter enforces authentication, isolation, and JSON pres
       method: "POST", token: aliceToken, body: cipher(alice),
     }), "delete alias fixture");
     ok(await request(`/api/ciphers/${item.id}/delete`, { method: "POST", token: aliceToken }), "POST delete");
-    denied(await request(`/api/ciphers/${item.id}`, { token: aliceToken }), "deleted item read", [404]);
+    denied(await request(`/api/ciphers/${item.id}`, { token: aliceToken }), "deleted item read", [400]);
     const sync = ok(await request("/api/sync", { token: aliceToken }), "sync after POST delete");
     assert.equal(sync.ciphers.some(candidate => candidate.id === item.id), false);
   });

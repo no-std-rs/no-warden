@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 439 active Rust tests: 198 core, 163 host, and 78 conformance
+The workspace has 452 active Rust tests: 205 core, 167 host, and 80 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -305,3 +305,16 @@ avoid the release/pin auth-request cleanup difference; local SQL tests establish
 that cleanup, failure rollback and durable reopen. The unchanged official CLI
 2026.10.0 regression also passes all 120 commands against both actual servers.
 It establishes no account-deletion caller, generated-SDK execution or route trace.
+
+The cipher-read extension adds two GET aliases and corrects the ordinary GET's
+missing/foreign status to the pinned 400 contract. Separate read authorization
+has no typed request/response payload and adds no allocator. The no-allocator
+consumer links the real service against bounded storage. Six module tests and
+one route test cover the reusable boundary. All six selected Rust
+`--suite cipher-reads` cases pass against both actual servers, with 335 counted
+HTTP requests, four successful password logins, two excluded fixture registrations
+and 34 attachment byte checks per target. The default HTTP selection is unchanged;
+`BW_CIPHER_READS_RECEIPT` selects a private authored-case/count receipt. The fresh
+official CLI 2026.10.0 regression also passes all 120 commands against both actual
+servers. It is separate lifecycle evidence and establishes no client alias
+execution or captured route trace.

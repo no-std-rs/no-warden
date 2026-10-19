@@ -75,6 +75,8 @@ pub enum Route<'a> {
     CipherBulkArchive,
     CipherBulkUnarchive,
     CipherGet(&'a str),
+    CipherDetails(&'a str),
+    CipherAdmin(&'a str),
     CipherUpdate(&'a str),
     CipherSoftDelete(&'a str),
     CipherRestore(&'a str),
@@ -124,6 +126,19 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
             .then_some(AttachmentDownload(cipher, attachment));
     }
     match (method, path) {
+        (
+            Get,
+            "/api/ciphers/create"
+            | "/api/ciphers/import"
+            | "/api/ciphers/purge"
+            | "/api/ciphers/admin"
+            | "/api/ciphers/delete"
+            | "/api/ciphers/delete-admin"
+            | "/api/ciphers/restore"
+            | "/api/ciphers/restore-admin"
+            | "/api/ciphers/archive"
+            | "/api/ciphers/unarchive",
+        ) => path.strip_prefix("/api/ciphers/").map(CipherGet),
         (Get, "/api/config") => Some(Config),
         (
             Post,
@@ -241,6 +256,13 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
             }
             let tail = path.strip_prefix("/api/ciphers/")?;
             if let Some((id, action)) = tail.split_once('/') {
+                if method == Get && !id.is_empty() {
+                    match action {
+                        "details" => return Some(CipherDetails(id)),
+                        "admin" => return Some(CipherAdmin(id)),
+                        _ => {}
+                    }
+                }
                 if !valid_segment(id) {
                     return None;
                 }
@@ -282,6 +304,10 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                     _ => None,
                 };
             }
+            // HTTP adapters decode and apply the UUID guard after authentication.
+            if method == Get && !tail.is_empty() {
+                return Some(CipherGet(tail));
+            }
             if !valid_segment(tail) {
                 return None;
             }
@@ -307,6 +333,57 @@ fn valid_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cipher_read_aliases_require_authentication_and_preserve_raw_uuid_guard_inputs() {
+        for id in ["ABCdef-123", "%41BCdef-123", "not:a:uuid", "%2F", "."] {
+            for (suffix, expected) in [
+                ("", Route::CipherGet(id)),
+                ("/details", Route::CipherDetails(id)),
+                ("/admin", Route::CipherAdmin(id)),
+            ] {
+                let path = std::format!("/api/ciphers/{id}{suffix}");
+                assert_eq!(classify(Method::Get, &path), Some(expected));
+                assert_eq!(
+                    classify(Method::Get, &std::format!("{path}/?ignored=true")),
+                    Some(expected)
+                );
+                assert!(expected.requires_authentication());
+                if !suffix.is_empty() {
+                    for method in [Method::Post, Method::Put, Method::Delete, Method::Options] {
+                        assert!(classify(method, &path).is_none());
+                    }
+                }
+            }
+        }
+        for literal in [
+            "create",
+            "import",
+            "purge",
+            "admin",
+            "delete",
+            "delete-admin",
+            "restore",
+            "restore-admin",
+            "archive",
+            "unarchive",
+        ] {
+            let path = std::format!("/api/ciphers/{literal}");
+            assert_eq!(
+                classify(Method::Get, &path),
+                Some(Route::CipherGet(literal))
+            );
+        }
+        for path in [
+            "/api/ciphers//details",
+            "/api/ciphers//admin",
+            "/api/ciphers/id/details/extra",
+            "/api/ciphers/id/Admin",
+            "/api/ciphers/id/Details",
+        ] {
+            assert!(classify(Method::Get, path).is_none());
+        }
+    }
 
     #[test]
     fn account_deletion_aliases_require_authentication_and_preserve_exact_methods() {
@@ -337,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn personal_vault_purge_is_authenticated_post_and_reserves_literal_other_methods() {
+    fn personal_vault_purge_is_authenticated_post_with_get_uuid_guard_and_reserved_mutations() {
         for path in [
             "/api/ciphers/purge",
             "/api/ciphers/purge/",
@@ -345,7 +422,8 @@ mod tests {
         ] {
             assert_eq!(classify(Method::Post, path), Some(Route::CipherPurge));
             assert!(Route::CipherPurge.requires_authentication());
-            for method in [Method::Get, Method::Put, Method::Delete, Method::Options] {
+            assert_eq!(classify(Method::Get, path), Some(Route::CipherGet("purge")));
+            for method in [Method::Put, Method::Delete, Method::Options] {
                 assert!(classify(method, path).is_none());
             }
         }
@@ -854,6 +932,10 @@ mod tests {
             "/api/ciphers/item/unarchive",
         ] {
             for method in [Get, Post, Put, Delete, Options] {
+                if method == Get && !path.strip_prefix("/api/ciphers/").unwrap().contains('/') {
+                    assert!(matches!(classify(method, path), Some(CipherGet(_))));
+                    continue;
+                }
                 if !cases
                     .iter()
                     .any(|(allowed, known, _)| *allowed == method && *known == path)
@@ -878,7 +960,15 @@ mod tests {
             classify(Method::Post, "/api/ciphers/create"),
             Some(Route::CipherCreateWrapped)
         );
-        for method in [Method::Get, Method::Put, Method::Delete] {
+        assert_eq!(
+            classify(Method::Get, "/api/ciphers/create"),
+            Some(Route::CipherGet("create"))
+        );
+        assert_eq!(
+            classify(Method::Get, "/api/ciphers/import"),
+            Some(Route::CipherGet("import"))
+        );
+        for method in [Method::Put, Method::Delete] {
             assert_eq!(classify(method, "/api/ciphers/create"), None);
             assert_eq!(classify(method, "/api/ciphers/import"), None);
         }
@@ -919,10 +1009,13 @@ mod tests {
             "/api/ciphers/../delete",
             "/api/ciphers//restore",
             "/api/folders/a/b",
-            "/api/ciphers/a%2fb",
         ] {
             assert_eq!(classify(Method::Get, path), None);
         }
+        assert_eq!(
+            classify(Method::Get, "/api/ciphers/a%2fb"),
+            Some(Route::CipherGet("a%2fb"))
+        );
         assert_eq!(classify(Method::Get, "/identity/connect/token"), None);
     }
 }

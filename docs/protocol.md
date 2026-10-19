@@ -696,7 +696,8 @@ Source: [Vaultwarden folders](https://github.com/dani-garcia/vaultwarden/blob/58
 | --- | --- |
 | `GET /api/ciphers` | List response |
 | `GET /api/ciphers/{id}` | One accessible cipher |
-| `GET /api/ciphers/{id}/details` | Details alias |
+| `GET /api/ciphers/{id}/details` | Same accessible-cipher read |
+| `GET /api/ciphers/{id}/admin` | Same accessible-cipher read; upstream admin TODO |
 | `POST /api/ciphers` | Create encrypted cipher |
 | `POST /api/ciphers/create` | Create/clone from the wrapped request below |
 | `PUT /api/ciphers/{id}` | Replace encrypted cipher |
@@ -1110,3 +1111,42 @@ queries, guarded rejections, live authority revocation, fresh identity after
 same-email registration and foreign preservation. Each deletion checks fresh
 owned/foreign attachment capabilities within 30 seconds; local SQL tests,
 separately, establish physical cleanup and atomic failure rollback.
+
+### Cipher read aliases and guards
+
+The [pinned handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L234-L255)
+and [release 1.37.4 handlers](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/ciphers.rs#L234-L255)
+are identical: `GET /api/ciphers/{id}`, `/details` and `/admin` use the same
+readable-cipher check and return the same user projection. The admin-named
+handler explicitly contains an upstream TODO and forwards to the ordinary read;
+it does not impose organization-administrator authority or grant a bypass.
+Missing ciphers return 400 with `Cipher doesn't exist`; inaccessible ciphers
+return 400 with `Cipher is not owned by user`. Ordinary GET previously returned
+404 for these cases in the adapter; this source-backed correction leaves write
+and lifecycle error policies unchanged.
+
+[Headers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth.rs#L637-L710)
+requires a valid device and user before checking the current security stamp.
+None of these three handler names is in the fixed previous-password-stamp
+allowlist. [Rocket guard ordering](https://github.com/rwf2/Rocket/blob/v0.5.1/core/codegen/src/attribute/route/mod.rs#L324-L327)
+runs request guards before path guards: invalid authority returns 401 before a
+malformed cipher UUID can return 422. The
+[UUID macro](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/macros/src/lib.rs#L15-L27)
+validates syntax but retains exact decoded spelling for lookup, including case.
+The GET handlers do not decode a JSON body or select an owner from query fields.
+
+The opt-in `CipherReadStorage` provider can distinguish an absent record from
+an existing inaccessible record. Its default checks personal ownership;
+organization-aware embeddings can supply trusted readable access independently
+of write access. The core returns only a private-constructor borrowed
+`AuthorizedCipherRead`, with redacted Debug, rather than a typed cipher payload.
+The adapter holds its storage lock through authorization and opaque JSON
+projection, preserving active, trashed and archived state without revision
+writes. Full organization, transport, notification and response-model parity
+remain open. All six selected Rust HTTP cases pass against both actual
+servers: 335 counted requests each, including four password logins, with two
+fixture registrations excluded. Thirty-four byte-exact attachment checks
+accompany normalized alias/snapshot comparisons; normalization changes only
+attachment URL tokens. The cases verify current authority, exact error messages,
+UUID/body/query/method guards and nonmutation of account/vault snapshots.
+These direct comparisons establish no actual notification or CLI alias call.

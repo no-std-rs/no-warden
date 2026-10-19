@@ -20,6 +20,7 @@ pub mod auth_requests;
 pub mod auth_responses;
 pub mod bounded;
 pub mod bulk;
+pub mod cipher_reads;
 pub mod device_push;
 pub mod devices;
 pub mod domains;

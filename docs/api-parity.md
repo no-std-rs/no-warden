@@ -39,11 +39,11 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 86 routed patterns, 50 with typed requests, 74 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 88 routed patterns, 50 with typed requests, 77 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 83 partial and 211 unimplemented. Query/rank/configuration
+status: 85 partial and 209 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
@@ -54,8 +54,8 @@ responses, and attachment responses. Bulk cipher lists use the generic `ListResp
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 78 patterns, negative
-HTTP evidence for 77, 183 named HTTP cases, and 31 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 80 patterns, negative
+HTTP evidence for 79, 189 named HTTP cases, and 31 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -989,3 +989,48 @@ SQL evidence. The existing CLI120 baseline adds no account-deletion call or
 trace. Recovery/email deletion, Sends, emergency-access, organization lifecycle,
 successful protected-action OTP and
 complete failure/transport variants remain separate gaps. Full parity stays open.
+
+## Ordinary, details and admin cipher reads
+
+`GET /api/ciphers/{id}/details` and `GET /api/ciphers/{id}/admin` add two exact
+route patterns. Together with the existing ordinary GET, they use the new
+allocation-free `CipherReadStorage`/`VaultService::authorize_cipher_read`
+boundary. There is no request body model and no typed cipher response model;
+the adapter owns the opaque payload projection. All three retain partial status.
+
+The [pinned source](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L234-L255)
+and [release 1.37.4](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/ciphers.rs#L234-L255)
+share ordinary readable-access authorization, including the explicit TODO in
+`get_cipher_admin`. Missing and inaccessible records return 400, correcting the
+adapter's previous ordinary-read 404 expectation. Write/lifecycle errors are
+unchanged. Authentication requires a current bound device before the exact
+UUID guard; authenticated malformed IDs return 422, while invalid authority
+returns 401 first. GET-only reserved malformed-ID spellings also reach that
+UUID guard; they do not become create/import/purge operations. Other unimplemented
+literal handlers remain unimplemented rather than being counted as read aliases.
+
+The shipped [ApiService helpers](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/services/api.service.ts#L362-L375)
+construct all three paths. `getFullCipherDetails` has a concrete
+[notification-upsert caller](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/platform/sync/core-sync.service.ts#L142-L205).
+Notifications are not implemented by this adapter, and no actual client
+execution of the two new aliases is established. No production caller of
+`getCipherAdmin` was established in the cached TypeScript sources. The bundled
+SDK also generates bearer [admin](https://github.com/bitwarden/sdk-internal/blob/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6/crates/bitwarden-api-api/src/apis/ciphers_api.rs#L490-L507)
+and [details](https://github.com/bitwarden/sdk-internal/blob/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6/crates/bitwarden-api-api/src/apis/ciphers_api.rs#L592-L612)
+GETs with different typed response models; their generated existence is not
+runtime client evidence or a claim of complete Bitwarden response parity.
+
+All six selected Rust HTTP cases pass against the adapter and actual
+Vaultwarden 1.37.4: 335 counted requests per server, four successful password
+logins and two excluded fixture registrations. They verify all three GETs,
+authentication/UUID order, exact missing/inaccessible messages, active/trash/archive
+projection equivalence, ignored bodies/queries, encoded UUIDs, trailing slashes,
+eleven malformed reserved GET literals, method guards and revoked-authority
+isolation. Thirty-four attachment byte checks per target establish that the
+returned capabilities still retrieve the exact encrypted bytes; only attachment
+URL tokens are normalized for alias/snapshot comparison. These checks establish
+selected direct HTTP behavior, not a client alias execution. Core/provider tests cover
+personal ownership, shared readable-but-not-writable overrides, exact IDs,
+lifecycle preservation, error mapping and grant redaction. Broad organization
+policy, notifications, complete cipher response models and global transport/error
+contracts remain open; all full-parity and captured-trace flags remain false.

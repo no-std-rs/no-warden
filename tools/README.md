@@ -663,3 +663,28 @@ while prior sessions, refresh tokens and the old account's API client identity
 grant no access. A fresh official CLI 2026.10.0 regression also passes all
 120 commands against both actual servers; it supplies no account-deletion
 caller or route trace. The generated SDK request is source attribution only.
+
+## Cipher read comparison
+
+`--suite cipher-reads` selects a focused Rust comparison of ordinary cipher GET
+and the `/details` and `/admin` aliases. It is separate from the default HTTP
+selection and should use a fresh disposable reference process with unchanged
+limits. The adapter now follows the source's missing/inaccessible 400 status;
+malformed UUIDs return 422 only after successful authentication. Responses remain
+opaque adapter-owned JSON; alias comparisons cannot establish a complete core
+response model or organization policy.
+
+All six cases pass against the adapter and actual Vaultwarden 1.37.4: 335
+counted HTTP requests, four successful password logins on one direct peer, two
+excluded fixture registrations and 34 exact attachment-byte checks per server.
+The cases compare ordinary/details/admin payloads in active, trashed and archived
+states, guard/error behavior, ignored GET bodies/queries, encoded IDs and trailing
+slashes, eleven reserved malformed GET literals, and owner/foreign snapshots.
+Attachment URL tokens alone are normalized for comparison; capabilities still
+retrieve exact encrypted bytes. `BW_CIPHER_READS_RECEIPT` writes only authored
+case names and counters to a new private file.
+
+Client source shows a notification-upsert caller for the details helper, but this
+harness does not execute notifications or claim that the CLI requested either
+alias. A fresh official CLI 2026.10.0 regression passes all 120 commands against
+both actual servers and supplies separate lifecycle evidence.
