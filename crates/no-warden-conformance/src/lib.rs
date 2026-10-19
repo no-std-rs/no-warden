@@ -13,6 +13,7 @@ pub mod auth_login;
 pub mod auth_requests;
 pub mod auth_responses;
 pub mod capture;
+pub mod cipher_reads;
 pub mod cli;
 pub mod device_tokens;
 pub mod devices;

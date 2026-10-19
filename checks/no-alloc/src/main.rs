@@ -9,6 +9,7 @@ use no_warden::{
     account_deletion::AccountDeletionStorage,
     auth_login::{AuthRequestLoginContext, AuthRequestLoginDevice, AuthRequestLoginRecord},
     auth_requests::{AuthRequestContext, AuthRequestRecord},
+    cipher_reads::CipherReadStorage,
     devices::{DeviceRecord, PendingDeviceAuthRequest},
     domains::{DomainProjection, DomainSettingsView, GlobalDomain},
     identity::Secret,
@@ -58,8 +59,13 @@ impl Storage for PurgeProbe {
     fn delete_folder(&mut self, _: &str, _: &str) -> Result<(), ()> {
         unreachable!()
     }
-    fn cipher_metadata(&mut self, _: &str) -> Result<Option<ItemMetadata<'_>>, ()> {
-        unreachable!()
+    fn cipher_metadata(&mut self, id: &str) -> Result<Option<ItemMetadata<'_>>, ()> {
+        Ok(
+            (id == "embedded-cipher" && self.personal_items[0]).then_some(ItemMetadata {
+                owner_id: "embedded-owner",
+                deleted: false,
+            }),
+        )
     }
     fn save_cipher(&mut self, _: &str, _: &str, _: &CipherRequest<'_>) -> Result<(), ()> {
         unreachable!()
@@ -71,6 +77,7 @@ impl Storage for PurgeProbe {
         unreachable!()
     }
 }
+impl CipherReadStorage for PurgeProbe {}
 impl VaultPurgeStorage for PurgeProbe {
     fn verify_vault_purge_proof(
         &mut self,
@@ -195,6 +202,11 @@ pub extern "C" fn _start() -> ! {
             personal_items: black_box([true, true]),
             revision: black_box(0),
         };
+        if let Ok(grant) = VaultService::new(&mut provider)
+            .authorize_cipher_read(black_box("embedded-owner"), black_box("embedded-cipher"))
+        {
+            black_box((grant.owner(), grant.id()));
+        }
         let _ = black_box(
             VaultService::new(&mut provider)
                 .purge_personal_vault(black_box("embedded-owner"), &proof),
@@ -211,6 +223,14 @@ pub extern "C" fn _start() -> ! {
     black_box(classify(Method::Post, black_box("/api/ciphers/purge")));
     black_box(classify(Method::Delete, black_box("/api/accounts")));
     black_box(classify(Method::Post, black_box("/api/accounts/delete")));
+    black_box(classify(
+        Method::Get,
+        black_box("/api/ciphers/embedded-cipher/details"),
+    ));
+    black_box(classify(
+        Method::Get,
+        black_box("/api/ciphers/embedded-cipher/admin"),
+    ));
     let verification = serde_json_core::from_slice::<SecretVerificationRequest<'_>>(black_box(
         br#"{"masterPasswordHash":"test-only-authorization-hash"}"#,
     ));

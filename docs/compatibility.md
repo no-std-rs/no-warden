@@ -57,6 +57,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | `PUT /api/auth-requests/<id>`, public `GET /api/auth-requests/<id>/response` | Verified-session approval/rejection and exact code/type/IP response polling, without login consumption | Core/provider and host tests; eight matching HTTP cases on both actual servers; no new client-route claim |
 | Folder CRUD and POST aliases | Opaque names, four-field responses, owner isolation, clear references without changing cipher revisions | CLI baseline; core/host tests and the focused HTTP comparison described below |
 | Cipher CRUD | Opaque ciphertext and unknown JSON fields | CLI, HTTP, storage tests |
+| `GET /api/ciphers/{id}`, `/details`, `/admin` | Same readable cipher, current-device/UUID guards and missing/foreign 400; admin name grants no bypass | Six matching Rust HTTP cases on both actual servers; core/provider tests and adapter-owned payload projection; no executed client alias or route trace claim |
 | Personal v2 attachment reservation and multipart upload | Opaque encrypted metadata and bytes; declared/measured size checks | Core, real CLI on both servers, matching HTTP |
 | Legacy attachment upload, replacement, and delete aliases | Same personal write checks; fresh replacement IDs; transactional cleanup | Core, local/upstream HTTP and restart checks |
 | Attachment metadata and scoped file download | Personal read checks, authoritative metadata, bearerless short-lived capability | Real CLI on both servers and matching local/upstream HTTP |
@@ -100,7 +101,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 439 active workspace unit tests pass: 198 core, 163 host and 78 support,
+All 452 active workspace unit tests pass: 205 core, 167 host and 80 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -847,3 +848,26 @@ flow or CLI-route trace. Account recovery, successful
 protected-action OTP, organization/emergency-access/Sends lifecycle and complete
 cross-version failure semantics remain open. See the
 [parity notes](api-parity.md#personal-account-deletion-subset).
+
+## Cipher read aliases
+
+The ordinary cipher GET and new `/details` and `/admin` GET aliases share an
+opt-in allocation-free read-authorization service. Each requires current bound
+account authority before UUID validation, returns 400 for missing or inaccessible
+ciphers, and permits owned active, trashed and archived records. The admin-named
+path follows Vaultwarden's current ordinary-access TODO; no organization-admin
+bypass is implemented. Stored opaque payload projection remains adapter-owned,
+with no new typed cipher response and no read-induced revision changes.
+
+All six selected Rust HTTP cases pass against the adapter and actual
+Vaultwarden 1.37.4: 335 counted requests each, four successful password logins,
+two excluded fixture registrations and 34 byte-exact attachment downloads. They
+verify equivalent active/trash/archive projections, current-device and
+previous-stamp guards, exact missing/foreign messages, ignored bodies/queries,
+UUID spellings/decoding, reserved literal/method guards, and account/vault
+snapshot preservation. Only attachment URL tokens are normalized.
+The pinned TypeScript details helper has a notification-upsert caller, but neither a live notification
+flow nor a real CLI execution of either alias has been established. The generated
+SDK methods and baseline CLI regression remain separate evidence. See
+[the parity notes](api-parity.md#ordinary-details-and-admin-cipher-reads) for
+source/release references and narrower ownership/provider limits.

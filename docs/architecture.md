@@ -728,3 +728,29 @@ fresh account ID, keys and API secret. Fresh owned attachment capabilities
 become unavailable while foreign bytes remain intact within 30 seconds.
 Local SQL tests establish physical deletion, failure rollback at eighteen
 cleanup stages and deferred commit, and durable private-database reopen.
+
+## Cipher read authorization
+
+`cipher_reads::CipherReadStorage` adds an opt-in readable-access hook to the
+existing storage boundary. `VaultService::authorize_cipher_read` first requires
+an authenticated owner, then distinguishes missing (`None`, 400), inaccessible
+(`Some(false)`, 400) and readable (`Some(true)`) provider results. The default
+personal implementation compares exact metadata ownership; embeddings may
+override it for shared readable access without requiring write permission.
+The admin-named alias uses this same policy and supplies no extra authority.
+
+`AuthorizedCipherRead` borrows the exact owner and item ID and has a private
+constructor and redacted Debug. It is an operation-local authorization result,
+not a serializable cipher response or a durable capability. An adapter must
+hold a lock or consistent snapshot across authorization and response projection.
+The standalone host keeps its SQLite/store lock across both operations and
+returns its existing opaque JSON projection without a new core payload model.
+Active, trashed and archived records stay readable without changing account or
+cipher revisions, credentials, archive annotations or ciphertext. UUID decoding,
+HTTP authentication and trusted organization policy remain adapter concerns.
+Projection may issue fresh attachment download capabilities; account/vault
+nonmutation does not mean that projection performs no SQL writes. The
+no-allocator consumer links the real service against bounded stack-owned storage.
+All six focused HTTP cases pass against both actual servers, including active,
+trashed and archived alias equivalence, capability-backed exact byte retrieval,
+revoked-authority rejection and unchanged owner/foreign snapshots.

@@ -22,6 +22,7 @@ enum Suite {
     WebauthnCredentials,
     PersonalVaultPurge,
     AccountDeletion,
+    CipherReads,
 }
 
 impl Suite {
@@ -47,6 +48,7 @@ impl Suite {
             "webauthn-credentials" => Self::WebauthnCredentials,
             "personal-vault-purge" => Self::PersonalVaultPurge,
             "account-deletion" => Self::AccountDeletion,
+            "cipher-reads" => Self::CipherReads,
             _ => return None,
         })
     }
@@ -71,7 +73,7 @@ fn check<E: Display>(result: Result<(), E>) {
 
 fn usage() {
     eprintln!(
-        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials|personal-vault-purge|account-deletion]"
+        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials|personal-vault-purge|account-deletion|cipher-reads]"
     );
 }
 
@@ -146,5 +148,8 @@ fn main() {
     }
     if suite == Suite::AccountDeletion {
         check(no_warden_conformance::account_deletion::run());
+    }
+    if suite == Suite::CipherReads {
+        check(no_warden_conformance::cipher_reads::run());
     }
 }

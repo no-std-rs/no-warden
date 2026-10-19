@@ -22,6 +22,7 @@ invoke the pinned official Bitwarden CLI as an external process.
 - [x] Allocation-free core: borrowed wire types, routing, policy, storage traits.
 - [x] Standalone Rust adapter: persistent SQLite, registration, authentication.
 - [x] Personal vault: encrypted ciphers, folders, sync, trash, restore.
+- [x] Cipher ordinary/details/admin read subset: allocation-free authorization, exact guards and opaque projections, verified by six matching actual Rust HTTP cases. Full response and organization/notification contracts remain open.
 - [x] Personal account-deletion aliases: allocation-free proof/policy/provider contract and atomic supported cleanup, verified by six matching actual Rust HTTP cases. Broader account recovery and organization lifecycle remain open.
 - [x] Reauthenticated personal-vault purge: allocation-free provider contract, atomic cleanup/revision and preserved account authority, verified by six matching actual Rust HTTP cases. Organization purge remains open.
 - [x] Actual Bitwarden CLI end-to-end verification and Vaultwarden comparison.

@@ -7,6 +7,7 @@ mod account_password;
 mod account_security;
 mod attachments;
 mod auth_requests;
+mod cipher_reads;
 mod devices;
 mod domains;
 mod protocol;
@@ -275,14 +276,11 @@ async fn dispatch_with_peer(
         return Ok(json_response(json!({"status":"ok"})));
     }
     let method = route::Method::parse(method.as_str()).ok_or_else(missing)?;
-    // Upstream's non-POST methods select ordinary cipher-ID handlers, authenticate,
-    // then reject the literal `purge` as a UUID. They never perform a purge.
+    // Upstream's PUT/DELETE ID handlers authenticate before rejecting the literal
+    // `purge` as a UUID. GET now uses the ordinary read route and its UUID guard.
     let invalid_purge_id = uri.path().strip_suffix('/').unwrap_or(uri.path())
         == "/api/ciphers/purge"
-        && matches!(
-            method,
-            route::Method::Get | route::Method::Put | route::Method::Delete
-        );
+        && matches!(method, route::Method::Put | route::Method::Delete);
     let route = route::classify(method, uri.path())
         .or_else(|| invalid_purge_id.then_some(Route::CipherGet("purge")))
         .ok_or_else(missing)?;
@@ -931,9 +929,20 @@ async fn dispatch_with_peer(
                 .ok_or_else(invalid_folder)?;
             Ok(json_response(protocol::folder(&document)))
         }
-        Route::CipherGet(id) => Ok(json_response(
-            store.item(&owner, id, "cipher")?.ok_or_else(missing)?,
-        )),
+        Route::CipherGet(raw) | Route::CipherDetails(raw) | Route::CipherAdmin(raw) => {
+            // Rocket runs Headers before UuidFromParam. A malformed ID cannot
+            // skip the current device/stamp check, including on the admin alias.
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let id = cipher_reads::path_id(raw)?;
+            let grant = VaultService::new(&mut *store).authorize_cipher_read(&owner, &id)?;
+            // Keep the verified context locked through projection. Preserve
+            // encrypted JSON and extensions; no narrow request DTO round-trip.
+            let document = store
+                .item(grant.owner(), grant.id(), "cipher")?
+                .ok_or(Failure(StatusCode::BAD_REQUEST, "Cipher doesn't exist"))?;
+            Ok(json_response(document))
+        }
         Route::FolderCreate | Route::FolderUpdate(_) => {
             let (input, document) = parse_folder_input(&body)?;
             let write = FolderWriteRequest {
@@ -1634,6 +1643,236 @@ mod tests {
     }
 
     const PASSWORD_PUBLIC_PATH: &str = "/api/users/00000000-0000-4000-8000-000000000001/public-key";
+    const READ_CIPHER: &str = "123e4567-e89b-42d3-a456-426614174000";
+    const READ_TRASH: &str = "123e4567-e89b-42d3-a456-426614174001";
+    const READ_ARCHIVE: &str = "123e4567-e89b-42d3-a456-426614174002";
+    const READ_FOREIGN: &str = "123e4567-e89b-42d3-a456-426614174003";
+    const READ_MISSING: &str = "123e4567-e89b-42d3-a456-426614174004";
+
+    fn cipher_read_fixture_app() -> App {
+        let app = auth_request_fixture_app();
+        let store = app.store.lock().unwrap();
+        for (id, owner, deleted) in [
+            (READ_CIPHER, "alice", false),
+            (READ_TRASH, "alice", true),
+            (READ_ARCHIVE, "alice", false),
+            (READ_FOREIGN, "bob", false),
+        ] {
+            let document = json!({"id":id,"name":"opaque-ciphertext","deletedDate":deleted.then_some("2026-01-01T00:00:00.000Z"),"archivedDate":null,"futureProtocolExtension":{"preserved":[0,null,"opaque"]}});
+            store.db.execute("INSERT INTO items(id,owner,kind,document,deleted,revision,created) VALUES(?1,?2,'cipher',?3,?4,?5,?5)",params![id,owner,document.to_string(),deleted,store::now()]).unwrap();
+        }
+        store.db.execute("INSERT INTO cipher_archives(cipher_id,owner,archived_at) VALUES(?1,'alice','2026-01-01T00:00:00.000Z')",[READ_ARCHIVE]).unwrap();
+        drop(store);
+        app
+    }
+
+    #[tokio::test]
+    async fn cipher_read_http_aliases_preserve_all_owned_states_and_opaque_json_without_vault_writes()
+     {
+        let app = cipher_read_fixture_app();
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        let changes = app.store.lock().unwrap().db.total_changes();
+        for id in [READ_CIPHER, READ_TRASH, READ_ARCHIVE] {
+            let mut baseline = None;
+            for suffix in ["", "/details", "/admin"] {
+                let path = format!(
+                    "/api/ciphers/{id}{suffix}/?owner=bob&organizationId=forged&unknown=ignored"
+                );
+                let document = device_document(
+                    device_request(
+                        &app,
+                        Method::GET,
+                        &path,
+                        device_authorization(Some("device-fixture-alice")),
+                        b"{",
+                    )
+                    .await,
+                )
+                .await;
+                assert!(document["id"] == id && document["name"] == "opaque-ciphertext");
+                assert!(
+                    document["futureProtocolExtension"] == json!({"preserved":[0,null,"opaque"]})
+                );
+                assert_eq!(document["deletedDate"].is_string(), id == READ_TRASH);
+                assert_eq!(document["archivedDate"].is_string(), id == READ_ARCHIVE);
+                if let Some(expected) = &baseline {
+                    assert!(&document == expected);
+                } else {
+                    baseline = Some(document);
+                }
+            }
+        }
+        assert!(device_push_persisted_state(&app.store.lock().unwrap()) == before);
+        // This fixture has no attachments, so projection mints no download grants.
+        assert_eq!(app.store.lock().unwrap().db.total_changes(), changes);
+    }
+
+    #[tokio::test]
+    async fn cipher_read_http_guards_authenticate_before_uuid_and_distinguish_missing_from_foreign()
+    {
+        let app = cipher_read_fixture_app();
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        for suffix in ["", "/details", "/admin"] {
+            for id in [READ_CIPHER, "not-a-uuid", "%ff"] {
+                for bearer in [None, Some("invalid"), Some("legacy-auth-access")] {
+                    let path = format!("/api/ciphers/{id}{suffix}");
+                    let Err(error) =
+                        device_request(&app, Method::GET, &path, device_authorization(bearer), b"")
+                            .await
+                    else {
+                        panic!("Unbound cipher read accepted.")
+                    };
+                    assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+                }
+            }
+            for raw in [
+                "not-a-uuid",
+                "%ff",
+                "%2531%2532%2533e4567-e89b-42d3-a456-426614174000",
+            ] {
+                let path = format!("/api/ciphers/{raw}{suffix}");
+                let Err(error) = device_request(
+                    &app,
+                    Method::GET,
+                    &path,
+                    device_authorization(Some("device-fixture-alice")),
+                    b"",
+                )
+                .await
+                else {
+                    panic!("Invalid cipher read UUID accepted.")
+                };
+                assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
+            }
+            for (id, message) in [
+                (READ_MISSING, "Cipher doesn't exist"),
+                (READ_FOREIGN, "Cipher is not owned by user"),
+                (
+                    "123E4567-E89B-42D3-A456-426614174000",
+                    "Cipher doesn't exist",
+                ),
+                ("123e4567e89b42d3a456426614174000", "Cipher doesn't exist"),
+            ] {
+                let path = format!("/api/ciphers/{id}{suffix}");
+                let Err(error) = device_request(
+                    &app,
+                    Method::GET,
+                    &path,
+                    device_authorization(Some("device-fixture-alice")),
+                    b"",
+                )
+                .await
+                else {
+                    panic!("Missing or foreign cipher read accepted.")
+                };
+                assert_eq!(error.0, StatusCode::BAD_REQUEST);
+                assert!(error.1 == message);
+            }
+            let path = format!("/api/ciphers/%31%32%33e4567-e89b-42d3-a456-426614174000{suffix}");
+            let document = device_document(
+                device_request(
+                    &app,
+                    Method::GET,
+                    &path,
+                    device_authorization(Some("device-fixture-alice")),
+                    b"",
+                )
+                .await,
+            )
+            .await;
+            assert!(document["id"] == READ_CIPHER);
+        }
+        for literal in [
+            "create",
+            "import",
+            "purge",
+            "admin",
+            "delete",
+            "delete-admin",
+            "restore",
+            "restore-admin",
+            "archive",
+            "unarchive",
+        ] {
+            let path = format!("/api/ciphers/{literal}");
+            let Err(error) = device_request(
+                &app,
+                Method::GET,
+                &path,
+                device_authorization(Some("device-fixture-alice")),
+                b"",
+            )
+            .await
+            else {
+                panic!("Reserved literal bypassed read UUID guard.")
+            };
+            assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
+        }
+        assert!(device_push_persisted_state(&app.store.lock().unwrap()) == before);
+    }
+
+    #[tokio::test]
+    async fn cipher_read_http_denies_previous_stamp_and_reuses_only_fresh_bound_authority() {
+        let app = cipher_read_fixture_app();
+        let body = account_password_body("fixture-master-hash", "next-proof", "next-key");
+        device_push_empty(
+            device_request(
+                &app,
+                Method::POST,
+                "/api/accounts/password",
+                device_authorization(Some("device-fixture-alice")),
+                body.to_string().as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        for suffix in ["", "/details", "/admin"] {
+            for raw in [READ_CIPHER, "invalid"] {
+                let path = format!("/api/ciphers/{raw}{suffix}");
+                let Err(error) = device_request(
+                    &app,
+                    Method::GET,
+                    &path,
+                    device_authorization(Some("device-fixture-alice")),
+                    b"",
+                )
+                .await
+                else {
+                    panic!("Previous-stamp bearer authorized a cipher read.")
+                };
+                assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+            }
+        }
+        assert!(device_push_persisted_state(&app.store.lock().unwrap()) == before);
+        let tokens = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                account_password_login("next-proof", "Fresh-Read-Device").as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        for suffix in ["", "/details", "/admin"] {
+            let path = format!("/api/ciphers/{READ_CIPHER}{suffix}");
+            let document = device_document(
+                device_request(
+                    &app,
+                    Method::GET,
+                    &path,
+                    device_authorization(tokens["access_token"].as_str()),
+                    b"",
+                )
+                .await,
+            )
+            .await;
+            assert!(document["id"] == READ_CIPHER);
+        }
+    }
+
     fn account_password_target(app: &App) {
         let account = json!({"id":"00000000-0000-4000-8000-000000000001","email":"target@example.test","keys":{"publicKey":"target-public","encryptedPrivateKey":"target-private"}});
         app.store.lock().unwrap().db.execute("INSERT INTO accounts(id,email,document,password,revision) VALUES('00000000-0000-4000-8000-000000000001','target@example.test',?1,'unused-verifier',?2)",params![account.to_string(),store::now()]).unwrap();
