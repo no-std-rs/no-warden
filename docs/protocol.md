@@ -1385,6 +1385,10 @@ All six expanded Rust HTTP cases pass against both actual servers with
 logins, excluding two fixture registrations. Selected relaxed Chrono timestamp
 and leap-second owner create/delete examples also pass. The separate twenty-command
 official CLI 2026.10.0 run also passes both actual servers.
+The wrong-password and deleted-Send receives require exit 1 and exact public CLI
+JSON messages `Invalid password` and `Not found.` respectively; generic failure
+output is rejected. These are client-visible checks, separate from raw server
+error-envelope parity.
 The shipped [create command](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/tools/send/commands/create.command.ts#L168-L179)
 delegates encryption and persistence to its selected Send service. Recipient
 [receive](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/tools/send/commands/receive.command.ts#L535-L550)

@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 518 active Rust tests: 245 core, 184 host, and 89 conformance
+The workspace has 521 active Rust tests: 245 core, 184 host, and 92 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -363,6 +363,10 @@ owner isolation, password lifecycle and availability/count behavior.
 The separate opt-in `--suite text-sends-cli` twenty-command official-client
 comparison passes both actual servers; `BW_TEXT_SENDS_CLI_RECEIPT` writes its
 private receipt.
+Negative receives require exit 1 and exact public `BW_RESPONSE` JSON with
+`success: false` and the source message `Invalid password` or `Not found.`.
+Three additional unit tests reject unrelated errors, malformed/extra/duplicate
+fields, success responses and other exit codes without printing captured data.
 Sender and recipients use separate private caches. Its deletion check times the
 entire fresh receive/delete/recheck window before client capability expiry can
 explain rejection. The verified baseline remains 120 commands, not a combined

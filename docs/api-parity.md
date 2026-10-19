@@ -1147,6 +1147,10 @@ and foreign/vault-preservation assertions. Source/unit evidence separately
 establishes arbitrary scalar/array projection, exact clock boundaries, rollback,
 reopen, account-deletion FK cleanup and preservation during personal vault purge.
 The focused twenty-command official CLI 2026.10.0 run passes both actual servers.
+Its wrong-password and post-deletion checks require exit 1 plus the exact public
+CLI messages `Invalid password` and `Not found.`; an unrelated nonzero exit is
+insufficient. New unit fixtures reject generic server/rate/transport errors and
+malformed response categories without exposing captured output.
 Static client calls and the independently passing CLI120 baseline are not new
 Send-route traces.
 

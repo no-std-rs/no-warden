@@ -102,7 +102,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 518 active workspace unit tests pass: 245 core, 184 host and 89 support,
+All 521 active workspace unit tests pass: 245 core, 184 host and 92 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -927,6 +927,9 @@ password replacement/removal, issued-capability reuse, disabled/deadline/count
 guards, hidden creator email and unchanged vault/keys/devices/foreign state.
 The separate twenty-command official CLI comparison passes both actual servers; the unchanged
 120-command baseline passes both servers and is separate evidence.
+Its two negative receives require exit code 1 and exact public CLI JSON messages:
+`Invalid password` for wrong proof and `Not found.` after deletion. Generic
+server, rate or transport failures cannot satisfy these checks.
 
 Send names, keys, notes and text remain encrypted opaque values. Upstream does
 normalize projected text-object keys and remove an exact root `response` field;

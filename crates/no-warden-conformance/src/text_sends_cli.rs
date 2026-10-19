@@ -7,6 +7,7 @@ use crate::{
     transport::TlsProxy,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -22,6 +23,46 @@ const CONTENT: &str = "Official CLI Send: 雪\nNUL\0 and \"quotes\" retained";
 const EDITED: &str = "Edited official CLI Send: Ω\0 exact content";
 const PASSWORD: &str = "Synthetic recipient password 雪";
 const COMMANDS: usize = 20;
+
+#[derive(Clone, Copy)]
+enum Rejection {
+    InvalidPassword,
+    NotFound,
+}
+impl Rejection {
+    fn message(self) -> &'static str {
+        match self {
+            Self::InvalidPassword => "Invalid password",
+            Self::NotFound => "Not found.",
+        }
+    }
+}
+
+// BW_RESPONSE exposes the published CLI Response on stdout even on failure.
+// BaseProgram.processResponse24-38 / Response.error30-35 omit undefined fields.
+// Keep captured messages private and reject malformed or unrelated failures.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RejectedResponse {
+    success: bool,
+    message: String,
+}
+fn validate_rejection(
+    exit_code: Option<i32>,
+    output: &[u8],
+    expected: Rejection,
+) -> Result<(), TextSendsError> {
+    require(
+        exit_code == Some(1),
+        "Send CLI rejection exit status differed",
+    )?;
+    let response: RejectedResponse = serde_json::from_slice(output)
+        .map_err(|_| TextSendsError("Send CLI rejection response was malformed"))?;
+    require(
+        !response.success && response.message == expected.message(),
+        "Send CLI rejection category differed",
+    )
+}
 fn private_dir(prefix: &str) -> Result<TempDir, TextSendsError> {
     let directory = tempfile::Builder::new()
         .prefix(prefix)
@@ -63,7 +104,7 @@ impl Cli {
         args: &[&str],
         store: &Path,
         session: Option<&str>,
-        rejected: bool,
+        rejected: Option<Rejection>,
     ) -> Result<String, TextSendsError> {
         self.commands += 1;
         require(
@@ -80,6 +121,13 @@ impl Cli {
         } else {
             env.remove(&OsString::from("BW_SESSION"));
         }
+        if rejected.is_some() {
+            // Public CLI JSON mode writes failures to bounded private stdout.
+            // Quiet/cleanexit must not hide their category or change exit 1.
+            env.insert("BW_RESPONSE".into(), "true".into());
+            env.remove(&OsString::from("BW_QUIET"));
+            env.remove(&OsString::from("BW_CLEANEXIT"));
+        }
         let args = args
             .iter()
             .copied()
@@ -88,14 +136,16 @@ impl Cli {
             .collect::<Vec<_>>();
         let result = capture::run(&self.binary, &args, &env, Duration::from_secs(90))
             .map_err(|_| TextSendsError("Send CLI private capture failed"))?;
+        if let Some(expected) = rejected {
+            validate_rejection(result.status.code(), &result.stdout, expected)?;
+            self.receipt("running")?;
+            return Ok(String::new());
+        }
         require(
-            result.status.code().is_some() && result.status.success() != rejected,
+            result.status.success(),
             "Send CLI command exit status differed",
         )?;
         self.receipt("running")?;
-        if rejected {
-            return Ok(String::new());
-        }
         String::from_utf8(result.stdout)
             .map(|s| s.trim().to_owned())
             .map_err(|_| TextSendsError("Send CLI output was not UTF-8"))
@@ -106,7 +156,7 @@ impl Cli {
         store: &Path,
         session: Option<&str>,
     ) -> Result<Value, TextSendsError> {
-        serde_json::from_str(&self.command(args, store, session, false)?)
+        serde_json::from_str(&self.command(args, store, session, None)?)
             .map_err(|_| TextSendsError("Send CLI output was not JSON"))
     }
 }
@@ -166,7 +216,7 @@ pub fn run() -> Result<(), TextSendsError> {
     };
     c.receipt("running")?;
     require(
-        c.command(&["--version"], sender.path(), None, false)? == "2026.10.0",
+        c.command(&["--version"], sender.path(), None, None)? == "2026.10.0",
         "Send CLI version differed from pinned official client",
     )?;
     fixture::seed_account(&server, &email, &password)
@@ -175,7 +225,7 @@ pub fn run() -> Result<(), TextSendsError> {
         &["config", "server", client_server],
         sender.path(),
         None,
-        false,
+        None,
     )?;
     let session = c.command(
         &[
@@ -187,7 +237,7 @@ pub fn run() -> Result<(), TextSendsError> {
         ],
         sender.path(),
         None,
-        false,
+        None,
     )?;
     require(session.len() > 20, "Send CLI login session missing")?;
     let request = json!({"type":0,"name":"Official Send 雪","notes":"Owner-only notes\0retained",
@@ -210,7 +260,7 @@ pub fn run() -> Result<(), TextSendsError> {
         parsed.origin() == configured.origin() && parsed.fragment().is_some(),
         "Official Send URL crossed configured origin",
     )?;
-    c.command(&["sync"], sender.path(), Some(&session), false)?;
+    c.command(&["sync"], sender.path(), Some(&session), None)?;
     let got = c.json(&["send", "get", &id], sender.path(), Some(&session))?;
     content(&got, CONTENT)?;
     require(
@@ -229,7 +279,7 @@ pub fn run() -> Result<(), TextSendsError> {
         &["config", "server", client_server],
         recipient.path(),
         None,
-        false,
+        None,
     )?;
     c.command(
         &[
@@ -240,7 +290,7 @@ pub fn run() -> Result<(), TextSendsError> {
         ],
         recipient.path(),
         None,
-        true,
+        Some(Rejection::InvalidPassword),
     )?;
     require(
         c.command(
@@ -252,7 +302,7 @@ pub fn run() -> Result<(), TextSendsError> {
             ],
             recipient.path(),
             None,
-            false,
+            None,
         )? == CONTENT,
         "Anonymous CLI Send receive did not decrypt exact content",
     )?;
@@ -265,13 +315,13 @@ pub fn run() -> Result<(), TextSendsError> {
         Some(&session),
     )?;
     content(&changed, EDITED)?;
-    c.command(&["sync"], sender.path(), Some(&session), false)?;
+    c.command(&["sync"], sender.path(), Some(&session), None)?;
     require(
         c.command(
             &["send", "get", &id, "--text"],
             sender.path(),
             Some(&session),
-            false,
+            None,
         )? == EDITED,
         "Official CLI edited Send did not survive sync",
     )?;
@@ -288,7 +338,7 @@ pub fn run() -> Result<(), TextSendsError> {
         &["config", "server", client_server],
         fresh_recipient.path(),
         None,
-        false,
+        None,
     )?;
     // Include token minting and the initial read: starting after the command
     // could hide most of the capability's lifetime inside its 90-second timeout.
@@ -303,9 +353,9 @@ pub fn run() -> Result<(), TextSendsError> {
         &["send", "delete", &id],
         sender.path(),
         Some(&session),
-        false,
+        None,
     )?;
-    c.command(&["sync"], sender.path(), Some(&session), false)?;
+    c.command(&["sync"], sender.path(), Some(&session), None)?;
     let after = c.json(&["send", "list"], sender.path(), Some(&session))?;
     require(
         after
@@ -317,7 +367,7 @@ pub fn run() -> Result<(), TextSendsError> {
         &["receive", &access_url],
         fresh_recipient.path(),
         None,
-        true,
+        Some(Rejection::NotFound),
     )?;
     require(
         fresh_access.elapsed() < Duration::from_secs(60),
@@ -333,6 +383,45 @@ pub fn run() -> Result<(), TextSendsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn negative_send_cli_checks_require_distinct_source_categories() {
+        let password = br#"{"success":false,"message":"Invalid password"}"#;
+        let missing = br#"{"success":false,"message":"Not found."}"#;
+        assert!(validate_rejection(Some(1), password, Rejection::InvalidPassword).is_ok());
+        assert!(validate_rejection(Some(1), missing, Rejection::NotFound).is_ok());
+        assert!(validate_rejection(Some(1), password, Rejection::NotFound).is_err());
+        assert!(validate_rejection(Some(1), missing, Rejection::InvalidPassword).is_err());
+    }
+    #[test]
+    fn negative_send_cli_checks_reject_server_errors_and_malformed_output() {
+        for output in [
+            br#"{"success":false,"message":"Server error: 500 Internal Server Error"}"#.as_slice(),
+            br#"{"success":false,"message":"Too many requests"}"#,
+            br#"{"success":false,"message":"Unexpected response"}"#,
+            br#"{"success":true,"message":"Invalid password"}"#,
+            br#"{"success":false,"message":"Invalid password","data":{"key":"private marker"}}"#,
+            br#"{"success":false,"success":false,"message":"Invalid password"}"#,
+            br#"{"success":false,"message":null}"#,
+            br#"{"success":false}"#,
+            b"Invalid password",
+            b"<html>500 Internal Server Error</html>",
+            b"{",
+            b"\xff",
+            b"",
+        ] {
+            for expected in [Rejection::InvalidPassword, Rejection::NotFound] {
+                let error = validate_rejection(Some(1), output, expected).unwrap_err();
+                assert!(!format!("{error:?} {error}").contains("private marker"));
+            }
+        }
+    }
+    #[test]
+    fn negative_send_cli_checks_require_the_published_failure_exit_code() {
+        let output = br#"{"success":false,"message":"Invalid password"}"#;
+        for code in [None, Some(0), Some(2), Some(127)] {
+            assert!(validate_rejection(code, output, Rejection::InvalidPassword).is_err());
+        }
+    }
     #[test]
     fn cli_send_json_encoding_preserves_unicode_nul_and_private_fields_without_diagnostics() {
         let v = json!({"text":{"text":CONTENT},"password":PASSWORD,"key":"synthetic seed"});
