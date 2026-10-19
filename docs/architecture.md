@@ -693,3 +693,38 @@ by authenticated decryption of a newly created item. Local
 SQL tests establish physical BLOB/grant/row deletion, rollback and durable reopen;
 they establish provider guarantees
 without asserting identical upstream failure semantics.
+
+## Reauthenticated account deletion
+
+`account_deletion::AccountDeletionStorage` adds proof verification and account
+removal without requiring an API-key or account-security provider. The borrowed
+`VaultService::delete_account` accepts the existing `PasswordOrOtpRequest`,
+requires an authenticated owner and exactly one proof, then invokes
+`verify_account_deletion_proof` before `delete_account`. A request cannot select
+another account identifier. HTTP authentication, locks, cryptography, clocks,
+policy and persistence remain outside the allocation-free core.
+
+An organization-aware provider enforces last-confirmed-owner policy after proof
+verification and before mutation. The personal adapter implements no organization
+membership or emergency-access lifecycle; an empty local organization feature
+is not a proof of that broader policy. Provider unit tests exercise policy
+rejection and error mapping separately from personal HTTP behavior. A consumed
+protected-action OTP is not rolled back implicitly when later policy or storage
+fails; the host supports password proofs and rejects unsupported OTPs.
+
+Unlike personal vault purge, account deletion leaves no supported owner state or
+revision. The adapter commits session/API-secret/item removal and account-FK
+cascades together, including ciphertext, attachment BLOBs/grants, devices/push
+metadata, auth requests, domain settings, private stamps/history/exceptions and
+registration metadata. It preserves unrelated accounts and the instance's
+registration signer. Physical deletion, rollback and durable reopen require local
+SQL evidence; portable HTTP demonstrates public authority and capability effects.
+This atomic mutation guarantee is stronger than the upstream sequential cleanup,
+which can retain prior deletions after a later failure. Release 1.37.4 omits
+explicit auth-request deletion present in the pin; the portable comparison avoids
+that versioned case. All six selected HTTP cases pass against both actual
+servers, covering authority revocation and same-email re-registration with a
+fresh account ID, keys and API secret. Fresh owned attachment capabilities
+become unavailable while foreign bytes remain intact within 30 seconds.
+Local SQL tests establish physical deletion, failure rollback at eighteen
+cleanup stages and deferred commit, and durable private-database reopen.

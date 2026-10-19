@@ -6,6 +6,7 @@
 use core::{hint::black_box, panic::PanicInfo};
 use no_warden::{
     Storage, VaultService,
+    account_deletion::AccountDeletionStorage,
     auth_login::{AuthRequestLoginContext, AuthRequestLoginDevice, AuthRequestLoginRecord},
     auth_requests::{AuthRequestContext, AuthRequestRecord},
     devices::{DeviceRecord, PendingDeviceAuthRequest},
@@ -36,6 +37,7 @@ use no_warden::{
 // Its caller-owned fixed buffers prove the business-logic call needs no allocator.
 struct PurgeProbe {
     verified: bool,
+    account_present: bool,
     personal_items: [bool; 2],
     revision: u64,
 }
@@ -81,6 +83,22 @@ impl VaultPurgeStorage for PurgeProbe {
     fn purge_personal_vault(&mut self, _: &str) -> Result<(), ()> {
         self.personal_items.fill(false);
         self.revision += 1;
+        Ok(())
+    }
+}
+
+impl AccountDeletionStorage for PurgeProbe {
+    fn verify_account_deletion_proof(
+        &mut self,
+        owner: &str,
+        proof: no_warden::identity::ReauthenticationProof<'_>,
+    ) -> Result<bool, ()> {
+        black_box(proof);
+        Ok(owner == "embedded-owner" && self.verified && self.account_present)
+    }
+    fn delete_account(&mut self, _: &str) -> Result<(), ()> {
+        self.personal_items.fill(false);
+        self.account_present = false;
         Ok(())
     }
 }
@@ -173,6 +191,7 @@ pub extern "C" fn _start() -> ! {
         let _ = black_box(proof.proof());
         let mut provider = PurgeProbe {
             verified: black_box(true),
+            account_present: black_box(true),
             personal_items: black_box([true, true]),
             revision: black_box(0),
         };
@@ -180,9 +199,18 @@ pub extern "C" fn _start() -> ! {
             VaultService::new(&mut provider)
                 .purge_personal_vault(black_box("embedded-owner"), &proof),
         );
-        black_box((provider.personal_items, provider.revision));
+        let _ = black_box(
+            VaultService::new(&mut provider).delete_account(black_box("embedded-owner"), &proof),
+        );
+        black_box((
+            provider.personal_items,
+            provider.revision,
+            provider.account_present,
+        ));
     }
     black_box(classify(Method::Post, black_box("/api/ciphers/purge")));
+    black_box(classify(Method::Delete, black_box("/api/accounts")));
+    black_box(classify(Method::Post, black_box("/api/accounts/delete")));
     let verification = serde_json_core::from_slice::<SecretVerificationRequest<'_>>(black_box(
         br#"{"masterPasswordHash":"test-only-authorization-hash"}"#,
     ));

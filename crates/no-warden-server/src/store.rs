@@ -1,6 +1,7 @@
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use no_warden::{
     Storage,
+    account_deletion::AccountDeletionStorage,
     account_kdf::{AccountKdfStorage, ValidatedAccountKdf},
     account_keys::{AccountKeyState, AccountKeyStorage},
     account_password::{AccountPasswordState, AccountPasswordStorage, ValidatedAccountPassword},
@@ -780,6 +781,20 @@ impl AccountKdfStorage for Store {
         // old refresh tokens upstream. Preserve device records and push data.
         tx.execute("DELETE FROM sessions WHERE owner=?1", [owner])?;
         tx.commit()
+    }
+}
+
+impl AccountDeletionStorage for Store {
+    fn verify_account_deletion_proof(
+        &mut self,
+        owner: &str,
+        proof: ReauthenticationProof<'_>,
+    ) -> rusqlite::Result<bool> {
+        self.verify_reauthentication(owner, proof)
+    }
+
+    fn delete_account(&mut self, owner: &str) -> rusqlite::Result<()> {
+        crate::account_deletion::delete(&mut self.db, owner)
     }
 }
 
@@ -2346,6 +2361,202 @@ mod tests {
         assert!(reopened.account("id", "alice").unwrap().unwrap()["key"] == winner);
         drop(reopened);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    // Compare complete private rows with boolean assertions so test failures never
+    // print verifiers, access digests, encrypted documents or attachment contents.
+    fn deletion_rows(store: &Store, foreign_only: bool) -> Vec<Vec<Vec<rusqlite::types::Value>>> {
+        [
+            ("accounts", "id<>?1"),
+            ("items", "owner<>?1"),
+            ("cipher_archives", "owner<>?1"),
+            ("api_keys", "owner<>?1"),
+            ("account_domains", "owner<>?1"),
+            ("account_auth_policy", "owner<>?1"),
+            ("attachments", "cipher_id NOT IN (SELECT id FROM items WHERE owner=?1)"),
+            ("attachment_downloads", "attachment_id NOT IN (SELECT a.id FROM attachments a JOIN items i ON i.id=a.cipher_id WHERE i.owner=?1)"),
+            ("sessions", "owner<>?1"),
+            ("device_registry", "owner<>?1"),
+            ("device_push_tokens", "owner<>?1"),
+            ("auth_requests", "owner<>?1"),
+            ("session_devices", "owner<>?1"),
+            ("registration_signing_key", "?1 IS NOT NULL"),
+            ("registration_metadata", "owner<>?1"),
+            ("account_security", "owner<>?1"),
+            ("account_password_exceptions", "owner<>?1"),
+            ("account_password_access", "owner<>?1"),
+        ]
+        .into_iter()
+        .map(|(table, foreign)| {
+            let predicate = if foreign_only { foreign } else { "?1 IS NOT NULL" };
+            let mut statement = store.db.prepare(&format!("SELECT * FROM {table} WHERE {predicate} ORDER BY rowid")).unwrap();
+            let columns = statement.column_count();
+            statement.query_map(["alice"], |row| {
+                (0..columns).map(|column| row.get(column)).collect()
+            }).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
+        })
+        .collect()
+    }
+
+    fn deletion_verified(store: &mut Store) -> Result<(), no_warden::ApiError> {
+        no_warden::VaultService::new(store).delete_account(
+            "alice",
+            &no_warden::wire::PasswordOrOtpRequest {
+                master_password_hash: Some(Secret::new("security-proof\0雪")),
+                otp: None,
+            },
+        )
+    }
+
+    #[test]
+    fn account_deletion_erases_all_owned_rows_and_preserves_foreign_and_instance_state() {
+        let mut store = deletion_fixture();
+        let foreign = deletion_rows(&store, true);
+        deletion_verified(&mut store).unwrap();
+        assert!(deletion_rows(&store, false) == foreign);
+        assert!(store.account("id", "alice").unwrap().is_none());
+        assert!(
+            store
+                .account("email", "alice@example.test")
+                .unwrap()
+                .is_none()
+        );
+        assert!(store.account("id", "bob").unwrap().is_some());
+        assert!(
+            store
+                .db
+                .prepare("PRAGMA foreign_key_check")
+                .unwrap()
+                .query([])
+                .unwrap()
+                .next()
+                .unwrap()
+                .is_none()
+        );
+        let before = deletion_rows(&store, false);
+        assert!(deletion_verified(&mut store).is_err());
+        assert!(crate::account_deletion::delete(&mut store.db, "missing").is_err());
+        assert!(deletion_rows(&store, false) == before);
+    }
+
+    #[test]
+    fn account_deletion_rejects_missing_foreign_or_unsupported_proofs_without_writes() {
+        let mut store = deletion_fixture();
+        let before = deletion_rows(&store, false);
+        let changes = store.db.total_changes();
+        for (owner, password, otp) in [
+            ("alice", Some("wrong"), None),
+            ("bob", Some("security-proof\0雪"), None),
+            ("missing", Some("security-proof\0雪"), None),
+            ("alice", None, None),
+            ("alice", None, Some("unsupported")),
+            ("alice", Some("security-proof\0雪"), Some("unsupported")),
+        ] {
+            assert!(
+                no_warden::VaultService::new(&mut store)
+                    .delete_account(
+                        owner,
+                        &no_warden::wire::PasswordOrOtpRequest {
+                            master_password_hash: password.map(Secret::new),
+                            otp: otp.map(Secret::new),
+                        }
+                    )
+                    .is_err()
+            );
+            assert!(deletion_rows(&store, false) == before && store.db.total_changes() == changes);
+        }
+    }
+
+    #[test]
+    fn account_deletion_rolls_back_every_cleanup_stage_and_deferred_commit_failure() {
+        for table in [
+            "sessions",
+            "session_devices",
+            "api_keys",
+            "items",
+            "attachments",
+            "attachment_downloads",
+            "cipher_archives",
+            "accounts",
+            "device_registry",
+            "device_push_tokens",
+            "auth_requests",
+            "account_security",
+            "account_domains",
+            "account_auth_policy",
+            "account_password_access",
+            "account_password_exceptions",
+            "registration_metadata",
+            "deferred_commit",
+        ] {
+            let mut store = deletion_fixture();
+            let before = deletion_rows(&store, false);
+            if table == "deferred_commit" {
+                store.db.execute_batch("CREATE TABLE failed_deletion_commit(owner TEXT REFERENCES accounts(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER reject_deletion AFTER DELETE ON accounts BEGIN INSERT INTO failed_deletion_commit(owner) VALUES('missing'); END;").unwrap();
+            } else {
+                store.db.execute_batch(&format!("CREATE TRIGGER reject_deletion AFTER DELETE ON {table} BEGIN SELECT RAISE(FAIL,'fixture'); END;")).unwrap();
+            }
+            assert!(
+                deletion_verified(&mut store).is_err(),
+                "Injected cleanup failure for {table} was accepted."
+            );
+            assert!(
+                deletion_rows(&store, false) == before,
+                "Account deletion leaked a partial mutation."
+            );
+            store
+                .db
+                .execute_batch("DROP TRIGGER reject_deletion")
+                .unwrap();
+            deletion_verified(&mut store).unwrap();
+        }
+    }
+
+    #[test]
+    fn account_deletion_remains_deleted_after_private_database_reopen() {
+        let directory = std::env::temp_dir().join(format!(
+            "no-warden-deletion-persistence-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let path = directory.join("vault.db");
+        let mut store = deletion_fixture();
+        let foreign = deletion_rows(&store, true);
+        deletion_verified(&mut store).unwrap();
+        store
+            .db
+            .execute("VACUUM INTO ?1", [path.to_str().unwrap()])
+            .unwrap();
+        drop(store);
+        let reopened = Store::open(path.to_str().unwrap()).unwrap();
+        assert!(deletion_rows(&reopened, false) == foreign);
+        assert!(
+            reopened
+                .account("email", "alice@example.test")
+                .unwrap()
+                .is_none()
+        );
+        // The unique email is reusable; the deleted account ID and authority are not.
+        reopened.db.execute("INSERT INTO accounts(id,email,document,password,revision) VALUES('replacement','ALICE@example.test','{}','replacement-verifier',?1)",[now()]).unwrap();
+        assert!(reopened.account("id", "alice").unwrap().is_none());
+        assert!(
+            deletion_rows(&reopened, false)[8]
+                .iter()
+                .all(|row| row[2] != rusqlite::types::Value::Text("alice".into()))
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    fn deletion_fixture() -> Store {
+        let store = purge_fixture();
+        store.db.execute("INSERT INTO account_security(owner,stamp) VALUES('alice','deletion-private-stamp')", []).unwrap();
+        store
     }
 
     fn purge_fixture() -> Store {

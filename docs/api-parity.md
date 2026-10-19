@@ -39,11 +39,11 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 84 routed patterns, 48 with typed requests, 72 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 86 routed patterns, 50 with typed requests, 74 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 81 partial and 213 unimplemented. Query/rank/configuration
+status: 83 partial and 211 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
@@ -54,8 +54,8 @@ responses, and attachment responses. Bulk cipher lists use the generic `ListResp
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 76 patterns, negative
-HTTP evidence for 75, 177 named HTTP cases, and 31 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 78 patterns, negative
+HTTP evidence for 77, 183 named HTTP cases, and 31 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -943,3 +943,49 @@ The entire issuance/check/purge sequence must finish within 30 seconds, before
 the source's 60-second capability expiry. Physical attachment BLOB/grant/row
 deletion is established separately by local SQL tests. Full parity, organization purge, successful protected-action
 OTP, notifications and complete transport/error variants remain open.
+
+## Personal account deletion subset
+
+`DELETE /api/accounts` and `POST /api/accounts/delete` add two exact route patterns
+for the same `AccountDelete` operation. They reuse the borrowed
+`PasswordOrOtpRequest`; success is `Result<()>` and empty HTTP 200, not a new typed
+JSON response. The opt-in `account_deletion::AccountDeletionStorage` verifies the
+owner's proof before trusted deletion policy and atomic provider cleanup.
+
+The [pinned aliases](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1321-L1333)
+and [release 1.37.4 aliases](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/accounts.rs#L1306-L1318)
+have the same proof and response behavior. The user model checks confirmed
+organization-owner counts after proof verification, then removes account-owned
+resources sequentially. Organization vaults are preserved. The personal host
+atomically removes its supported dependent state, while preserving unrelated
+accounts and shared signer state; this is a stronger failure guarantee.
+
+The pin explicitly deletes auth-request rows, while release 1.37.4 omits that
+step and retains a non-cascading SQLite foreign key. Portable fixtures exclude
+auth requests so their comparison does not imply cross-version equivalence for
+that cleanup. Local provider tests cover complete supported deletion separately.
+Organization last-owner policy is a provider obligation tested at the core
+boundary, not a claim of host organization APIs or actual organization comparison.
+See [protocol details](protocol.md#account-deletion) for primary cleanup references.
+
+The [bundled SDK generated API](https://github.com/bitwarden/sdk-internal/blob/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6/crates/bitwarden-api-api/src/apis/accounts_api.rs#L237-L252)
+constructs bearer `DELETE /accounts` with a JSON proof and expects an empty
+response. Its broader `SecretVerificationRequestModel` includes fields that
+Vaultwarden's password/OTP DTO does not implement. No production caller or
+successful execution of that generated deletion API was established here. The
+[pinned CLI delete dispatcher](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/vault/delete.command.ts#L32-L49)
+handles items, attachments, folders and organization collections, not accounts.
+All six selected Rust HTTP cases pass against the adapter and actual
+Vaultwarden 1.37.4: 257 counted requests per target, including six identity
+requests (three successful password logins, two refresh attempts with one
+success, and one rejected old API grant). Three fixture registrations across
+two emails are excluded. The cases verify both aliases, authentication/proof
+and JSON/method guards, ignored owner/query overrides, live authority revocation,
+same-email re-registration with fresh identity and keys, and foreign preservation.
+Each deletion proves three fresh owned attachment capabilities fail while the
+foreign capability remains byte-exact, within a 30-second window. Physical
+row/BLOB deletion, eighteen-stage rollback and durable reopen are separate local
+SQL evidence. The existing CLI120 baseline adds no account-deletion call or
+trace. Recovery/email deletion, Sends, emergency-access, organization lifecycle,
+successful protected-action OTP and
+complete failure/transport variants remain separate gaps. Full parity stays open.

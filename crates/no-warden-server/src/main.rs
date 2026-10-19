@@ -1,6 +1,7 @@
 //! Local conformance host. Production deployment requires the work in ROADMAP.md.
 #![forbid(unsafe_code)]
 
+mod account_deletion;
 mod account_kdf;
 mod account_password;
 mod account_security;
@@ -569,6 +570,13 @@ async fn dispatch_with_peer(
         ));
     }
     match route {
+        Route::AccountDelete => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let input = account_security::parse_stamp(&body)?;
+            VaultService::new(&mut *store).delete_account(&owner, &input.request())?;
+            Ok(StatusCode::OK.into_response())
+        }
         Route::CipherPurge => {
             devices::access_binding(&store.db, &digest(bearer), &owner)?
                 .ok_or_else(unauthorized)?;
@@ -1643,6 +1651,224 @@ mod tests {
             ("deviceType", "14"),
         ])
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn account_deletion_http_aliases_require_bound_proof_and_revoke_only_the_owner() {
+        for (method, path) in [
+            (Method::DELETE, "/api/accounts"),
+            (Method::POST, "/api/accounts/delete"),
+        ] {
+            let app = auth_request_fixture_app();
+            let before = device_push_persisted_state(&app.store.lock().unwrap());
+            for bearer in [None, Some("invalid"), Some("legacy-auth-access")] {
+                let Err(error) = device_request(
+                    &app,
+                    method.clone(),
+                    path,
+                    device_authorization(bearer),
+                    b"{",
+                )
+                .await
+                else {
+                    panic!("Unbound account deletion accepted.")
+                };
+                assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+            }
+            for (body, expected) in [
+                (b"{".as_slice(), StatusCode::BAD_REQUEST),
+                (b"[]", StatusCode::UNPROCESSABLE_ENTITY),
+                (b"{}", StatusCode::BAD_REQUEST),
+                (br#"{"masterPasswordHash":"wrong"}"#, StatusCode::BAD_REQUEST),
+                (br#"{"otp":"unsupported"}"#, StatusCode::BAD_REQUEST),
+                (br#"{"masterPasswordHash":"fixture-master-hash","otp":"unsupported"}"#, StatusCode::BAD_REQUEST),
+                (br#"{"masterPasswordHash":"fixture-master-hash","MasterPasswordHash":"fixture-master-hash"}"#, StatusCode::UNPROCESSABLE_ENTITY),
+            ] {
+                let Err(error) = device_request(&app, method.clone(), path, device_authorization(Some("device-fixture-alice")), body).await else { panic!("Invalid account deletion proof accepted.") };
+                assert_eq!(error.0, expected);
+            }
+            assert!(device_push_persisted_state(&app.store.lock().unwrap()) == before);
+            let foreign = {
+                let store = app.store.lock().unwrap();
+                store.account("id", "bob").unwrap().unwrap()
+            };
+            // Neither query nor document extensions may choose a different owner.
+            let query = format!("{path}/?organizationId=invalid&owner=bob&unknown=ignored");
+            device_push_empty(
+                device_request(
+                    &app,
+                    method.clone(),
+                    &query,
+                    device_authorization(Some("device-fixture-alice")),
+                    br#"{"MasterPasswordHash":"fixture-master-hash","owner":"bob","userId":"bob"}"#,
+                )
+                .await,
+            )
+            .await;
+            assert!(
+                app.store
+                    .lock()
+                    .unwrap()
+                    .account("id", "alice")
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                app.store
+                    .lock()
+                    .unwrap()
+                    .account("id", "bob")
+                    .unwrap()
+                    .unwrap()
+                    == foreign
+            );
+            for (rejected_method, rejected_path, body) in [
+                (Method::GET, "/api/accounts/profile", b"".as_slice()),
+                (
+                    method.clone(),
+                    path,
+                    br#"{"masterPasswordHash":"fixture-master-hash"}"#,
+                ),
+            ] {
+                let Err(error) = device_request(
+                    &app,
+                    rejected_method,
+                    rejected_path,
+                    device_authorization(Some("device-fixture-alice")),
+                    body,
+                )
+                .await
+                else {
+                    panic!("Deleted bearer retained account authority.")
+                };
+                assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+            }
+            assert!(
+                device_request(
+                    &app,
+                    Method::GET,
+                    "/api/accounts/profile",
+                    device_authorization(Some("device-fixture-bob")),
+                    b""
+                )
+                .await
+                .is_ok()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn account_deletion_http_denies_previous_stamp_before_schema_and_accepts_fresh_login() {
+        let app = auth_request_fixture_app();
+        let body = account_password_body("fixture-master-hash", "next-proof", "next-key");
+        device_push_empty(
+            device_request(
+                &app,
+                Method::POST,
+                "/api/accounts/password",
+                device_authorization(Some("device-fixture-alice")),
+                body.to_string().as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        let changes = app.store.lock().unwrap().db.total_changes();
+        for (method, path) in [
+            (Method::DELETE, "/api/accounts"),
+            (Method::POST, "/api/accounts/delete"),
+        ] {
+            let Err(error) = device_request(
+                &app,
+                method,
+                path,
+                device_authorization(Some("device-fixture-alice")),
+                b"{",
+            )
+            .await
+            else {
+                panic!("Previous-stamp bearer authorized account deletion.")
+            };
+            assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        }
+        assert_eq!(app.store.lock().unwrap().db.total_changes(), changes);
+        let tokens = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                account_password_login("next-proof", "Fresh-Deletion-Device").as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        device_push_empty(
+            device_request(
+                &app,
+                Method::DELETE,
+                "/api/accounts",
+                device_authorization(tokens["access_token"].as_str()),
+                br#"["next-proof",null]"#,
+            )
+            .await,
+        )
+        .await;
+        assert!(
+            app.store
+                .lock()
+                .unwrap()
+                .account("id", "alice")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn account_deletion_http_storage_failure_preserves_credentials_and_allows_retry() {
+        let app = auth_request_fixture_app();
+        app.store.lock().unwrap().db.execute_batch("CREATE TRIGGER reject_deletion AFTER DELETE ON accounts BEGIN SELECT RAISE(FAIL,'fixture'); END;").unwrap();
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        let Err(error) = device_request(
+            &app,
+            Method::DELETE,
+            "/api/accounts",
+            device_authorization(Some("device-fixture-alice")),
+            br#"{"masterPasswordHash":"fixture-master-hash"}"#,
+        )
+        .await
+        else {
+            panic!("Storage failure accepted account deletion.")
+        };
+        assert_eq!(error.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(device_push_persisted_state(&app.store.lock().unwrap()) == before);
+        assert!(
+            device_request(
+                &app,
+                Method::GET,
+                "/api/accounts/profile",
+                device_authorization(Some("device-fixture-alice")),
+                b""
+            )
+            .await
+            .is_ok()
+        );
+        app.store
+            .lock()
+            .unwrap()
+            .db
+            .execute_batch("DROP TRIGGER reject_deletion")
+            .unwrap();
+        device_push_empty(
+            device_request(
+                &app,
+                Method::POST,
+                "/api/accounts/delete",
+                device_authorization(Some("device-fixture-alice")),
+                br#"{"masterPasswordHash":"fixture-master-hash"}"#,
+            )
+            .await,
+        )
+        .await;
     }
 
     #[tokio::test]

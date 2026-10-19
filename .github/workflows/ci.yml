@@ -92,6 +92,7 @@ jobs:
           target/debug/no-warden-http-conformance
           target/debug/no-warden-http-conformance --suite webauthn-credentials
           target/debug/no-warden-http-conformance --suite personal-vault-purge
+          target/debug/no-warden-http-conformance --suite account-deletion
           target/debug/no-warden-http-conformance --suite account-kdf-cli
           target/debug/no-warden-http-conformance --suite account-password-cli
           bash tools/e2e.sh

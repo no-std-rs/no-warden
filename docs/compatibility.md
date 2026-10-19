@@ -36,6 +36,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | API surface | Standalone behavior | Verification |
 | --- | --- | --- |
 | `GET /api/config` | Endpoint discovery | Real CLI |
+| `DELETE /api/accounts`, `POST /api/accounts/delete` | Reauthenticated personal-account removal, atomic supported cleanup and authority revocation | Six matching Rust HTTP cases on both actual servers; core/provider and local rollback/reopen tests; no executed account-deletion client or route trace claim |
 | `POST /api/ciphers/purge` | Password-reauthenticated personal cipher/folder/attachment cleanup, revision advance and preserved account authority | Six matching Rust HTTP cases on both actual servers; core/provider and local rollback/reopen tests; no CLI purge caller claim |
 | `GET /api/webauthn` | Fixed empty credential metadata, authenticated owned-device access and existing previous-stamp guards | Six matching Rust HTTP cases against both actual servers; no passkey or CLI call claim |
 | `POST /api/accounts/register` | Legacy strict registration with encrypted keys | Cryptographic fixture |
@@ -99,7 +100,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 422 active workspace unit tests pass: 190 core, 156 host and 76 support,
+All 439 active workspace unit tests pass: 198 core, 163 host and 78 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -818,3 +819,31 @@ fail while foreign bytes remain available within a 30-second proof window.
 Physical BLOB/grant/row deletion remains separate local SQL evidence. Source references and scope limits are recorded in the
 [parity notes](api-parity.md#personal-vault-purge-subset); the existing CLI120
 baseline adds no purge caller or route trace.
+
+## Personal account deletion
+
+The allocation-free core reuses the exclusive password/protected-action proof
+request and exposes an opt-in `AccountDeletionStorage` provider. The adapter adds
+both authenticated aliases, `DELETE /api/accounts` and `POST /api/accounts/delete`,
+with empty 200 success. It deletes the supported personal account, vault bytes,
+attachment capabilities and issued authority atomically; it preserves unrelated
+accounts and instance signing state. Last-confirmed-organization-owner policy
+belongs to trusted organization-aware providers, not body fields.
+
+All six selected Rust HTTP cases pass against both actual servers: 257 counted
+requests per target, six identity requests (three successful password logins,
+two refresh attempts with one success, and one rejected old API grant), and
+three excluded fixture registrations across two emails. Both aliases and their
+guards match; prior authority stays revoked after same-email re-registration
+with a fresh account ID and keys. Each deletion also verifies fresh owned
+attachment URL revocation and foreign byte preservation within 30 seconds.
+Local SQL tests separately prove physical cleanup, rollback and durable reopen.
+Release 1.37.4 omits explicit auth-request cleanup present in the pin, so
+portable fixtures avoid that versioned case.
+A fresh official CLI 2026.10.0 regression passes all 120 commands against both
+servers. The generated SDK API shape is documented, but neither that source
+attribution nor the regression establishes an actual client account-deletion
+flow or CLI-route trace. Account recovery, successful
+protected-action OTP, organization/emergency-access/Sends lifecycle and complete
+cross-version failure semantics remain open. See the
+[parity notes](api-parity.md#personal-account-deletion-subset).

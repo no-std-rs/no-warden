@@ -21,6 +21,7 @@ enum Suite {
     AccountPasswordCli,
     WebauthnCredentials,
     PersonalVaultPurge,
+    AccountDeletion,
 }
 
 impl Suite {
@@ -45,6 +46,7 @@ impl Suite {
             "account-password-cli" => Self::AccountPasswordCli,
             "webauthn-credentials" => Self::WebauthnCredentials,
             "personal-vault-purge" => Self::PersonalVaultPurge,
+            "account-deletion" => Self::AccountDeletion,
             _ => return None,
         })
     }
@@ -69,7 +71,7 @@ fn check<E: Display>(result: Result<(), E>) {
 
 fn usage() {
     eprintln!(
-        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials|personal-vault-purge]"
+        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials|personal-vault-purge|account-deletion]"
     );
 }
 
@@ -141,5 +143,8 @@ fn main() {
     // Destructive disposable fixtures are an explicit independent selection.
     if suite == Suite::PersonalVaultPurge {
         check(no_warden_conformance::purge::run());
+    }
+    if suite == Suite::AccountDeletion {
+        check(no_warden_conformance::account_deletion::run());
     }
 }

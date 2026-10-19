@@ -636,3 +636,30 @@ remains unimplemented. A fresh official CLI 2026.10.0 regression passes all
 120 commands against both actual servers; it is independent and supplies no purge
 command caller or request trace. See the
 [protocol references](../docs/protocol.md#personal-vault-purge).
+
+## Personal account deletion comparison
+
+`--suite account-deletion` selects explicit disposable-account checks for
+`DELETE /api/accounts` and `POST /api/accounts/delete`. Run it against a fresh
+reference process under unchanged rate limits. It is separate from the default
+104-case selection, WebAuthn credential metadata and personal-vault purge.
+Auth-request fixtures are excluded because release 1.37.4 and the pin differ in
+that cleanup. All six cases pass against the adapter and actual Vaultwarden
+1.37.4, each with 257 counted HTTP requests. Six identity requests consist of
+three successful password logins, two refresh attempts (one success), and one
+rejected old API grant; the maximum is six attempts on one direct peer under
+unchanged defaults. Three fixture registrations across two emails are excluded.
+The suite deletes two account IDs, checks both empty-200 aliases and rejected
+authentication/proof/schema/method inputs, and confirms ignored body/query
+overrides cannot select another owner. Each deletion obtains and reads three
+fresh owned attachment capabilities and one foreign capability, then checks
+owned 404 and byte-exact foreign 200 within 30 seconds. The receipt selected by
+`BW_ACCOUNT_DELETION_RECEIPT` records only authored names and counters in a
+new private file.
+
+Public HTTP authority/capability outcomes and local physical SQL deletion are
+separate evidence. Re-registering the same email must produce a new account ID,
+while prior sessions, refresh tokens and the old account's API client identity
+grant no access. A fresh official CLI 2026.10.0 regression also passes all
+120 commands against both actual servers; it supplies no account-deletion
+caller or route trace. The generated SDK request is source attribution only.
