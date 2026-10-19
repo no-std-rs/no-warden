@@ -990,8 +990,8 @@ wrapped keys remain opaque, including empty strings. Success returns empty 200.
 
 The change records the pre-reset stamp for 120 seconds. Only logical handlers
 `post_rotatekey`, `get_contacts`, `get_public_keys` and `get_api_webauthn` qualify.
-The last is `/api/webauthn` metadata. The adapter supports public-key admission
-from this set; the other endpoints remain tracked gaps. Normal JWT/device guards
+The last is `/api/webauthn` metadata. The adapter supports public-key and WebAuthn credential-metadata admission
+from this set; contacts and key rotation remain tracked gaps. Normal JWT/device guards
 still apply. Exception expiry is checked before route and stamp mismatch, and
 the exact integer deadline remains valid. Current-stamp requests do not trigger
 cleanup; expired stale-stamp requests with an existing device attempt lazy
@@ -1003,3 +1003,25 @@ and [provider boundary](architecture.md#password-changes-and-previous-stamp-auth
 for cross-transition behavior and verification limits. Event logging,
 notifications, remembered 2FA, remaining exception routes and upstream JWT expiry
 leeway remain open; local transaction rollback exceeds source failure guarantees.
+
+### WebAuthn credential metadata
+
+`GET /api/webauthn` requires normal authenticated owned-device access and returns
+exactly `{"object":"list","data":[],"continuationToken":null}`. It has no
+request body schema or query parameters and the handler neither reads credential
+storage nor changes account data. The inherited expired-stamp cleanup can still
+advance revision before rejecting an old bearer. Logical `get_api_webauthn` is
+one of the four password-change exception routes; it never bypasses the original
+JWT lifetime, owned-device or previous-stamp checks.
+
+Both [pinned main](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/mod.rs#L198-L207)
+and [release 1.37.4](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/mod.rs#L198-L207)
+return this fixed envelope. It is distinct from `/api/two-factor/get-webauthn`.
+The empty response does not implement passkey creation, login or key rotation.
+See the [metadata subset](api-parity.md#webauthn-credential-metadata-subset) for
+client-source attribution and remaining comparison limits.
+
+The six selected HTTP cases pass against the actual adapter and Vaultwarden
+1.37.4: 129 counted requests, eight identity requests and a real 121-second
+exception wait per server. Shared registration bootstrap is excluded. This
+establishes the documented metadata subset; it adds no CLI-route trace.

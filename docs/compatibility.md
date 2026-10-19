@@ -36,6 +36,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | API surface | Standalone behavior | Verification |
 | --- | --- | --- |
 | `GET /api/config` | Endpoint discovery | Real CLI |
+| `GET /api/webauthn` | Fixed empty credential metadata, authenticated owned-device access and existing previous-stamp guards | Six matching Rust HTTP cases against both actual servers; no passkey or CLI call claim |
 | `POST /api/accounts/register` | Legacy strict registration with encrypted keys | Cryptographic fixture |
 | `POST /identity/accounts/register/send-verification-email`, `POST /identity/accounts/register/finish` | No-SMTP new-account verification token and canonical atomic completion; old/current credential shapes | Eight matching corrected Rust HTTP cases on both actual servers; borrowed opt-in core/provider and host parser, token, rollback/reopen and HTTP-dispatch tests; fresh unchanged CLI regression remains separate |
 | Prelogin legacy and identity aliases | PBKDF2/Argon2 parameters | Latest CLI and HTTP |
@@ -73,7 +74,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Provider conflict errors | `Storage::map_error` can preserve an HTTP 409 conflict | Core provider tests |
 
 The allocation-free core's models include login, secure note, card, identity,
-and SSH-key items, plus optional opaque blob data. Its 178 unit tests cover the
+and SSH-key items, plus optional opaque blob data. Its 182 unit tests cover the
 typed fields, bounded collections and import decoding, validation, ownership,
 lifecycle rules, folder mapping, the atomic import and bulk provider contracts,
 API-key proof selection and authorization, and attachment lifecycle and provider
@@ -97,7 +98,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 398 active workspace unit tests pass: 178 core, 146 host and 74 support,
+All 406 active workspace unit tests pass: 182 core, 149 host and 75 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -737,8 +738,8 @@ against each server, separately from the nine-command KDF proof.
 The core models exact nested-first/legacy-fallback credentials, unchanged client
 KDF metadata, exact stored-email salts and hint cleanup through provider-owned
 state. The adapter preserves encrypted data, devices, API credentials and
-authentication requests while replacing ordinary session authority. Only the
-existing public-key route supports the four-route previous-stamp policy here.
+authentication requests while replacing ordinary session authority. The existing public-key route and WebAuthn credential metadata support the
+four-route previous-stamp policy; contacts and key rotation remain open.
 KDF/direct stamp resets preserve that policy; device deletion blocks it and
 same-ID recreation can restore eligibility. Local rollback and immutable
 historical-bearer regressions establish provider guarantees separately from
@@ -769,3 +770,23 @@ requests across thirteen groups, including real authentication-request and
 password-exception expiry. The unchanged official CLI 2026.10.0 baseline passes
 all 120 commands against each actual server, separately from the focused KDF
 and password CLI proofs.
+
+## WebAuthn credential metadata
+
+The core's fixed `WebAuthnCredentialsResponse` and provider-free
+`get_webauthn_credentials` operation model the authenticated empty list returned
+by pinned Vaultwarden main and release 1.37.4. The adapter supports existing
+owned-device access and the existing password-change exception for logical
+`get_api_webauthn`. Normal reads preserve account/vault state; an expired
+historical bearer can trigger the inherited one-time exception cleanup.
+
+All six selected Rust cases pass against the actual adapter and Vaultwarden
+1.37.4: 129 counted HTTP requests each, eight identity requests (six successful
+grants and two rejected refreshes), at most five per peer, and a real 121-second
+exception wait. The two shared fixture registrations are excluded.
+They add no CLI call or passkey/rotation claim: the pinned CLI rotation service
+throws, while the current bundled SDK rotation uses combined key-rotation data.
+Primary references and exclusions are recorded in the
+[API parity notes](api-parity.md#webauthn-credential-metadata-subset). Current-bearer
+device recreation, generic HEAD/OPTIONS behavior, JWT leeway, complete transport
+errors and actual passkey operations remain unverified or unsupported.

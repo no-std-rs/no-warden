@@ -13,8 +13,9 @@ access-code login contracts. Password verification and security-stamp renewal
 also pass eight direct HTTP cases against both servers, including owner session
 revocation and API-key/authentication-request recovery. KDF and password changes
 also have focused real CLI proofs of fresh-cache decryption after rewrapping the
-same user key. The remaining
-surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
+same user key. Six matching direct HTTP cases verify authenticated empty WebAuthn
+credential metadata and its previous-stamp guards against both servers. This does not enable passkey
+registration or login. The remaining surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden
 replacement. Client-side vault encryption stays with the client.
 

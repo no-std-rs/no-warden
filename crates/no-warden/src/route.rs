@@ -38,6 +38,7 @@ pub enum Route<'a> {
     AccountKeysGet,
     AccountKeysInitialize,
     UserPublicKey(&'a str),
+    WebAuthnCredentials,
     Profile,
     ProfileUpdate,
     AvatarUpdate,
@@ -141,6 +142,7 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (Post, "/api/accounts/password") => Some(AccountPasswordChange),
         (Get, "/api/accounts/keys") => Some(AccountKeysGet),
         (Post, "/api/accounts/keys") => Some(AccountKeysInitialize),
+        (Get, "/api/webauthn") => Some(WebAuthnCredentials),
         (Get, "/api/accounts/profile") => Some(Profile),
         (Put | Post, "/api/accounts/profile") => Some(ProfileUpdate),
         (Put, "/api/accounts/avatar") => Some(AvatarUpdate),
@@ -300,6 +302,35 @@ fn valid_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn webauthn_credential_metadata_is_authenticated_get_without_two_factor_aliases() {
+        for path in [
+            "/api/webauthn",
+            "/api/webauthn/",
+            "/api/webauthn?ignored=true",
+            "/api/webauthn/?ignored=true",
+        ] {
+            assert_eq!(
+                classify(Method::Get, path),
+                Some(Route::WebAuthnCredentials)
+            );
+            assert!(Route::WebAuthnCredentials.requires_authentication());
+            for method in [Method::Post, Method::Put, Method::Delete, Method::Options] {
+                assert!(classify(method, path).is_none());
+            }
+        }
+        for path in [
+            "/api/WebAuthn",
+            "/api/webauthn//",
+            "/api/webauthn/extra",
+            "/api/two-factor/get-webauthn",
+            "/api/two-factor/webauthn",
+        ] {
+            assert!(classify(Method::Get, path).is_none());
+        }
+    }
+
     #[test]
     fn password_change_is_authenticated_post_with_query_and_trailing_slash() {
         for path in [

@@ -1204,6 +1204,22 @@ impl Serialize for UserPublicKeyResponse<'_> {
     }
 }
 
+/// Pinned Vaultwarden credential metadata intentionally contains no credentials.
+/// This fixed projection does not implement passkey registration or login.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WebAuthnCredentialsResponse;
+
+impl Serialize for WebAuthnCredentialsResponse {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut response = serializer.serialize_struct("WebAuthnCredentialsResponse", 3)?;
+        response.serialize_field("object", "list")?;
+        response.serialize_field("data", &[] as &[()])?;
+        response.serialize_field("continuationToken", &None::<&str>)?;
+        response.end()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterRequest<'a> {
@@ -1477,6 +1493,16 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn webauthn_credentials_response_is_exactly_the_sealed_empty_envelope() {
+        let response = serde_json::to_value(WebAuthnCredentialsResponse).unwrap();
+        assert_eq!(
+            response,
+            serde_json::json!({"object":"list","data":[],"continuationToken":null})
+        );
+        assert_eq!(response.as_object().unwrap().len(), 3);
+    }
 
     #[test]
     fn account_password_wire_preserves_optional_branches_positional_order_and_redaction() {

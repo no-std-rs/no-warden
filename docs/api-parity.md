@@ -39,23 +39,23 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 82 routed patterns, 47 with typed requests, 70 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 83 routed patterns, 47 with typed requests, 71 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 79 partial and 215 unimplemented. Query/rank/configuration
+status: 80 partial and 214 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
 
-35 local patterns have some typed response representation, including
+36 local patterns have some typed response representation, including
 the domain settings projections and empty mutation response, explicit API-key
 responses, and attachment responses. Bulk cipher lists use the generic `ListResponse`
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 73 patterns, negative
-HTTP evidence for 72, 157 named HTTP cases, and 31 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 75 patterns, negative
+HTTP evidence for 74, 171 named HTTP cases, and 31 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -814,8 +814,8 @@ save; current-stamp requests do not clean it up.
 
 The four logical routes are `post_rotatekey`, `get_contacts`, `get_public_keys`
 and `get_api_webauthn`. The last is the authenticated `/api/webauthn` metadata
-handler, distinct from the two-factor WebAuthn handler. Only the already supported
-public-key route has adapter exception behavior in this chunk. A password change
+handler, distinct from the two-factor WebAuthn handler. The public-key route and WebAuthn credential metadata now have adapter
+exception behavior; the contacts and rotation routes remain open. A password change
 replaces the exception; KDF/direct stamp resets preserve it. Device deletion
 blocks it, and recreation of the same owned identifier can restore eligibility
 before the deadline. Refresh tokens remain invalidated.
@@ -823,7 +823,7 @@ before the deadline. Refresh tokens remain invalidated.
 Local rollback covers credentials, hint, wrapped key, private stamp, exception,
 revision and session changes. That exceeds upstream sequential failure guarantees.
 Pre-validation event logging, logout notifications, remembered 2FA, the other
-three exception routes, complete configuration/error variants and broader account
+two exception routes, complete configuration/error variants and broader account
 parity remain open. The adapter retains its strict original access deadline;
 upstream's 30-second JWT expiry leeway is an inherited difference. Neither a
 successful comparison nor CLI decryption establishes full route parity or a
@@ -853,3 +853,43 @@ requests across thirteen groups, including real authentication-request and
 password-exception expiry. The unchanged official CLI 2026.10.0 baseline passes
 all 120 commands against each actual server, separately from the focused KDF
 and password CLI proofs.
+
+## WebAuthn credential metadata subset
+
+`GET /api/webauthn` is the unconditional authenticated metadata route in both
+[pinned main](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/mod.rs#L198-L207)
+and [Vaultwarden 1.37.4](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/mod.rs#L198-L207).
+It returns exactly `{"object":"list","data":[],"continuationToken":null}`.
+This route is distinct from two-factor WebAuthn settings and passkey enrollment
+or authentication. The source identifies avoiding key-rotation failures as its
+purpose; it does not enumerate stored credentials.
+
+`WebAuthnCredentialsResponse` is a fixed serializer with no request DTO or
+provider state. `VaultService::get_webauthn_credentials` requires a nonempty
+adapter-authenticated owner, uses only the existing `Storage` bound and never
+calls storage. The bare-metal consumer serializes it without an allocator.
+The adapter first verifies issued access authority and an existing device owned
+by that account. Historical password-change bearers use logical route
+`get_api_webauthn` under the existing original access deadline, device, exception
+expiry and stamp checks. This adds no new token or refresh authority.
+
+The shipped [SDK generated client](https://github.com/bitwarden/sdk-internal/blob/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6/crates/bitwarden-api-api/src/apis/web_authn_api.rs#L146-L158)
+constructs a bearer GET, but no active caller of that method was established in
+this pinned client/SDK source. Current SDK rotation instead fetches
+[combined key-rotation data](https://github.com/bitwarden/sdk-internal/blob/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6/crates/bitwarden-user-crypto-management/src/key_rotation/sync.rs#L58-L68).
+The [official CLI rotation service](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/key-management/cli-user-key-rotation-service.ts#L8-L34)
+explicitly rejects rotation. The unchanged CLI regression therefore supplies no
+GET `/api/webauthn` call or end-to-end key-rotation evidence.
+
+Six authored Rust HTTP cases cover exact projection, authentication, routing and
+ignored query values, unchanged account/vault state, password/API historical
+bearers, device deletion and same-owner identifier recreation, foreign-owner
+isolation and real exception expiry with one cleanup. All six cases pass against
+the actual adapter and Vaultwarden 1.37.4: 129 counted HTTP requests each,
+including eight identity requests (six successful grants and two rejected
+refreshes), at most five requests per direct loopback peer. Two shared fixture
+registrations are excluded from that HTTP counter. The final case waits 121 real
+seconds before proving one-time cleanup. Current-bearer device recreation,
+isolated JWT expiry/leeway, generic HEAD/OPTIONS behavior, full transport/error/configuration variants, actual
+passkey operations and the contacts/rotation contracts remain separate gaps.
+Full-parity and captured-request-trace claims remain false.

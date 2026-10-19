@@ -20,3 +20,4 @@ pub mod fixture;
 pub mod folders;
 pub mod registration;
 pub mod transport;
+pub mod webauthn_credentials;

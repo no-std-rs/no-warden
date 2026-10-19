@@ -19,6 +19,7 @@ enum Suite {
     AccountKdfCli,
     AccountPassword,
     AccountPasswordCli,
+    WebauthnCredentials,
 }
 
 impl Suite {
@@ -41,6 +42,7 @@ impl Suite {
             "account-kdf-cli" => Self::AccountKdfCli,
             "account-password" => Self::AccountPassword,
             "account-password-cli" => Self::AccountPasswordCli,
+            "webauthn-credentials" => Self::WebauthnCredentials,
             _ => return None,
         })
     }
@@ -65,7 +67,7 @@ fn check<E: Display>(result: Result<(), E>) {
 
 fn usage() {
     eprintln!(
-        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli]"
+        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials]"
     );
 }
 
@@ -129,5 +131,9 @@ fn main() {
     }
     if suite == Suite::AccountPasswordCli {
         check(no_warden_conformance::account_password::run_cli());
+    }
+    // Explicit opt-in: this independent comparison includes its own expiry wait.
+    if suite == Suite::WebauthnCredentials {
+        check(no_warden_conformance::webauthn_credentials::run());
     }
 }

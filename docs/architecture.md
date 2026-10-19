@@ -640,7 +640,10 @@ verified previous-stamp equality; equality at the deadline is still valid.
 Providers supply clocks, stamp comparisons, JWT verification, device lookup and
 lazy cleanup. Only `post_rotatekey`, `get_contacts`, `get_public_keys` and
 `get_api_webauthn` qualify, for 120 seconds after the change. The adapter currently
-implements only the public-key route from this set.
+implements public-key and WebAuthn credential-metadata discovery from this set;
+contacts and key rotation remain open. The credential-metadata service requires
+an authenticated owner and returns the upstream empty list without accessing
+storage. It does not implement passkey registration or login.
 
 The SQLite adapter captures the original expiry and bound device of current
 owner access tokens before invalidating ordinary sessions and refresh tokens.
