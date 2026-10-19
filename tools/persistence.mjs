@@ -263,10 +263,15 @@ try {
     method: "POST",
     form: { grant_type: "refresh_token", refresh_token: session.refresh_token, client_id: "cli" },
   });
-  assert.notEqual(refreshed.refresh_token, session.refresh_token);
-  assert.equal(refreshed.Key, account.key);
-  assert.equal(refreshed.UserDecryptionOptions.UserKeyId, userKeyId);
-  assert.deepEqual((await request("/api/sync", { token: refreshed.access_token })).profile, before.profile);
+  assert.deepEqual(Object.keys(refreshed).sort(), ["access_token", "expires_in", "refresh_token", "scope", "token_type"]);
+  const refreshedSync = await request("/api/sync", { token: refreshed.access_token });
+  assert.deepEqual(refreshedSync.profile, before.profile);
+  assert.equal(refreshedSync.userDecryption.userKeyId, userKeyId);
+  const replayed = await request("/identity/connect/token", {
+    method: "POST",
+    form: { grant_type: "refresh_token", refresh_token: session.refresh_token, client_id: "cli" },
+  });
+  assert.deepEqual((await request("/api/sync", { token: replayed.access_token })).profile, before.profile);
   const unarchived = await request(`/api/ciphers/${bulkArchived.id}/unarchive`, { method: "PUT", token });
   assert.equal(unarchived.archivedDate ?? null, null);
   assert.equal(unarchived.revisionDate, bulkArchived.revisionDate);

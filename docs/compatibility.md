@@ -42,7 +42,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | `POST /api/accounts/register` | Legacy strict registration with encrypted keys | Cryptographic fixture |
 | `POST /identity/accounts/register/send-verification-email`, `POST /identity/accounts/register/finish` | No-SMTP new-account verification token and canonical atomic completion; old/current credential shapes | Eight matching corrected Rust HTTP cases on both actual servers; borrowed opt-in core/provider and host parser, token, rollback/reopen and HTTP-dispatch tests; fresh unchanged CLI regression remains separate |
 | Prelogin legacy and identity aliases | PBKDF2/Argon2 parameters | Latest CLI and HTTP |
-| `POST /identity/connect/token` | Reusable ordinary password grant and expiring access; adapter refresh tokens are consumed once | CLI baseline and six matching Rust guard/core cases. Refresh replay differs from pinned upstream and remains a separate parity task |
+| `POST /identity/connect/token` | Reusable ordinary password grant and password-method refresh; valid refresh proofs can be reused with current device authority | CLI baseline, six matching ordinary-password Rust cases and eight matching refresh cases. Refresh JWT encoding and complete identity policy remain open |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
 | `GET /api/accounts/keys`, `POST /api/accounts/keys`, `GET /api/users/<id>/public-key` | Owner-only private retrieval, initialization of an absent pair, authenticated cross-user public lookup | Borrowed core/provider contracts; Rust HTTP comparison group and SQLite rollback/reopen tests |
 | `POST /api/accounts/api-key`, `POST /api/accounts/rotate-api-key` | Password-reauthenticated personal key retrieval, lazy creation, rotation | Core, HTTP comparison with upstream, rollback and restart tests; keys used by real CLI |
@@ -101,7 +101,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 471 active workspace unit tests pass: 216 core, 173 host and 82 support,
+All 489 active workspace unit tests pass: 228 core, 177 host and 84 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -363,10 +363,11 @@ preserves the supplied client ID, including empty, and uses `undefined` when
 absent. Refresh takes its client ID from the current request. Bound JWTs include
 the retained registry type label as `devicetype`, alongside the exact `device`;
 changed login/refresh metadata does not overwrite the initial name/type. The
-personal API-key policy remains unchanged, and existing unbound sessions remain
-refreshable without fabricated device claims. The stricter local refresh replay
-rule, upstream mobile refresh lifetime and broader JWT/refresh equivalence remain
-separate gaps.
+personal API-key policy remains unchanged. Legacy unbound sessions keep existing
+access behavior but cannot refresh without a current binding and device.
+Password-method refresh now preserves valid earlier proofs and uses the retained
+device's thirty/ninety-day lifetime. Refresh JWT encoding/`nbf` and broader
+JWT/identity policy equivalence remain separate gaps.
 
 Required CI reruns the focused login HTTP comparison and the verified unchanged
 120-command CLI baseline. That CLI regression does
@@ -655,16 +656,21 @@ The complete standalone suite also checks atomic rollback and persistence across
 two graceful restarts; these provider guarantees are separate from the upstream
 comparison.
 
-Direct HTTP tests verify that refreshing consumes the supplied refresh token and
-issues a new pair while existing access tokens keep their original expiry. The
-old-bearer result matches a disposable HTTP probe of Vaultwarden 1.37.4. The CLI
-suite verifies its ordinary encrypted lifecycle; it does not force an old-bearer
-request to overlap refresh, so that ordering has HTTP-only evidence. This
-adapter's single-use refresh policy is stricter: the upstream baseline accepted
-immediate refresh-token replay in the disposable HTTP probe, while this adapter
-returns `400 invalid_grant` for replay. Concurrent use of one refresh token
-allows exactly one successful rotation. Token issuance purges a stored session
-only after both its access and refresh authority have expired.
+Refresh no longer consumes a valid proof. The password-method provider resolves
+the current owner/device binding and permits earlier proofs until their original
+deadlines or explicit revocation, while issued access retains its original
+expiry. Issuing a new proof never extends an old proof's deadline. Cleanup keeps
+the source thirty-second refresh leeway. The host uses private opaque handles,
+not upstream refresh JWTs: JWT encoding, `nbf`, cross-server token acceptance and
+SSO refresh are outside this supported contract. Mobile thirty/ninety-day policy
+and exact leeway use host clock tests, not a real thirty-day expiry wait.
+All eight focused direct HTTP cases pass against both actual servers: 268
+counted requests each, including six password logins and 42 refresh POSTs
+(22 successes, 15 invalid proofs, four missing/duplicate-proof guards and one
+missing-grant form guard). Two fixture registrations are excluded. Account/vault
+snapshots and real retained ciphertext decryption accompany owner/device
+isolation and password/KDF/stamp revocation/recovery checks. The CLI baseline
+remains separate lifecycle evidence without captured refresh requests.
 
 This adapter is a conformance host. It has no deployment hardening, login abuse
 controls, two-factor authentication, administrative account recovery, or schema

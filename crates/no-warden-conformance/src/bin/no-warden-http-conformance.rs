@@ -24,6 +24,7 @@ enum Suite {
     AccountDeletion,
     CipherReads,
     PasswordGrants,
+    RefreshGrants,
 }
 
 impl Suite {
@@ -51,6 +52,7 @@ impl Suite {
             "account-deletion" => Self::AccountDeletion,
             "cipher-reads" => Self::CipherReads,
             "password-grants" => Self::PasswordGrants,
+            "refresh-grants" => Self::RefreshGrants,
             _ => return None,
         })
     }
@@ -75,7 +77,7 @@ fn check<E: Display>(result: Result<(), E>) {
 
 fn usage() {
     eprintln!(
-        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials|personal-vault-purge|account-deletion|cipher-reads|password-grants]"
+        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials|personal-vault-purge|account-deletion|cipher-reads|password-grants|refresh-grants]"
     );
 }
 
@@ -156,5 +158,8 @@ fn main() {
     }
     if suite == Suite::PasswordGrants {
         check(no_warden_conformance::password_login::run());
+    }
+    if suite == Suite::RefreshGrants {
+        check(no_warden_conformance::refresh_grants::run());
     }
 }

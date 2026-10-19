@@ -15,6 +15,7 @@ use no_warden::{
     identity::Secret,
     password_login::{PasswordLoginAccount, PasswordLoginDevice, PasswordLoginStorage},
     purge::VaultPurgeStorage,
+    refresh::{RefreshIdentity, RefreshMethod, RefreshStorage},
     registration::RegistrationEmail,
     route::{Method, classify},
     service::{ImportData, ItemMetadata},
@@ -28,10 +29,11 @@ use no_warden::{
         DomainSettingsUpdateResponse, FolderRequest, ImportRequest, InitializedAccountKeysResponse,
         KnownDeviceRequest, KnownDeviceResponse, MasterPasswordPolicy,
         MasterPasswordPolicyResponse, PasswordLoginRequest, PasswordOrOtpRequest, PreloginRequest,
-        PreloginResponse, ProfileUpdateRequest, RegisterRequest, RegistrationAuthentication,
-        RegistrationCredentials, RegistrationFinishRequest, RegistrationFinishResponse,
-        RegistrationUnlock, RegistrationVerificationRequest, RegistrationVerificationToken,
-        SecretVerificationRequest, UserPublicKeyResponse, WebAuthnCredentialsResponse,
+        PreloginResponse, ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest,
+        RegistrationAuthentication, RegistrationCredentials, RegistrationFinishRequest,
+        RegistrationFinishResponse, RegistrationUnlock, RegistrationVerificationRequest,
+        RegistrationVerificationToken, SecretVerificationRequest, UserPublicKeyResponse,
+        WebAuthnCredentialsResponse,
     },
 };
 
@@ -105,6 +107,30 @@ impl PasswordLoginStorage for PurgeProbe {
         device: PasswordLoginDevice<'_>,
     ) -> Result<(), ()> {
         black_box((owner, password, device));
+        Ok(())
+    }
+}
+impl RefreshStorage for PurgeProbe {
+    type OwnerId = &'static str;
+    type DeviceId = &'static str;
+
+    fn verify_refresh_token(
+        &mut self,
+        refresh_token: &Secret<'_>,
+    ) -> Result<Option<RefreshIdentity<Self::OwnerId, Self::DeviceId>>, ()> {
+        // Compile/link probe only: trusted verification/time/device binding is external.
+        black_box(refresh_token);
+        Ok(
+            (self.verified && self.account_present).then_some(RefreshIdentity {
+                owner: "embedded-owner",
+                device_identifier: "",
+                method: RefreshMethod::Password,
+            }),
+        )
+    }
+
+    fn prepare_password_refresh(&mut self, owner: &str, device_identifier: &str) -> Result<(), ()> {
+        black_box((owner, device_identifier));
         Ok(())
     }
 }
@@ -249,6 +275,24 @@ pub extern "C" fn _start() -> ! {
                 grant.expires_in(),
                 grant.allows_refresh(),
             ));
+        }
+        let refresh = serde_json_core::from_slice::<RefreshTokenRequest<'_>>(black_box(
+            br#"{"grant_type":"refresh_token","refresh_token":"test-only-refresh-proof","client_id":""}"#,
+        ));
+        if let Ok((refresh, _)) = refresh {
+            for _ in 0..2 {
+                let grant = VaultService::new(&mut provider).authenticate_refresh(&refresh);
+                if let Ok(grant) = grant {
+                    black_box((
+                        grant.user_id(),
+                        grant.device_identifier(),
+                        grant.client_id(),
+                        grant.scope(),
+                        grant.expires_in(),
+                        grant.allows_refresh(),
+                    ));
+                }
+            }
         }
         if let Ok(grant) = VaultService::new(&mut provider)
             .authorize_cipher_read(black_box("embedded-owner"), black_box("embedded-cipher"))

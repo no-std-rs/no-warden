@@ -213,7 +213,7 @@ pub fn refresh_binding(
     refresh_digest: &str,
     owner: &str,
 ) -> rusqlite::Result<Option<String>> {
-    db.query_row("SELECT d.identifier FROM session_devices d JOIN sessions s ON s.access=d.access AND s.owner=d.owner WHERE s.refresh=?1 AND s.owner=?2", params![refresh_digest,owner], |row| row.get(0)).optional()
+    db.query_row("SELECT d.identifier FROM session_devices d JOIN sessions s ON s.access=d.access AND s.owner=d.owner JOIN device_registry r ON r.owner=d.owner AND r.identifier=d.identifier WHERE s.refresh=?1 AND s.owner=?2", params![refresh_digest,owner], |row| row.get(0)).optional()
 }
 
 // This lookup accepts only the session whose access digest was authenticated by

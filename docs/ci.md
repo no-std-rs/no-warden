@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 471 active Rust tests: 216 core, 173 host, and 82 conformance
+The workspace has 489 active Rust tests: 228 core, 177 host, and 84 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -332,6 +332,22 @@ is 39 pre-limiter guards and six credential-flow attempts, two successful, under
 unchanged reference limits. `BW_PASSWORD_GRANTS_RECEIPT` records private authored
 case names and counters. A fresh official CLI 2026.10.0 regression passes all
 120 commands against both actual servers, separately from the focused HTTP
-matrix. The final-source default HTTP regression also passes all 104 cases,
+matrix. The prior default HTTP regression also passes all 104 cases,
 including its real authentication-request and password-exception expiry checks.
-Refresh and complete identity policy remain open.
+Complete identity policy remains open; the refresh comparison below is separate.
+
+The opt-in `--suite refresh-grants` extends the existing required real-client job
+with eight focused Rust cases for password-method refresh. Twelve core tests and
+an actual no-allocator consumer call cover the replay-preserving provider and
+private grant boundary. The host returns only five OAuth fields, resolves current
+device authority, preserves original proof deadlines and keeps earlier proofs
+valid. Clock/provider tests cover thirty-second leeway and retained-device
+thirty/ninety-day issuance; upstream refresh JWT encoding/`nbf`, SSO and mobile
+runtime remain outside this slice. `BW_REFRESH_GRANTS_RECEIPT` records private
+authored names and counters. All eight selected cases pass against both actual
+servers: 268 counted HTTP requests each, including six successful password
+logins and 42 refresh POSTs, with two fixture registrations excluded. The refresh
+split is 22 successes, 15 invalid proofs, four presence/duplicate guards and one
+missing-grant form guard. A fresh official CLI 2026.10.0 regression also passes all
+120 commands against both actual servers. That lifecycle regression is separate
+from captured refresh requests; no route trace or full-identity claim follows.

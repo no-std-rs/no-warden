@@ -593,16 +593,18 @@ that state. This table does not provide an administrative account API.
 
 The [password-method token source](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth.rs#L239-L313)
 uses a two-hour access lifetime. The adapter now uses 7200 seconds for ordinary
-and auth-request password grants and refresh, retaining refresh capability and
-the existing encrypted account-decryption fields. JWT `client_id` is the supplied
-value, including empty, or `undefined` when absent. Refresh uses the optional
+and auth-request password grants and refresh. Password login retains encrypted
+account-decryption fields; refresh returns only its five OAuth fields.
+JWT `client_id` is the supplied value, including empty, or `undefined` when
+absent. Refresh uses the optional
 client ID on the refresh request. Bound tokens project `device` and the retained
 registry type label as `devicetype`; repeated login/refresh does not replace the
-stored name/type. Personal API-key authority is unchanged, and unbound legacy
-sessions remain refreshable without invented device claims.
+stored name/type. Personal API-key authority is unchanged. Legacy unbound
+sessions retain existing access behavior but cannot refresh without current
+device authority.
 
-The strict local refresh replay rule still differs from upstream. Mobile
-refresh lifetimes, full JWT/refresh-token equivalence, two-factor/mail/SSO policy,
+The password-method refresh contract below preserves source proof reuse. Full
+JWT/refresh-token representation and `nbf` equivalence, two-factor/mail/SSO policy,
 administrative controls, notifications, expiry cleanup, rate controls and proxy
 policy remain open. Required CI reruns the HTTP comparison and the verified
 unchanged 120-command CLI baseline. That client regression does not
@@ -1184,7 +1186,7 @@ optional aliases/roots therefore make that field absent, triggering the ordered
 A single recognized present `authRequest`, even empty, selects its separate proof
 flow and cannot fall back. Its underscore spelling is not an alias. Duplicate
 auth-request selection retains the adapter's stricter rejection policy, an explicit
-source gap; other identity grants keep their existing parser/policy limits.
+source gap; other identity grants keep their declared parser/policy limits.
 
 Device IDs and names are opaque strings, including empty values. `deviceType`
 is a string form field; nonnumeric, empty or out-of-i32-range input reaches the
@@ -1209,6 +1211,75 @@ scope, optional-duplicate absence, raw proof, alias/empty-device success, JWT
 authority and account/vault invariants. They are not server-side rate telemetry.
 A fresh official CLI 2026.10.0 regression also passes all 120 commands against
 both actual servers. It is separate lifecycle evidence, without a captured
-request trace. Refresh processing,
+request trace. Refresh has a separate supported-method contract below;
 SMTP/2FA/SSO, optional unrelated guards, universal JWT/time behavior and complete
 form transport remain separate contracts.
+
+### Password-method refresh grants
+
+The [pinned dispatcher and refresh response](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L57-L178)
+match [release 1.37.4](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/identity.rs#L57-L180)
+for this ordinary password-method subset. `grant_type=refresh_token` requires a
+present optional `refresh_token`. Missing `grant_type` is a Rocket form 422 whose
+body need not be JSON. Missing or repeated matching refresh-proof roots become
+absent and return the default nine-field API 400 with
+`refresh_token cannot be blank`. Present empty, malformed, revoked or expired
+proofs return exactly `{"error":"invalid_grant"}` with 400.
+
+[Form aliases](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L1107-L1167)
+are uncased `grant_type`/`granttype`, `refresh_token`/`refreshtoken` and
+`client_id`/`clientid`. Rocket root matching includes dotted/bracketed names.
+The required grant takes its first match; repeated matching optional roots become
+`None`. An absent or repeated client ID yields access claim `undefined`; present
+empty is preserved. Refresh ignores submitted scope, username, password and
+replacement device metadata. It obtains authority from the verified proof.
+
+[Refresh verification and issuance](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth.rs#L1276-L1384)
+decode the refresh JWT, find its current persistent device secret, touch the
+device, resolve its user and enforce the selected method policy. The password
+path does not recheck account enabled state, an old security stamp or the
+requesting device/IP. A valid proof for another account refreshes that account;
+submitted bearer/body owner values cannot change it. Earlier valid proofs remain
+usable after new issuance, and their own deadlines do not move. Old access keeps
+its original deadline. Upstream refresh JWTs can be byte-identical when issued
+within one second; changing token strings is not the replay contract.
+
+The success JSON has exactly `refresh_token`, `access_token`, `expires_in`,
+`token_type: "Bearer"` and `scope: "api offline_access"`. Account decryption,
+Key/KDF/private-key fields are absent. Access uses the current account stamp,
+retained device and request client ID, with a two-hour lifetime. Only Android/iOS
+types 0/1 use ninety-day refresh; all other types, including Android Amazon 15,
+use thirty days ([device policy](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/device.rs#L93-L105)).
+
+[JWT decoding](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth.rs#L130-L153)
+removes all Unicode whitespace and checks signature, login issuer, `exp` and
+`nbf` with thirty-second leeway. The pinned jsonwebtoken 11.1.0
+[boundary checks](https://github.com/Keats/jsonwebtoken/blob/v11.1.0/src/validation.rs#L250-L271)
+reject `exp < now - 30` and `nbf > now + 30`; expiry equality is accepted.
+Password/KDF changes rotate all owner device secrets; direct stamp reset also
+deletes devices. Recreating the same identifier cannot restore an old proof.
+
+`RefreshStorage` keeps proof verification, method/device authority, clocks and
+preparation outside the allocation-free service. The conformance host uses
+random opaque stored handles with original deadlines and current device joins,
+not upstream refresh JWTs; no JWT encoding or `nbf` equivalence is claimed. Its
+issuance savepoint provides stronger rollback than upstream's separate activity
+writes. Unsupported SSO/API methods, their activity-before-failure ordering,
+mobile runtime, thirty-day waits and complete identity policy remain open.
+
+The concrete shipped [CLI sync command](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/vault/sync.command.ts#L13-L20)
+calls [full sync](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/platform/sync/default-sync.service.ts#L162-L169),
+which reaches [ApiService refresh](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/services/api.service.ts#L1453-L1537).
+It forwards the refresh string opaquely and decodes only access tokens for client
+ID and account identity. The [bundled SDK renewal request](https://github.com/bitwarden/sdk-internal/blob/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6/crates/bitwarden-core/src/auth/api/request/renew_token_request.rs#L1-L34)
+also posts this form. These are source call paths; they are not captured CLI
+request traces or proof that every feature-gated SDK branch executes.
+All eight selected Rust HTTP cases pass against the adapter and actual
+Vaultwarden 1.37.4: 268 counted requests per target, including six successful
+password logins and 42 refresh POSTs. Refreshes comprise 22 successes, 15 minimal
+`invalid_grant` failures, four missing/duplicate-proof guards and one missing-grant
+422. Two fixture registrations are excluded. Proof reuse across new issuance,
+current client/device authority, old access, owner isolation and
+password/KDF/stamp revocation/recovery pass with final retained-cipher decryption.
+Long expiry, refresh JWT/`nbf`, disabled-account and mobile behavior are not live
+runtime claims; applicable provider/clock contracts use separate unit evidence.

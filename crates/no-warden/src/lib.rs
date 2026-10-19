@@ -29,6 +29,7 @@ pub mod identity;
 pub mod import;
 pub mod password_login;
 pub mod purge;
+pub mod refresh;
 pub mod registration;
 pub mod route;
 pub mod service;
