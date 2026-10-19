@@ -655,7 +655,8 @@ extra `UserDecryptionOptions.UserKeyId` is not a full-projection parity claim.
 The core `AccountKeyIdStorage` provider and SQLite transaction compare-and-set
 an absent ID with its revision atomically, a stronger guarantee than upstream's
 separate check/save. This identifies existing key material without rotating it.
-The existing 16-MiB adapter body cap differs from upstream's 20-MiB JSON limit.
+The adapter's 16 MiB body cap is 16,777,216 bytes; upstream's JSON cap is
+20 MB (20,000,000 bytes).
 
 The [pinned handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1067-L1081)
 and [release 1.37.4 handler](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/accounts.rs#L1052-L1066)

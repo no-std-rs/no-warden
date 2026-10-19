@@ -998,5 +998,5 @@ HTTP requests include one fixture login; two additional logins are CLI commands.
 It is separate from baseline120 and adds no command-form or captured-route
 claim. Local SQL tests separately establish atomic one-time assignment and
 rollback/reopen; upstream's separate check/save is weaker. Full key rotation,
-all account variants, complete token projections and 16-versus-20-MiB transport
-parity remain open.
+all account variants, complete token projections and transport-limit parity
+(16,777,216 versus 20,000,000 bytes) remain open.
