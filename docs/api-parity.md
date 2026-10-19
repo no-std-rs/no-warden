@@ -39,12 +39,13 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 95 routed patterns, 52 with typed requests, 84 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 99 routed patterns, 53 with typed requests, 88 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
+| Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 92 partial and 202 unimplemented. Query/rank/configuration
+status: 96 partial and 198 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
@@ -55,8 +56,8 @@ responses, and attachment responses. Bulk cipher lists use the generic `ListResp
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 87 patterns, negative
-HTTP evidence for 86, 209 named HTTP cases, and 41 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 91 patterns, negative
+HTTP evidence for 90, 215 named HTTP cases, and 44 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -987,7 +988,7 @@ Each deletion proves three fresh owned attachment capabilities fail while the
 foreign capability remains byte-exact, within a 30-second window. Physical
 row/BLOB deletion, eighteen-stage rollback and durable reopen are separate local
 SQL evidence. The existing CLI120 baseline adds no account-deletion call or
-trace. Recovery/email deletion, Sends, emergency-access, organization lifecycle,
+trace. Recovery/email deletion, broader Send variants, emergency-access, organization lifecycle,
 successful protected-action OTP and
 complete failure/transport variants remain separate gaps. Full parity stays open.
 
@@ -1117,9 +1118,9 @@ Seven newly implemented patterns map to seven distinct handlers in the fixed
 294-handler inventory: owner `GET`/`POST /api/sends`, owner `GET`/`PUT`/`DELETE
 `/api/sends/{id}`, `PUT /api/sends/{id}/remove-password` and recipient
 `POST /api/sends/access`. The existing token route adds `grant_type=send_access`;
-sync now includes actual owner Send projections. File upload/download, email
-verification and broader enterprise/configuration variants remain unimplemented
-or partial. Every full-parity flag remains false.
+sync now includes actual owner Send projections. The later file-Send selection
+below adds four handlers; email verification and broader enterprise/configuration
+variants remain unimplemented or partial. Every full-parity flag remains false.
 
 `SendStorage` supplies trusted policy, stable indexed views, persistence,
 password verification and recipient capability verification. `TextSendRequest<P>`
@@ -1127,7 +1128,8 @@ is an allocation-free semantic view, not a full Serde request decoder.
 `SendOwnerResponse<P>`, `SendRecipientResponse<P>` and `SendListResponse<L>`
 serialize eighteen, eight and three fields without allocating. The HTTP adapter
 owns dates, raw JSON, root normalization, cryptography and token signing. No
-complete typed sync or file-Send model is counted.
+complete typed sync model is counted; the later file selection adds its own
+semantic request and explicit transport-response models.
 
 The [pin/release protocol](protocol.md#personal-text-sends) preserves policy and
 ownership ordering, the strict thirty-one-day ceiling, opaque metadata and
@@ -1155,6 +1157,41 @@ Static client calls and the independently passing CLI120 baseline are not new
 Send-route traces.
 
 The host uses a private persisted HS256 Send signer rather than upstream RS256.
-File Sends, email OTP, enterprise policies, configuration matrices, notifications,
+Remaining file variants, email OTP, enterprise policies, configuration matrices, notifications,
 rate controls, purge cron and full JWT/transport/failure parity remain open. The
 delivery goal remains all upstream APIs, beyond the verified personal subset.
+
+## Personal file-Send lifecycle
+
+Four registered handlers become partial: reservation, multipart upload,
+recipient file-URL issuance and binary GET. They deepen existing owner CRUD,
+recipient metadata, `send_access` and sync; they do not implement the static
+client upload-renewal GET or complete the Send family. The ledger retains all
+294 handler variants: 96 partial, 198 unimplemented, zero full and zero traces.
+It records 99 routed patterns, 53 with typed requests, 44 with any typed response
+and 88 with reusable core services. Measured multipart facts are not counted as
+a wire request DTO; `FileSendRequest<P>` is a semantic view, and the explicit
+reservation/download responses are typed serializers.
+
+The [pin/release protocol](protocol.md#personal-file-sends) preserves generated
+identity, immutable file metadata, filename-before-ID-before-size upload guards,
+exact encrypted length, count-on-URL issuance and token-only binary reads.
+A failed count reservation can still advance account revision. SQLite BLOB and
+revision writes are atomic; later response generation is a separate boundary.
+Configured quota/policy matrices, object storage and universal failure timing
+remain outside the adapter.
+
+Both actual targets pass six Rust cases/131 counted requests, including
+10 Send grants, nine multipart requests, 13 URL requests, 19 binary GETs and
+two ordinary logins; two registrations are excluded. Real file cryptography
+checks authentication before decryption for arbitrary and empty plaintext.
+Fresh URL checks separate current policy/limit behavior from physical deletion.
+Eight host tests additionally cover rollback/retry, signer/byte reopen,
+create-only upload, scalar projection, query/multipart parsing and direct account
+FK cleanup. The separate official CLI2026.10.0 file run passes all twenty
+commands on both targets with exact output bytes and strict negative categories;
+owner get/list still use synced cache. Text20 and baseline120 remain separate.
+No captured trace, live maximum upload/TTL, full transport/Range, email OTP,
+enterprise configuration, notification/rate/cron or JWT-algorithm equivalence
+claim is introduced. Independent MIT/Apache implementation retains the full
+upstream API delivery goal.

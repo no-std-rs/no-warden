@@ -59,6 +59,10 @@ pub enum Route<'a> {
     SendDelete(&'a str),
     SendRemovePassword(&'a str),
     SendAccess,
+    SendFileCreate,
+    SendFileUpload(&'a str, &'a str),
+    SendFileAccess(&'a str),
+    SendFileDownload(&'a str, &'a str),
     KnownDevice,
     Devices,
     DeviceGet(&'a str),
@@ -112,6 +116,8 @@ impl Route<'_> {
                 | Self::RegistrationFinish
                 | Self::Token
                 | Self::SendAccess
+                | Self::SendFileAccess(_)
+                | Self::SendFileDownload(_, _)
                 | Self::AuthRequestCreate
                 | Self::AuthRequestResponse(_)
                 | Self::KnownDevice
@@ -181,6 +187,7 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (Get, "/api/sends") => Some(SendList),
         (Post, "/api/sends") => Some(SendCreate),
         (Post, "/api/sends/access") => Some(SendAccess),
+        (Post, "/api/sends/file/v2") => Some(SendFileCreate),
         (Get, "/api/devices/knowndevice") => Some(KnownDevice),
         (Get, "/api/devices") => Some(Devices),
         (Get, "/api/settings/domains") => Some(DomainsGet),
@@ -213,9 +220,23 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         ) => None,
         _ => {
             if let Some(tail) = path.strip_prefix("/api/sends/") {
+                if let Some(file_id) = tail.strip_prefix("access/file/") {
+                    return (method == Post && !file_id.is_empty() && !file_id.contains('/'))
+                        .then_some(SendFileAccess(file_id));
+                }
                 if let Some((id, action)) = tail.split_once('/') {
-                    return (method == Put && !id.is_empty() && action == "remove-password")
-                        .then_some(SendRemovePassword(id));
+                    if id.is_empty() {
+                        return None;
+                    }
+                    if method == Put && action == "remove-password" {
+                        return Some(SendRemovePassword(id));
+                    }
+                    if let Some(file_id) = action.strip_prefix("file/") {
+                        return (method == Post && !file_id.is_empty() && !file_id.contains('/'))
+                            .then_some(SendFileUpload(id, file_id));
+                    }
+                    return (method == Get && !action.is_empty() && !action.contains('/'))
+                        .then_some(SendFileDownload(id, action));
                 }
                 if tail.is_empty() {
                     return None;
@@ -362,6 +383,57 @@ mod tests {
     use super::*;
 
     #[test]
+    fn file_send_routes_keep_owner_uploads_and_scoped_recipient_downloads_distinct() {
+        for (method, path, expected, owner_authenticated) in [
+            (
+                Method::Post,
+                "/api/sends/file/v2",
+                Route::SendFileCreate,
+                true,
+            ),
+            (
+                Method::Post,
+                "/api/sends/raw/file/opaque-file",
+                Route::SendFileUpload("raw", "opaque-file"),
+                true,
+            ),
+            (
+                Method::Post,
+                "/api/sends/access/file/opaque-file",
+                Route::SendFileAccess("opaque-file"),
+                false,
+            ),
+            (
+                Method::Get,
+                "/api/sends/raw/opaque-file",
+                Route::SendFileDownload("raw", "opaque-file"),
+                false,
+            ),
+        ] {
+            assert_eq!(classify(method, path), Some(expected));
+            assert_eq!(
+                classify(method, &std::format!("{path}/?t=opaque")),
+                Some(expected)
+            );
+            assert_eq!(expected.requires_authentication(), owner_authenticated);
+        }
+        for (method, path) in [
+            (Method::Put, "/api/sends/file/v2"),
+            (Method::Get, "/api/sends/raw/file/opaque-file"),
+            (Method::Post, "/api/sends/raw/opaque-file"),
+            (Method::Post, "/api/sends/access/file/"),
+            (Method::Post, "/api/sends/raw/file/id/extra"),
+            (Method::Get, "/api/sends//file"),
+        ] {
+            assert_eq!(classify(method, path), None);
+        }
+        assert_eq!(
+            classify(Method::Get, "/api/sends/raw/remove-password"),
+            Some(Route::SendFileDownload("raw", "remove-password"))
+        );
+    }
+
+    #[test]
     fn text_send_routes_preserve_source_methods_and_separate_recipient_authority() {
         for (method, path, route) in [
             (Method::Get, "/api/sends", Route::SendList),
@@ -392,11 +464,8 @@ mod tests {
             (Method::Post, "/api/sends/raw"),
             (Method::Post, "/api/sends/raw/remove-password"),
             (Method::Delete, "/api/sends"),
-            (Method::Get, "/api/sends/raw/remove-password"),
             (Method::Put, "/api/sends/raw/Remove-Password"),
-            (Method::Post, "/api/sends/file/v2"),
             (Method::Get, "/api/sends//remove-password"),
-            (Method::Get, "/api/sends/raw/extra"),
         ] {
             assert!(classify(method, path).is_none());
         }

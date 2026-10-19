@@ -769,5 +769,33 @@ cache state after real sync, and do not prove independent owner HTTP reads.
 Actual recipient receive uses Send-token issuance and `POST /sends/access`,
 as established by the focused actual-client comparison. No captured request trace
 is claimed.
-File Sends, email OTP, enterprise/configuration policy, relay/notifications,
+File Sends have a separate selection below; email OTP, enterprise/configuration policy, relay/notifications,
 rate controls, purge scheduling and upstream RS256/JWT equivalence remain open.
+
+## Personal file-Send comparisons
+
+`--suite file-sends` runs six Rust HTTP cases against a disposable target.
+Both actual adapters pass131 counted requests:10 Send-token grants,nine multipart
+requests,13 file-URL requests,19 binary GETs and two password logins, excluding
+two registrations. The cases authenticate before decrypting arbitrary and empty
+plaintext, compare exact metadata and bytes, check immutable edits/guards/counts,
+and prove fresh URLs remain readable after policy changes but fail after
+physical deletion while foreign data remains. `BW_FILE_SENDS_RECEIPT` writes
+private authored names/status/counters only. Use a fresh reference process under
+unchanged default limits; these counters are not limiter telemetry.
+
+`--suite file-sends-cli` separately passes twenty official CLI2026.10.0 commands
+on both targets: create/upload, sync/cache get/list, protected receive, edit,
+password removal, fresh-recipient public receive and delete. Both output files
+must match the original bytes. Wrong password and deleted Send require exact
+published failure categories; generic server/rate/transport failures cannot pass.
+`BW_FILE_SENDS_CLI_RECEIPT` records the private result. Sender and recipients have
+separate private stores. The window begins before fresh capability issuance,
+so expiry cannot explain a later deletion rejection.
+
+These twenty commands, text-Send20 and baseline120 remain independent suites.
+Owner get/list use synced cache; no captured route trace is claimed. No bytes,
+filename plaintext, fragment seed, token, password or private URL enters logs.
+Configured quotas/policies, object storage, email OTP, notifications/rate/cron,
+full Range/transport, live maximum upload/TTL and upstream RS256 equivalence
+remain open.

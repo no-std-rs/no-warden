@@ -231,7 +231,7 @@ pub(crate) fn load(db: &Connection, id: &str) -> rusqlite::Result<Option<Record>
     .optional()
 }
 
-fn display_size(size: i64) -> String {
+pub(crate) fn display_size(size: i64) -> String {
     let units = ["bytes", "KB", "MB", "GB", "TB", "PB"];
     let mut value = size as f64;
     let mut unit = 0;

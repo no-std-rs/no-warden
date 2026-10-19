@@ -98,6 +98,8 @@ jobs:
           target/debug/no-warden-http-conformance --suite refresh-grants
           target/debug/no-warden-http-conformance --suite text-sends
           target/debug/no-warden-http-conformance --suite text-sends-cli
+          target/debug/no-warden-http-conformance --suite file-sends
+          target/debug/no-warden-http-conformance --suite file-sends-cli
           target/debug/no-warden-http-conformance --suite account-kdf-cli
           target/debug/no-warden-http-conformance --suite account-password-cli
           bash tools/e2e.sh

@@ -1,5 +1,8 @@
 # Working on no-warden
 
+- Keep the MIT/Apache-2.0 licensing. Independently author implementations and
+  compatibility tests; do not copy or adapt Vaultwarden's AGPL implementation.
+  Use pinned protocol references and comparisons with actual servers and clients.
 - `crates/no-warden` is `no_std` and must not link `alloc`, directly or through
   dependencies. Keep storage, HTTP, crypto providers and clocks in adapters.
 - Preserve Bitwarden's opaque encrypted vault payloads. Never log passwords,
