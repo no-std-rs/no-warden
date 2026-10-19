@@ -27,6 +27,7 @@ invoke the pinned official Bitwarden CLI as an external process.
 - [x] Personal cipher bulk lifecycle and archive/unarchive subset: reusable allocation-free contracts, atomic provider behavior, HTTP comparison of all 12 route patterns, and real CLI archive/unarchive verification.
 - [x] Personal API-key identity subset: reusable allocation-free proof/provider contracts, confidential key retrieval and rotation, and verified real CLI API-key login, password unlock, fresh-cache decryption, and rotation.
 - [x] Personal attachment subset: allocation-free metadata and lifecycle contracts, v2 and legacy uploads, scoped downloads, cleanup, and real CLI create/get/delete verification.
+- [x] Personal KDF/password transition subset: reusable allocation-free validation/provider contracts and previous-stamp policy, with real CLI fresh-cache decryption after client-side rewrap. Full account lifecycle and all exception routes remain open.
 - [x] Rust CI, bare-metal compile check, Runnerless configuration, Codex gate.
 - [x] Bare-metal consumer links JSON decoding/encoding without a global allocator.
 - [x] Owned fixed-capacity vault consumer exercises service rules without std/alloc.

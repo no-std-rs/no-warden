@@ -609,7 +609,7 @@ verifiers, clocks, randomness and persistence remain external to the no-alloc co
 
 The adapter rechecks the old proof inside its savepoint, then replaces the server
 verifier, wrapped user key and client KDF metadata, creates a private stamp,
-advances revision and invalidates owner sessions. It preserves device/push
+advances revision and invalidates ordinary owner sessions. It preserves device/push
 registrations, asymmetric keys, API credentials, authentication requests, vault
 data and foreign accounts. Rollback covers every local mutation and deferred
 commit failure. This is stronger than upstream's sequential refresh rotation and
@@ -622,3 +622,38 @@ account emails, where both agree. No general equality of those versioned edge
 cases is inferred. KDF changes preserve opaque new proof/key strings; client
 reencryption belongs to clients. The host-only fixture rewraps the same user key
 and encrypts an existing item to establish actual CLI decryption after the change.
+
+
+## Password changes and previous-stamp authorization
+
+`AccountPasswordStorage` keeps password verification, exact authoritative email,
+server hint policy and persistence in adapters. The core checks the old proof
+before selecting credentials: a complete nested authentication/unlock pair wins;
+a partial nested pair can fall back to complete legacy hash/key fields. Nested
+KDF values must equal each other and both salts must equal the exact stored
+email. This endpoint neither validates those KDF thresholds nor changes the
+stored client KDF. Missing, null or whitespace-only hints clear the hint.
+
+A private validated plan carries the fixed upstream password-change stamp
+policy. Its pure helper checks an expired deadline before route membership and
+verified previous-stamp equality; equality at the deadline is still valid.
+Providers supply clocks, stamp comparisons, JWT verification, device lookup and
+lazy cleanup. Only `post_rotatekey`, `get_contacts`, `get_public_keys` and
+`get_api_webauthn` qualify, for 120 seconds after the change. The adapter currently
+implements only the public-key route from this set.
+
+The SQLite adapter captures the original expiry and bound device of current
+owner access tokens before invalidating ordinary sessions and refresh tokens.
+Private snapshots survive KDF changes and direct stamp resets, as upstream's
+exception does. Direct resets delete devices; recreating the same owned device
+identifier can reactivate an unexpired exception. Each password change replaces
+the previous generation. An expired mismatched-stamp request with a valid device
+lazily clears the exception and advances account revision. A current-stamp request
+does not trigger that cleanup.
+
+Credential, hint, key, stamp, revision and session changes use one local
+transaction. This is a stronger failure guarantee than upstream's sequential
+writes. Upstream event logging before semantic validation, logout notifications,
+remembered 2FA and all missing exception routes remain adapter gaps. The inherited
+strict access-expiry check does not implement upstream JWT's 30-second leeway;
+no exception extends a token's original access lifetime.

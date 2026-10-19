@@ -199,7 +199,7 @@ BW_E2E_SERVER=http://127.0.0.1:8001 cargo run --locked \
 
 By default the binary runs folders, account keys, profile/avatar, equivalent
 domains, devices, device tokens, authentication requests, responses, login, then
-registration, account security and KDF changes: 96 cases. `--suite personal` selects the first four groups;
+registration, account security, KDF and password changes: 104 cases. `--suite personal` selects the first four groups;
 `--suite devices` selects discovery; `--suite device-tokens` selects token routes;
 `--suite auth-requests` selects authentication-request creation and reads.
 `--suite auth-responses` selects approval, rejection and public response polling.
@@ -207,6 +207,9 @@ registration, account security and KDF changes: 96 cases. `--suite personal` sel
 `--suite registration` selects the two-step no-SMTP registration flow.
 `--suite account-security` selects password verification and security-stamp renewal.
 `--suite account-kdf` selects nested client-KDF changes.
+`--suite account-password` selects password changes and previous-stamp authorization.
+`--suite account-password-cli` separately runs the ten-command fresh-cache password
+change proof and is excluded from `--suite all`.
 `--suite account-kdf-cli` separately verifies fresh-cache CLI decryption after an
 HTTP KDF change; it is excluded from `--suite all` and requires the locked CLI.
 Individual selectors are `folders`,
@@ -225,7 +228,7 @@ requests: five login attempts (four successful and one deliberately rejected)
 and one refresh. Run these selections in separate fresh disposable reference
 processes to stay within its unchanged default ten-login limit. Use another
 fresh reference process for the complete CLI comparison. The adapter's CI job
-runs all 96 HTTP cases together; do not run that combined selection against one
+runs all 104 HTTP cases together; do not run that combined selection against one
 reference process with default limits.
 Other HTTP and persistence groups still use their
 existing JavaScript tools.
@@ -541,7 +544,41 @@ login, lock/unlock, sync and decryption of the preexisting item. Its direct seve
 HTTP requests and one password grant exclude registration bootstrap and all
 CLI-internal requests. No CLI-posted KDF endpoint or captured route is inferred.
 
-The current default local selection passes all 96 cases with 4214 tracked HTTP
+The KDF milestone passed all 96 cases with 4214 tracked HTTP
 requests, including the real authentication-request expiry fixture.
 The unchanged official CLI `2026.10.0` baseline also passes all 120 commands
 against each server, separately from the nine-command KDF proof.
+
+
+The focused password CLI comparison passes ten commands against both actual
+servers with official CLI 2026.10.0. HTTP rewraps the same user key under the new
+password before a fresh client cache starts. The CLI rejects the old password,
+then logs in, locks/unlocks, syncs and decrypts the preexisting item with the new
+password. Seven direct HTTP requests and one direct password grant exclude
+registration bootstrap and CLI-internal HTTP. No password POST trace is claimed.
+`BW_ACCOUNT_PASSWORD_CLI_RECEIPT` selects a private counts-only receipt.
+
+
+All eight selected password HTTP cases pass against the actual adapter and
+Vaultwarden 1.37.4: 285 tracked requests each, including 11 identity requests
+(eight password logins, one API-key login and two refresh attempts, one successful), two
+authentication-request creations and four response polls. Direct loopback peers
+keep at most six identity requests per peer under unchanged reference limits.
+The final case waits at least 121 seconds after the latest password change,
+then verifies that an older valid bearer clears the expired latest exception
+before its stamp mismatch is denied. Repeating it does not advance revision again.
+A separate timed account checks expiry and owner isolation. Counts exclude
+shared registration bootstrap.
+
+The separate official CLI 2026.10.0 proof passes ten commands against each server:
+old-password rejection, fresh-cache new-password login, lock/unlock, sync and
+decryption of an item encrypted before the HTTP password change. Seven direct
+HTTP requests and one password grant exclude bootstrap and CLI-internal HTTP.
+No CLI-posted password endpoint or captured request trace is inferred.
+
+
+The final local regression passes all 104 HTTP cases with 4499 tracked
+requests across thirteen groups, including real authentication-request and
+password-exception expiry. The unchanged official CLI 2026.10.0 baseline passes
+all 120 commands against each actual server, separately from the focused KDF
+and password CLI proofs.

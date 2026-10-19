@@ -927,7 +927,10 @@ requiring exactly one valid proof. Success returns empty 200 and invalidates
 existing owner sessions and devices, including the caller. It preserves the API
 secret and pending/approved authentication requests. Such an approved request
 retains its original deadline, peer-IP check and one-use requirement. The adapter
-projects the renewed private stamp into JWT `sstamp`, profile and sync.
+projects the renewed private stamp into JWT `sstamp`, profile and sync. Any
+existing password-change exception retains its original guards and deadline.
+Deleted devices block it; recreating the same owned identifier can make a
+still-valid old bearer eligible again.
 
 The contracts come from pinned
 [account handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1084),
@@ -954,8 +957,10 @@ After old-proof verification, both complete KDF values and salts must match.
 PBKDF2 requires at least 100,000 iterations; Argon2 requires positive iterations,
 15–1024 MiB and parallelism 1–16. Other signed identifiers remain opaque, and
 non-Argon memory/parallelism clear to null. Success returns empty 200, changes the
-wrapped key/proof/KDF/stamp/revision and invalidates old sessions while preserving
-devices, API secrets, auth requests and encrypted vaults.
+wrapped key/proof/KDF/stamp/revision and invalidates ordinary sessions/refreshes
+while preserving devices, API secrets, auth requests and encrypted vaults. An
+existing password-change previous-stamp exception retains its original deadline
+and device/access/route/stamp guards.
 
 Sources: pinned
 [KDF endpoint and nested checks](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L690)
@@ -966,3 +971,35 @@ versioned salt variants remain explicit. Password/auth-request grants omit a
 top-level empty `Key`, while API-key grants retain it, as shown in the pinned
 [password response](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L592)
 and [API-key response](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L726).
+
+
+### Password changes
+
+`POST /api/accounts/password` requires an authenticated device and old
+`masterPasswordHash`. Its six positional fields are old hash, optional hint,
+optional authentication data, optional unlock data, optional new hash and
+optional key. A complete nested pair wins over legacy credentials; a partial
+nested pair can fall back to both legacy fields. Invalid supplied nested JSON
+fails before fallback. Nested aliases match the KDF endpoint above.
+
+Old-proof verification precedes semantic selection. Nested KDF values only need
+to equal each other; they are neither threshold-validated nor stored. Both salts
+must exactly equal stored email, in both the pin and release 1.37.4. Absent/null/
+blank hints clear; other hints trim and obey trusted server policy. Hashes and
+wrapped keys remain opaque, including empty strings. Success returns empty 200.
+
+The change records the pre-reset stamp for 120 seconds. Only logical handlers
+`post_rotatekey`, `get_contacts`, `get_public_keys` and `get_api_webauthn` qualify.
+The last is `/api/webauthn` metadata. The adapter supports public-key admission
+from this set; the other endpoints remain tracked gaps. Normal JWT/device guards
+still apply. Exception expiry is checked before route and stamp mismatch, and
+the exact integer deadline remains valid. Current-stamp requests do not trigger
+cleanup; expired stale-stamp requests with an existing device attempt lazy
+cleanup and advance revision. Historical issued tokens retain their original
+access expiry and gain no new refresh or ordinary-route authority.
+
+See the [password subset and primary references](api-parity.md#password-transition-subset)
+and [provider boundary](architecture.md#password-changes-and-previous-stamp-authorization)
+for cross-transition behavior and verification limits. Event logging,
+notifications, remembered 2FA, remaining exception routes and upstream JWT expiry
+leeway remain open; local transaction rollback exceeds source failure guarantees.

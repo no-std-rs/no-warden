@@ -38,6 +38,9 @@ use crate::{
 /// account revision and invalidates every owner device's bearer/refresh/remember authority,
 /// including the current caller, then removes owner devices. Preserve the account password,
 /// keys, client KDF, API secret, vaults, foreign accounts and all authentication-request rows.
+/// Preserve any existing password-change previous-stamp exception and its original deadline.
+/// Deleted devices prevent its use, but recreating the same owned device identifier can
+/// make a still-valid old JWT eligible for the exception again, following upstream guards.
 /// Providers define/document their persistence boundary: an atomic stamp/revision/session/
 /// device transaction is stronger than upstream's sequential mutations. A failure does not
 /// universally imply rollback; an earlier protected-action OTP may already be consumed.

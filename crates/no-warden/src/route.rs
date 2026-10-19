@@ -34,6 +34,7 @@ pub enum Route<'a> {
     AccountVerifyPassword,
     AccountSecurityStamp,
     AccountKdfChange,
+    AccountPasswordChange,
     AccountKeysGet,
     AccountKeysInitialize,
     UserPublicKey(&'a str),
@@ -137,6 +138,7 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (Post, "/api/accounts/verify-password") => Some(AccountVerifyPassword),
         (Post, "/api/accounts/security-stamp") => Some(AccountSecurityStamp),
         (Post, "/api/accounts/kdf") => Some(AccountKdfChange),
+        (Post, "/api/accounts/password") => Some(AccountPasswordChange),
         (Get, "/api/accounts/keys") => Some(AccountKeysGet),
         (Post, "/api/accounts/keys") => Some(AccountKeysInitialize),
         (Get, "/api/accounts/profile") => Some(Profile),
@@ -298,6 +300,22 @@ fn valid_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn password_change_is_authenticated_post_with_query_and_trailing_slash() {
+        for path in [
+            "/api/accounts/password",
+            "/api/accounts/password/?ignored=true",
+        ] {
+            let route = classify(Method::Post, path).unwrap();
+            assert_eq!(route, Route::AccountPasswordChange);
+            assert!(route.requires_authentication());
+            for method in [Method::Get, Method::Put, Method::Delete, Method::Options] {
+                assert!(classify(method, path).is_none());
+            }
+        }
+        assert!(classify(Method::Post, "/api/accounts/password/extra").is_none());
+    }
+
     #[test]
     fn registration_verification_and_finish_are_public_post_routes() {
         for (path, route) in [

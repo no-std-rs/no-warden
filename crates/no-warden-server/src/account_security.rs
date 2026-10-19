@@ -55,6 +55,13 @@ pub fn stamp(db: &Connection, owner: &str) -> rusqlite::Result<String> {
 
 pub fn reset(db: &mut Connection, owner: &str) -> rusqlite::Result<()> {
     let tx = db.savepoint()?;
+    let old_stamp = stamp(&tx, owner)?;
+    crate::account_password::remember_sessions(
+        &tx,
+        owner,
+        &old_stamp,
+        chrono::Utc::now().timestamp(),
+    )?;
     let revision = crate::store::next_revision(&tx, owner)?;
     let stamp = uuid::Uuid::new_v4().to_string();
     tx.execute("INSERT INTO account_security(owner,stamp) VALUES(?1,?2) ON CONFLICT(owner) DO UPDATE SET stamp=excluded.stamp",params![owner,stamp])?;

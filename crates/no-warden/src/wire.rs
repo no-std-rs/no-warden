@@ -138,6 +138,33 @@ impl core::fmt::Debug for AccountKdfRequest<'_> {
     }
 }
 
+/// Password-change fields in the upstream positional order. A complete nested pair wins
+/// over legacy credentials; a partial nested pair can fall back to the complete legacy pair.
+/// Optional fields have no explicit serde default: omitted object fields work, but positional
+/// arrays must include all six slots. Required old proof and all supplied strings stay opaque.
+/// As with other borrowed DTOs, escaped strings require adapter-owned decoded storage.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountPasswordRequest<'a> {
+    #[serde(borrow)]
+    pub master_password_hash: Secret<'a>,
+    pub master_password_hint: Option<&'a str>,
+    #[serde(borrow)]
+    pub authentication_data: Option<AccountKdfAuthentication<'a>>,
+    #[serde(borrow)]
+    pub unlock_data: Option<AccountKdfUnlock<'a>>,
+    #[serde(borrow)]
+    pub new_master_password_hash: Option<Secret<'a>>,
+    #[serde(borrow)]
+    pub key: Option<Secret<'a>>,
+}
+impl core::fmt::Debug for AccountPasswordRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AccountPasswordRequest")
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Deserialize)]
 pub struct RegistrationAuthentication<'a> {
     #[serde(alias = "Kdf")]
@@ -1450,6 +1477,101 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_password_wire_preserves_optional_branches_positional_order_and_redaction() {
+        let input = r#"{"masterPasswordHash":"private-old","masterPasswordHint":"private-hint雪","authenticationData":{"Salt":"private-salt","Kdf":{"kdfType":-7,"iterations":-8,"memory":-9,"parallelism":-10},"MasterPasswordAuthenticationHash":"private-nested-proof"},"unlockData":{"salt":"private-salt","kdf":{"kdf":-7,"kdfIterations":-8,"kdfMemory":-9,"kdfParallelism":-10},"masterKeyWrappedUserKey":"private-nested-key"},"newMasterPasswordHash":"private-legacy-proof","key":"private-legacy-key","ignored":{"future":true}}"#;
+        let request: AccountPasswordRequest<'_> = serde_json::from_str(input).unwrap();
+        let authentication = request.authentication_data.as_ref().unwrap();
+        let unlock = request.unlock_data.as_ref().unwrap();
+        assert_eq!(authentication.kdf, unlock.kdf);
+        assert!(request.master_password_hash.expose_secret() == "private-old");
+        assert!(request.master_password_hint == Some("private-hint雪"));
+        for value in [
+            request.master_password_hash.expose_secret(),
+            request.master_password_hint.unwrap(),
+            authentication.salt,
+            authentication
+                .master_password_authentication_hash
+                .expose_secret(),
+            unlock.master_key_wrapped_user_key.expose_secret(),
+            request
+                .new_master_password_hash
+                .as_ref()
+                .unwrap()
+                .expose_secret(),
+            request.key.as_ref().unwrap().expose_secret(),
+        ] {
+            let pointer = value.as_ptr() as usize;
+            assert!(
+                (input.as_ptr() as usize..input.as_ptr() as usize + input.len()).contains(&pointer)
+            );
+        }
+        assert!(!std::format!("{request:?}").contains("private"));
+        let legacy: AccountPasswordRequest<'_> =
+            serde_json::from_str(r#"["old","hint",null,null,"new","key"]"#).unwrap();
+        assert!(legacy.authentication_data.is_none() && legacy.unlock_data.is_none());
+        assert!(legacy.master_password_hint == Some("hint"));
+        assert!(legacy.new_master_password_hash.unwrap().expose_secret() == "new");
+        assert!(legacy.key.unwrap().expose_secret() == "key");
+        let nested: AccountPasswordRequest<'_> = serde_json::from_str(r#"["old",null,["salt",[-7,-8,null,null],"new"],["salt",[-7,-8,null,null],"key"],null,null]"#).unwrap();
+        assert!(nested.new_master_password_hash.is_none() && nested.key.is_none());
+        assert!(
+            nested
+                .authentication_data
+                .unwrap()
+                .master_password_authentication_hash
+                .expose_secret()
+                == "new"
+        );
+        let empty: AccountPasswordRequest<'_> =
+            serde_json::from_str(r#"["",null,null,null,"",""]"#).unwrap();
+        assert!(empty.master_password_hash.expose_secret().is_empty());
+        assert!(
+            empty
+                .new_master_password_hash
+                .unwrap()
+                .expose_secret()
+                .is_empty()
+        );
+        assert!(empty.key.unwrap().expose_secret().is_empty());
+    }
+
+    #[test]
+    fn account_password_wire_distinguishes_unknown_outer_aliases_and_invalid_known_schema() {
+        for input in [
+            r#"{"masterPasswordHash":"old"}"#,
+            r#"{"masterPasswordHash":"old","masterPasswordHint":null,"authenticationData":null,"unlockData":null,"newMasterPasswordHash":null,"key":null}"#,
+            r#"{"masterPasswordHash":"old","AuthenticationData":{},"UnlockData":{},"NewMasterPasswordHash":7,"Key":7}"#,
+        ] {
+            let request: AccountPasswordRequest<'_> = serde_json::from_str(input).unwrap();
+            assert!(request.master_password_hint.is_none());
+            assert!(request.authentication_data.is_none() && request.unlock_data.is_none());
+            assert!(request.new_master_password_hash.is_none() && request.key.is_none());
+        }
+        for input in [
+            "{}",
+            "[]",
+            r#"["old"]"#,
+            r#"["old",null,null,null,"new"]"#,
+            r#"["old",null,null,null,"new","key",null]"#,
+            r#"{"MasterPasswordHash":"old","newMasterPasswordHash":"new","key":"key"}"#,
+            r#"{"masterPasswordHash":null}"#,
+            r#"{"masterPasswordHash":7}"#,
+            r#"{"masterPasswordHash":"old","masterPasswordHash":"duplicate"}"#,
+            r#"{"masterPasswordHash":"old","newMasterPasswordHash":7}"#,
+            r#"{"masterPasswordHash":"old","masterPasswordHint":7}"#,
+            r#"{"masterPasswordHash":"old","authenticationData":{},"newMasterPasswordHash":"new","key":"key"}"#,
+            r#"{"masterPasswordHash":"old","unlockData":{"Salt":"s","kdf":{"kdf":0,"kdfIterations":100000},"masterKeyWrappedUserKey":"key"},"newMasterPasswordHash":"new","key":"key"}"#,
+        ] {
+            assert!(serde_json::from_str::<AccountPasswordRequest<'_>>(input).is_err());
+        }
+        let state = crate::account_password::AccountPasswordState {
+            salt: "private-stored-salt",
+            password_hints_allowed: true,
+        };
+        assert!(!std::format!("{state:?}").contains("private"));
+    }
 
     #[test]
     fn account_kdf_wire_preserves_nested_aliases_positional_order_and_borrowing() {

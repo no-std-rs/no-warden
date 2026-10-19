@@ -322,6 +322,29 @@ pub fn rewrap_pbkdf2(
     Ok(updated)
 }
 
+/// Rewrap the same fixture user key for a new master password. Client KDF
+/// settings, RSA keys and existing encrypted vault fields remain unchanged.
+/// Returned credentials are private and belong only to disposable test accounts.
+pub fn rewrap_pbkdf2_password(
+    fixture: &Value,
+    old_password: &str,
+    new_password: &str,
+) -> Result<Value, FixtureError> {
+    let user_key = pbkdf2_fixture_user_key(fixture, old_password)?;
+    let invalid = || FixtureError(Failure::CredentialRewrap);
+    let email = fixture["email"].as_str().ok_or_else(invalid)?;
+    let iterations = fixture["kdfIterations"]
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(invalid)?;
+    let new_master_key = master_key(email, new_password, iterations);
+    let mut updated = fixture.clone();
+    updated["masterPasswordHash"] = json!(password_hash(&new_master_key, new_password));
+    updated["key"] = json!(encrypt(&user_key, &stretch_key(&new_master_key))?);
+    Ok(updated)
+}
+
 fn post_registration(server: &str, body: &Value) -> Result<(), FixtureError> {
     // Registration bodies include password hashes, wrapped keys, and, in the
     // finish phase, verification tokens. Own the transport policy so callers
@@ -521,6 +544,50 @@ mod tests {
             decrypt(&encrypted, &recovered).is_ok_and(|value| value == b"existing encrypted item")
         );
         assert!(encrypted_pbkdf2_value(&fixture, "wrong password", b"private").is_err());
+    }
+
+    #[test]
+    fn password_rewrap_keeps_existing_cipher_decryptable_and_rejects_old_password() {
+        let email = " Alice@Example.Test ";
+        let old_password = "synthetic-old-password";
+        let new_password = "synthetic-new-password";
+        let user_key = [0x63; 64];
+        let old_key = stretch_key(&master_key(email, old_password, 1_000));
+        let fixture = json!({"email":email,"kdf":0,"kdfIterations":1000,
+            "kdfMemory":null,"kdfParallelism":null,
+            "masterPasswordHash":master_password_hash(email,old_password,1000),
+            "key":encrypt_with_iv(&user_key,&old_key,&[0x17;16]),
+            "keys":{"publicKey":"preserved-public","encryptedPrivateKey":"preserved-private"},
+            "extension":{"opaque":"unchanged"}});
+        let before = fixture.clone();
+        let encrypted = encrypted_pbkdf2_value(&fixture, old_password, b"existing item").unwrap();
+        let updated = rewrap_pbkdf2_password(&fixture, old_password, new_password).unwrap();
+        assert!(fixture == before);
+        for field in [
+            "email",
+            "kdf",
+            "kdfIterations",
+            "kdfMemory",
+            "kdfParallelism",
+            "keys",
+            "extension",
+        ] {
+            assert!(updated[field] == fixture[field]);
+        }
+        assert!(updated["masterPasswordHash"] == master_password_hash(email, new_password, 1_000));
+        let recovered = pbkdf2_fixture_user_key(&updated, new_password).unwrap();
+        assert!(recovered == user_key);
+        assert!(decrypt(&encrypted, &recovered).is_ok_and(|value| value == b"existing item"));
+        assert!(pbkdf2_fixture_user_key(&updated, old_password).is_err());
+        for (value, password) in [(&fixture, "wrong password"), (&Value::Null, old_password)] {
+            let Err(error) = rewrap_pbkdf2_password(value, password, new_password) else {
+                panic!("Invalid password rewrap accepted.")
+            };
+            for message in [error.to_string(), format!("{error:?}")] {
+                assert!(!message.contains(old_password) && !message.contains(new_password));
+                assert!(!message.contains(fixture["key"].as_str().unwrap()));
+            }
+        }
     }
 
     #[test]

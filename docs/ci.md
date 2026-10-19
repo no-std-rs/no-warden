@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 373 active Rust tests: 167 core, 136 host, and 70 conformance
+The workspace has 398 active Rust tests: 178 core, 146 host, and 74 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -41,9 +41,9 @@ against Vaultwarden `1.37.4`: 199 requests, including five login attempts (four
 successful and one rejected) and one refresh. They verify known-device headers,
 exact owner-only projections, path guards, login metadata retention, API-key
 registration and refresh identity without changing account/vault state.
-The default adapter job runs all 96 HTTP cases, including authentication-request
-login, real-time expiry, modern registration, account security and KDF changes.
-All 96 cases pass locally with 4214 tracked HTTP requests.
+The default adapter job runs all 104 HTTP cases, including authentication-request
+login, real-time expiry, modern registration, account security, KDF and password changes.
+The preceding KDF milestone passed 96 cases with 4214 tracked HTTP requests.
 The eight authentication-request login cases also passed against Vaultwarden
 `1.37.4`: 444 requests per server, including 43 identity requests and a real
 301-second expiry check.
@@ -54,7 +54,7 @@ configuration with push disabled; actual relay behavior remains open.
 Reference comparisons use `--suite personal`, `--suite devices`, and
 `--suite device-tokens`, `--suite auth-requests`, `--suite auth-responses`,
 `--suite auth-login`, `--suite registration`, `--suite account-security`, and
-`--suite account-kdf` in separate
+`--suite account-kdf`, and `--suite account-password` in separate
 fresh disposable Vaultwarden processes. The separate reference CLI comparison starts another fresh process, preserving the
 reference's default ten-login limit.
 The required client job reruns the unchanged 120-command CLI flow for the final
@@ -222,3 +222,36 @@ official commands prove that a fresh client cache decrypts preexisting ciphertex
 after an HTTP PBKDF2 change and same-user-key rewrap. This does not attribute the
 KDF POST to the CLI or count its internal HTTP calls. Reference HTTP, focused CLI
 and baseline CLI selections use separate fresh processes with unchanged limits.
+
+
+The password-change extension adds exact nested/legacy parsing and a pure
+four-route, 120-second previous-stamp policy. The no-allocator executable links
+both the borrowed request and the inclusive-deadline decision. Host regressions
+cover nine transaction failure stages, deferred commit, reopen, preopened races,
+API access and immutable bearer history across password/KDF/direct-reset changes.
+An independent finding was demonstrated failing before the history fix and
+passing afterward: an older valid bearer must trigger latest-exception expiry
+cleanup before failing its stamp comparison.
+
+`--suite account-password-cli` runs separately in the required client job. Its
+ten official CLI commands reject the old password, then log in with the new
+password, lock/unlock, sync and decrypt an item encrypted before the HTTP change.
+It passes against both actual servers with CLI 2026.10.0. Seven direct HTTP
+requests and one direct password grant exclude registration bootstrap and all
+CLI-internal requests. `BW_ACCOUNT_PASSWORD_CLI_RECEIPT` contains redacted counts;
+no CLI-posted password route or request trace is inferred. The HTTP group has its
+own `BW_ACCOUNT_PASSWORD_RECEIPT` and uses a fresh reference with unchanged limits.
+
+The eight password HTTP cases pass against both actual servers with 285 tracked
+requests each, eleven identity requests (eight password logins, one API-key login
+and two refresh attempts),
+two authentication-request creations and four public polls. The final case waits
+at least 121 real seconds after the latest password change; exact equal-second
+boundary behavior has separate pure-core/provider tests.
+
+
+The final local regression passes all 104 HTTP cases with 4499 tracked
+requests across thirteen groups, including real authentication-request and
+password-exception expiry. The unchanged official CLI 2026.10.0 baseline passes
+all 120 commands against each actual server, separately from the focused KDF
+and password CLI proofs.

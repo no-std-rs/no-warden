@@ -10,6 +10,7 @@
 
 pub mod account_kdf;
 pub mod account_keys;
+pub mod account_password;
 pub mod account_profile;
 pub mod account_security;
 pub mod attachment;
