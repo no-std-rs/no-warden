@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 mod account_kdf;
+mod account_password;
 mod account_security;
 mod attachments;
 mod auth_requests;
@@ -279,10 +280,6 @@ async fn dispatch_with_peer(
         uuid::Uuid::parse_str(id)
             .map_err(|_| Failure(StatusCode::UNPROCESSABLE_ENTITY, "Invalid folder ID"))?;
     }
-    if let Route::UserPublicKey(id) = route {
-        uuid::Uuid::parse_str(id)
-            .map_err(|_| Failure(StatusCode::UNPROCESSABLE_ENTITY, "Invalid user ID"))?;
-    }
     if route == Route::Config {
         return Ok(json_response(protocol::config(&app.base)));
     }
@@ -532,9 +529,29 @@ async fn dispatch_with_peer(
             |r| r.get(0),
         )
         .optional()?;
-    let owner = owner.ok_or_else(unauthorized)?;
+    let owner = match owner {
+        Some(owner) => owner,
+        None => account_password::previous_owner(
+            &mut store.db,
+            &digest(bearer),
+            if matches!(route, Route::UserPublicKey(_)) {
+                "get_public_keys"
+            } else {
+                ""
+            },
+            chrono::Utc::now().timestamp(),
+        )?
+        .ok_or_else(unauthorized)?,
+    };
     let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
     match route {
+        Route::AccountPasswordChange => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let input = account_password::parse(&body)?;
+            VaultService::new(&mut *store).change_password(&owner, &input.request())?;
+            Ok(StatusCode::OK.into_response())
+        }
         Route::AccountKdfChange => {
             devices::access_binding(&store.db, &digest(bearer), &owner)?
                 .ok_or_else(unauthorized)?;
@@ -658,6 +675,8 @@ async fn dispatch_with_peer(
             Ok(Json(response).into_response())
         }
         Route::UserPublicKey(id) => {
+            uuid::Uuid::parse_str(id)
+                .map_err(|_| Failure(StatusCode::UNPROCESSABLE_ENTITY, "Invalid user ID"))?;
             let mut service = VaultService::new(&mut *store);
             let response = service.get_user_public_key(&owner, id)?;
             Ok(Json(response).into_response())
@@ -1206,6 +1225,14 @@ fn issue_token_grant_bound(
             identifier,
             &access,
         )?;
+        account_password::remember_access(
+            db,
+            account["id"].as_str().ok_or_else(invalid)?,
+            identifier,
+            &access,
+            &security_stamp,
+            timestamp + expires_in,
+        )?;
     }
     let mut response = if api.is_some() {
         protocol::api_key_token_fields(account)
@@ -1552,6 +1579,539 @@ mod tests {
                 && account["kdfMemory"].is_null()
                 && account["masterPasswordHint"].is_null()
         );
+    }
+
+    const PASSWORD_PUBLIC_PATH: &str = "/api/users/00000000-0000-4000-8000-000000000001/public-key";
+    fn account_password_target(app: &App) {
+        let account = json!({"id":"00000000-0000-4000-8000-000000000001","email":"target@example.test","keys":{"publicKey":"target-public","encryptedPrivateKey":"target-private"}});
+        app.store.lock().unwrap().db.execute("INSERT INTO accounts(id,email,document,password,revision) VALUES('00000000-0000-4000-8000-000000000001','target@example.test',?1,'unused-verifier',?2)",params![account.to_string(),store::now()]).unwrap();
+    }
+    fn account_password_body(old: &str, new: &str, key: &str) -> Value {
+        json!({"masterPasswordHash":old,"newMasterPasswordHash":new,"key":key,"owner":"bob","securityStamp":"forged","stampException":{"routes":["profile"],"expire":4_000_000_000_i64},"passwordHintsAllowed":true,"_password":"forged"})
+    }
+    fn account_password_login(proof: &str, id: &str) -> String {
+        serde_urlencoded::to_string([
+            ("grant_type", "password"),
+            ("username", "alice@example.test"),
+            ("password", proof),
+            ("deviceIdentifier", id),
+            ("deviceName", "Replacement"),
+            ("deviceType", "14"),
+        ])
+        .unwrap()
+    }
+    #[tokio::test]
+    async fn account_password_http_guards_schema_hint_policy_and_partial_nested_legacy_fallback() {
+        let app = auth_request_fixture_app();
+        account_password_target(&app);
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        for bearer in [None, Some("invalid"), Some("legacy-auth-access")] {
+            let Err(error) = device_request(
+                &app,
+                Method::POST,
+                "/api/accounts/password",
+                device_authorization(bearer),
+                b"{",
+            )
+            .await
+            else {
+                panic!("Unbound password change accepted.")
+            };
+            assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        }
+        for bearer in [None, Some("invalid")] {
+            let Err(error) = device_request(
+                &app,
+                Method::GET,
+                "/api/users/not-a-uuid/public-key",
+                device_authorization(bearer),
+                b"",
+            )
+            .await
+            else {
+                panic!("Unauthenticated public-key request accepted.")
+            };
+            assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        }
+        let Err(error) = device_request(
+            &app,
+            Method::GET,
+            "/api/users/not-a-uuid/public-key",
+            device_authorization(Some("device-fixture-alice")),
+            b"",
+        )
+        .await
+        else {
+            panic!("Malformed public-key ID accepted.")
+        };
+        assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
+        for (body,status) in [
+            (b"{".as_slice(),StatusCode::BAD_REQUEST),
+            (b"{}",StatusCode::UNPROCESSABLE_ENTITY),
+            (br#"{"MasterPasswordHash":"fixture-master-hash","newMasterPasswordHash":"new","key":"key"}"#,StatusCode::UNPROCESSABLE_ENTITY),
+            (br#"{"masterPasswordHash":"fixture-master-hash","newMasterPasswordHash":"new","key":"key","authenticationData":{}}"#,StatusCode::UNPROCESSABLE_ENTITY),
+            (br#"{"masterPasswordHash":"wrong","newMasterPasswordHash":"new","key":"key"}"#,StatusCode::BAD_REQUEST),
+            (br#"{"masterPasswordHash":"fixture-master-hash","key":"key"}"#,StatusCode::BAD_REQUEST),
+        ] {
+            let Err(error)=device_request(&app,Method::POST,"/api/accounts/password",device_authorization(Some("device-fixture-alice")),body).await else {panic!("Invalid password-change request accepted.")};
+            assert_eq!(error.0,status);
+        }
+        app.store
+            .lock()
+            .unwrap()
+            .registration_policy
+            .password_hints_allowed = false;
+        let mut body = account_password_body("fixture-master-hash", "new-proof", "new-key");
+        body["masterPasswordHint"] = json!(" prohibited ");
+        let Err(error) = device_request(
+            &app,
+            Method::POST,
+            "/api/accounts/password",
+            device_authorization(Some("device-fixture-alice")),
+            body.to_string().as_bytes(),
+        )
+        .await
+        else {
+            panic!("Untrusted hint policy override accepted.")
+        };
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        assert!(device_push_persisted_state(&app.store.lock().unwrap()) == before);
+        body["masterPasswordHint"] = json!(" \n \t");
+        body["authenticationData"] = json!({"salt":"ignored-partial","kdf":{"kdf":0,"kdfIterations":-1},"masterPasswordAuthenticationHash":"ignored-partial"});
+        device_push_empty(
+            device_request(
+                &app,
+                Method::POST,
+                "/api/accounts/password",
+                device_authorization(Some("device-fixture-alice")),
+                body.to_string().as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        let account = app
+            .store
+            .lock()
+            .unwrap()
+            .account("id", "alice")
+            .unwrap()
+            .unwrap();
+        assert!(
+            account["key"] == "new-key"
+                && account["masterPasswordHint"].is_null()
+                && account.get("_password").is_none()
+                && account.get("stampException").is_none()
+        );
+        assert!(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                account_password_login("new-proof", "Request-Device").as_bytes()
+            )
+            .await
+            .is_ok()
+        );
+    }
+    #[tokio::test]
+    async fn account_password_http_old_password_and_api_bearers_are_route_limited_and_overwritten()
+    {
+        let app = auth_request_fixture_app();
+        account_password_target(&app);
+        let secret = {
+            let mut store = app.store.lock().unwrap();
+            no_warden::identity::IdentityStorage::get_or_create_api_key(&mut *store, "alice")
+                .unwrap()
+                .api_key
+                .expose_secret()
+                .to_owned()
+        };
+        let api_body = serde_urlencoded::to_string([
+            ("grant_type", "client_credentials"),
+            ("client_id", "user.alice"),
+            ("client_secret", secret.as_str()),
+            ("scope", "api"),
+            ("deviceIdentifier", "Request-Device"),
+            ("deviceName", "Ignored replacement"),
+            ("deviceType", "8"),
+        ])
+        .unwrap();
+        let password = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                account_password_login("fixture-master-hash", "Request-Device").as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        let api = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                api_body.as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        assert!(api.get("refresh_token").is_none());
+        let mut body = account_password_body("fixture-master-hash", "one\0雪", "key-one\0雪");
+        body["masterPasswordHint"] = json!(" \n hint 雪 \t");
+        device_push_empty(
+            device_request(
+                &app,
+                Method::POST,
+                "/api/accounts/password",
+                device_authorization(Some("device-fixture-alice")),
+                body.to_string().as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        for bearer in [
+            "device-fixture-alice",
+            password["access_token"].as_str().unwrap(),
+            api["access_token"].as_str().unwrap(),
+        ] {
+            let public = device_document(
+                device_request(
+                    &app,
+                    Method::GET,
+                    PASSWORD_PUBLIC_PATH,
+                    device_authorization(Some(bearer)),
+                    b"",
+                )
+                .await,
+            )
+            .await;
+            assert!(public["publicKey"] == "target-public" && public.get("privateKey").is_none());
+            for (method, path, data) in [
+                (Method::GET, "/api/accounts/profile", b"".as_slice()),
+                (Method::POST, "/api/accounts/password", b"{"),
+            ] {
+                let Err(error) =
+                    device_request(&app, method, path, device_authorization(Some(bearer)), data)
+                        .await
+                else {
+                    panic!("Previous stamp authorized an unrelated route.")
+                };
+                assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+            }
+        }
+        let refresh = serde_urlencoded::to_string([
+            ("grant_type", "refresh_token"),
+            ("refresh_token", password["refresh_token"].as_str().unwrap()),
+        ])
+        .unwrap();
+        assert!(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                refresh.as_bytes()
+            )
+            .await
+            .is_err()
+        );
+        let current = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                account_password_login("one\0雪", "Request-Device").as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        let body = account_password_body("one\0雪", "two", "key-two");
+        device_push_empty(
+            device_request(
+                &app,
+                Method::POST,
+                "/api/accounts/password",
+                device_authorization(current["access_token"].as_str()),
+                body.to_string().as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        for bearer in [
+            "device-fixture-alice",
+            password["access_token"].as_str().unwrap(),
+            api["access_token"].as_str().unwrap(),
+        ] {
+            let Err(error) = device_request(
+                &app,
+                Method::GET,
+                PASSWORD_PUBLIC_PATH,
+                device_authorization(Some(bearer)),
+                b"",
+            )
+            .await
+            else {
+                panic!("Previous exception generation survived replacement.")
+            };
+            assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        }
+        assert!(
+            device_request(
+                &app,
+                Method::GET,
+                PASSWORD_PUBLIC_PATH,
+                device_authorization(current["access_token"].as_str()),
+                b""
+            )
+            .await
+            .is_ok()
+        );
+        let fresh = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                account_password_login("two", "Request-Device").as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        assert!(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                api_body.as_bytes()
+            )
+            .await
+            .is_ok()
+        );
+        let revision = {
+            let store = app.store.lock().unwrap();
+            store
+                .db
+                .execute(
+                    "UPDATE account_password_exceptions SET expires=?1 WHERE owner='alice'",
+                    [chrono::Utc::now().timestamp() - 1],
+                )
+                .unwrap();
+            store.account("id", "alice").unwrap().unwrap()["revisionDate"].clone()
+        };
+        assert!(
+            device_request(
+                &app,
+                Method::GET,
+                "/api/accounts/profile",
+                device_authorization(fresh["access_token"].as_str()),
+                b""
+            )
+            .await
+            .is_ok()
+        );
+        let exception_count: i64 = app
+            .store
+            .lock()
+            .unwrap()
+            .db
+            .query_row(
+                "SELECT COUNT(*) FROM account_password_exceptions WHERE owner='alice'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exception_count, 1);
+        let Err(error) = device_request(
+            &app,
+            Method::GET,
+            "/api/users/not-a-uuid/public-key",
+            device_authorization(password["access_token"].as_str()),
+            b"",
+        )
+        .await
+        else {
+            panic!("Expired previous stamp passed auth before UUID guard.")
+        };
+        assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        let profile = device_document(
+            device_request(
+                &app,
+                Method::GET,
+                "/api/accounts/profile",
+                device_authorization(fresh["access_token"].as_str()),
+                b"",
+            )
+            .await,
+        )
+        .await;
+        assert!(profile["securityStamp"] == device_claims(&fresh)["sstamp"]);
+        let store = app.store.lock().unwrap();
+        assert!(store.account("id", "alice").unwrap().unwrap()["revisionDate"] != revision);
+        let exception_count: i64 = store
+            .db
+            .query_row(
+                "SELECT COUNT(*) FROM account_password_exceptions WHERE owner='alice'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exception_count, 0);
+    }
+    #[tokio::test]
+    async fn account_password_http_exception_survives_kdf_reset_and_exact_device_recreation() {
+        let (app, id) = auth_login_fixture();
+        account_password_target(&app);
+        let requests = auth_request_persisted_rows(&app.store.lock().unwrap());
+        let body = account_password_body("fixture-master-hash", "one", "key-one");
+        device_push_empty(
+            device_request(
+                &app,
+                Method::POST,
+                "/api/accounts/password",
+                device_authorization(Some("device-fixture-alice")),
+                body.to_string().as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        let current = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                account_password_login("one", "Request-Device").as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        let kdf = no_warden::wire::RegistrationKdf {
+            kdf: 0,
+            kdf_iterations: 700_000,
+            kdf_memory: None,
+            kdf_parallelism: None,
+        };
+        let body = account_kdf_document("one", "two", "key-two", kdf);
+        device_push_empty(
+            device_request(
+                &app,
+                Method::POST,
+                "/api/accounts/kdf",
+                device_authorization(current["access_token"].as_str()),
+                body.to_string().as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        assert!(
+            device_request(
+                &app,
+                Method::GET,
+                PASSWORD_PUBLIC_PATH,
+                device_authorization(Some("device-fixture-alice")),
+                b""
+            )
+            .await
+            .is_ok()
+        );
+        let Err(error) = device_request(
+            &app,
+            Method::GET,
+            PASSWORD_PUBLIC_PATH,
+            device_authorization(current["access_token"].as_str()),
+            b"",
+        )
+        .await
+        else {
+            panic!("KDF change added its old current stamp to the password exception.")
+        };
+        assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        let current = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                account_password_login("two", "Request-Device").as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        device_push_empty(
+            device_request(
+                &app,
+                Method::POST,
+                "/api/accounts/security-stamp",
+                device_authorization(current["access_token"].as_str()),
+                br#"{"masterPasswordHash":"two"}"#,
+            )
+            .await,
+        )
+        .await;
+        let Err(error) = device_request(
+            &app,
+            Method::GET,
+            PASSWORD_PUBLIC_PATH,
+            device_authorization(Some("device-fixture-alice")),
+            b"",
+        )
+        .await
+        else {
+            panic!("Deleted device passed previous-stamp guard.")
+        };
+        assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        assert!(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                account_password_login("two", "Other-Device").as_bytes()
+            )
+            .await
+            .is_ok()
+        );
+        assert!(
+            device_request(
+                &app,
+                Method::GET,
+                PASSWORD_PUBLIC_PATH,
+                device_authorization(Some("device-fixture-alice")),
+                b""
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                account_password_login("two", "Request-Device").as_bytes()
+            )
+            .await
+            .is_ok()
+        );
+        assert!(
+            device_request(
+                &app,
+                Method::GET,
+                PASSWORD_PUBLIC_PATH,
+                device_authorization(Some("device-fixture-alice")),
+                b""
+            )
+            .await
+            .is_ok()
+        );
+        assert!(auth_request_persisted_rows(&app.store.lock().unwrap()) == requests);
+        assert!(auth_login_http(&app, &auth_login_form(&id)).await.is_ok());
     }
 
     fn account_kdf_document(

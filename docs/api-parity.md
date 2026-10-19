@@ -39,11 +39,11 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 81 routed patterns, 46 with typed requests, 69 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 82 routed patterns, 47 with typed requests, 70 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 78 partial and 216 unimplemented. Query/rank/configuration
+status: 79 partial and 215 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
@@ -772,8 +772,8 @@ Core/provider and host tests cover rejection ordering, error boundaries,
 rollback, deferred commit, durable reopen and stale-proof concurrency. The
 provider makes atomic rollback stronger than upstream's sequential timing.
 Pinned-source and release salt comparison differ; ordinary lowercase comparison
-accounts do not close that variant. Notifications, remembered 2FA, preexisting
-stamp exceptions and all broader account/key/password contracts remain open.
+accounts do not close that variant. Notifications, remembered 2FA, remaining
+stamp-exception routes and broader account/key contracts remain open.
 The source-accepted empty wrapped-key variant also corrects password-grant
 omission versus API-key retention of a top-level empty `Key`.
 
@@ -786,5 +786,70 @@ login, lock/unlock, sync and decryption of the preexisting item. Its direct seve
 HTTP requests and one password grant exclude registration bootstrap and all
 CLI-internal requests. No CLI-posted KDF endpoint or captured route is inferred.
 
-The current default local selection passes all 96 cases with 4214 tracked HTTP
+The KDF milestone passed all 96 cases with 4214 tracked HTTP
 requests, including the real authentication-request expiry fixture.
+
+
+## Password transition subset
+
+The [pinned password handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L621-L687)
+accepts six source-ordered fields. `masterPasswordHash` is required; hint,
+nested authentication/unlock and legacy new hash/key fields are optional.
+A complete nested pair takes precedence, while a partial nested pair can fall
+back to a complete legacy pair. Supplied malformed nested data fails JSON decoding
+before that choice. The old proof precedes semantic checks. Unlike registration
+and KDF changes, this route only compares the two supplied KDF values; it neither
+validates their thresholds nor saves them. Both salts compare the exact stored
+email in the pin and release 1.37.4. Hints trim and clear when absent/null/blank.
+
+`AccountPasswordStorage` returns provider-owned trusted state, then accepts a
+private validated plan. The core owns no allocator, clock, random generator,
+verifier, HTTP or database. The plan carries the fixed previous-stamp policy from
+[set_password](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/user.rs#L190-L250).
+The [authentication guard](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth.rs#L664-L715)
+requires the owned device before checking an exception, then checks expiry before
+route and previous-stamp equality. The deadline is inclusive at its integer Unix
+second. Expired mismatched-stamp requests lazily clear it and attempt a revision
+save; current-stamp requests do not clean it up.
+
+The four logical routes are `post_rotatekey`, `get_contacts`, `get_public_keys`
+and `get_api_webauthn`. The last is the authenticated `/api/webauthn` metadata
+handler, distinct from the two-factor WebAuthn handler. Only the already supported
+public-key route has adapter exception behavior in this chunk. A password change
+replaces the exception; KDF/direct stamp resets preserve it. Device deletion
+blocks it, and recreation of the same owned identifier can restore eligibility
+before the deadline. Refresh tokens remain invalidated.
+
+Local rollback covers credentials, hint, wrapped key, private stamp, exception,
+revision and session changes. That exceeds upstream sequential failure guarantees.
+Pre-validation event logging, logout notifications, remembered 2FA, the other
+three exception routes, complete configuration/error variants and broader account
+parity remain open. The adapter retains its strict original access deadline;
+upstream's 30-second JWT expiry leeway is an inherited difference. Neither a
+successful comparison nor CLI decryption establishes full route parity or a
+CLI-posted password endpoint trace.
+
+
+All eight selected password HTTP cases pass against the actual adapter and
+Vaultwarden 1.37.4: 285 tracked requests each, including 11 identity requests
+(eight password logins, one API-key login and two refresh attempts, one successful), two
+authentication-request creations and four response polls. Direct loopback peers
+keep at most six identity requests per peer under unchanged reference limits.
+The final case waits at least 121 seconds after the latest password change,
+then verifies that an older valid bearer clears the expired latest exception
+before its stamp mismatch is denied. Repeating it does not advance revision again.
+A separate timed account checks expiry and owner isolation. Counts exclude
+shared registration bootstrap.
+
+The separate official CLI 2026.10.0 proof passes ten commands against each server:
+old-password rejection, fresh-cache new-password login, lock/unlock, sync and
+decryption of an item encrypted before the HTTP password change. Seven direct
+HTTP requests and one password grant exclude bootstrap and CLI-internal HTTP.
+No CLI-posted password endpoint or captured request trace is inferred.
+
+
+The final local regression passes all 104 HTTP cases with 4499 tracked
+requests across thirteen groups, including real authentication-request and
+password-exception expiry. The unchanged official CLI 2026.10.0 baseline passes
+all 120 commands against each actual server, separately from the focused KDF
+and password CLI proofs.

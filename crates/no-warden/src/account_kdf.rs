@@ -57,9 +57,11 @@ impl ValidatedAccountKdf<'_> {
 ///
 /// change_account_kdf securely hashes the new opaque proof, replaces only the wrapped user
 /// key and normalized client KDF fields, generates a fresh private stamp and advances account
-/// revision. Invalidate all of this owner's prior bearer/refresh/remember authority, including
-/// the acting device's authority, while preserving device registrations and their push
-/// state. Preserve asymmetric keys, user-key IDs, API credentials, hints, all auth requests,
+/// revision. Invalidate ordinary prior bearer/refresh/remember authority, including the
+/// acting device's authority, while preserving device registrations and their push state.
+/// Preserve an existing password-change previous-stamp exception and its original deadline;
+/// it can still authorize only its configured routes after normal device/JWT guards.
+/// Preserve asymmetric keys, user-key IDs, API credentials, hints, all auth requests,
 /// vault data and foreign accounts. Recheck the old proof when the operation is not protected
 /// by a shared lock. The core never issues new session authority as part of this operation.
 ///

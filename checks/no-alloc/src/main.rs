@@ -14,18 +14,19 @@ use no_warden::{
     route::{Method, classify},
     service::ImportData,
     wire::{
-        AccountKdfRequest, AccountKeys, AccountKeysResponse, ApiKeyResponse, AttachmentRequest,
-        AttachmentResponse, AttachmentUploadResponse, AuthRequestCreateRequest,
-        AuthRequestListResponse, AuthRequestLoginRequest, AuthRequestResponse,
-        AuthRequestUpdateRequest, AvatarUpdateRequest, CipherIdsRequest, CipherRequest,
-        ClientCredentialsRequest, DeviceListResponse, DevicePushTokenRequest, DeviceResponse,
-        DomainSettingsRequest, DomainSettingsResponse, DomainSettingsUpdateResponse, ImportRequest,
-        InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
-        MasterPasswordPolicy, MasterPasswordPolicyResponse, PasswordOrOtpRequest, PreloginRequest,
-        PreloginResponse, ProfileUpdateRequest, RegistrationAuthentication,
-        RegistrationCredentials, RegistrationFinishRequest, RegistrationFinishResponse,
-        RegistrationUnlock, RegistrationVerificationRequest, RegistrationVerificationToken,
-        SecretVerificationRequest, UserPublicKeyResponse,
+        AccountKdfRequest, AccountKeys, AccountKeysResponse, AccountPasswordRequest,
+        ApiKeyResponse, AttachmentRequest, AttachmentResponse, AttachmentUploadResponse,
+        AuthRequestCreateRequest, AuthRequestListResponse, AuthRequestLoginRequest,
+        AuthRequestResponse, AuthRequestUpdateRequest, AvatarUpdateRequest, CipherIdsRequest,
+        CipherRequest, ClientCredentialsRequest, DeviceListResponse, DevicePushTokenRequest,
+        DeviceResponse, DomainSettingsRequest, DomainSettingsResponse,
+        DomainSettingsUpdateResponse, ImportRequest, InitializedAccountKeysResponse,
+        KnownDeviceRequest, KnownDeviceResponse, MasterPasswordPolicy,
+        MasterPasswordPolicyResponse, PasswordOrOtpRequest, PreloginRequest, PreloginResponse,
+        ProfileUpdateRequest, RegistrationAuthentication, RegistrationCredentials,
+        RegistrationFinishRequest, RegistrationFinishResponse, RegistrationUnlock,
+        RegistrationVerificationRequest, RegistrationVerificationToken, SecretVerificationRequest,
+        UserPublicKeyResponse,
     },
 };
 
@@ -148,6 +149,19 @@ pub extern "C" fn _start() -> ! {
     ));
     let _ = black_box(kdf);
     black_box(classify(Method::Post, black_box("/api/accounts/kdf")));
+    let password = serde_json_core::from_slice::<AccountPasswordRequest<'_>>(black_box(
+        br#"{"masterPasswordHash":"old-opaque-proof","newMasterPasswordHash":"new-opaque-proof","key":"opaque-rewrapped-key"}"#,
+    ));
+    black_box(password);
+    black_box(classify(Method::Post, black_box("/api/accounts/password")));
+    let policy = no_warden::account_password::PasswordChangeStampPolicy;
+    black_box(policy.expires_at(black_box(1_800_000_000)));
+    black_box(policy.authorize_previous_stamp(
+        black_box(1_800_000_120),
+        black_box(1_800_000_120),
+        black_box("get_public_keys"),
+        black_box(true),
+    ));
     let credentials = serde_json_core::from_slice::<ClientCredentialsRequest<'_>>(black_box(
         br#"{"grant_type":"client_credentials","client_id":"user.opaque:ID","client_secret":"test-only-key","scope":"api","deviceIdentifier":"device","deviceName":"bare metal","deviceType":"iOS"}"#,
     ));

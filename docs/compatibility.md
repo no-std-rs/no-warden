@@ -73,7 +73,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Provider conflict errors | `Storage::map_error` can preserve an HTTP 409 conflict | Core provider tests |
 
 The allocation-free core's models include login, secure note, card, identity,
-and SSH-key items, plus optional opaque blob data. Its 167 unit tests cover the
+and SSH-key items, plus optional opaque blob data. Its 178 unit tests cover the
 typed fields, bounded collections and import decoding, validation, ownership,
 lifecycle rules, folder mapping, the atomic import and bulk provider contracts,
 API-key proof selection and authorization, and attachment lifecycle and provider
@@ -97,7 +97,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 373 active workspace unit tests pass: 167 core, 136 host and 70 support,
+All 398 active workspace unit tests pass: 178 core, 146 host and 74 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -714,7 +714,7 @@ mutations, rather than proving identical failure behavior.
 The exact nested schema has no legacy flattened fallback. The pinned source
 normalizes stored email with trim/lowercase while release 1.37.4 compares it
 exactly; normal tested lowercase accounts agree. Notification delivery, remembered
-2FA, existing password-route stamp exceptions, versioned salt edge cases and
+2FA, remaining password-exception routes, versioned salt edge cases and
 complete account/KDF/identity parity remain open.
 
 All eight selected KDF HTTP cases pass against both actual servers: 343 tracked
@@ -726,7 +726,46 @@ login, lock/unlock, sync and decryption of the preexisting item. Its direct seve
 HTTP requests and one password grant exclude registration bootstrap and all
 CLI-internal requests. No CLI-posted KDF endpoint or captured route is inferred.
 
-The current default local selection passes all 96 cases with 4214 tracked HTTP
+The KDF milestone passed all 96 cases with 4214 tracked HTTP
 requests, including the real authentication-request expiry fixture.
 The unchanged official CLI `2026.10.0` baseline also passes all 120 commands
 against each server, separately from the nine-command KDF proof.
+
+
+## Password changes and limited previous-stamp access
+
+The core models exact nested-first/legacy-fallback credentials, unchanged client
+KDF metadata, exact stored-email salts and hint cleanup through provider-owned
+state. The adapter preserves encrypted data, devices, API credentials and
+authentication requests while replacing ordinary session authority. Only the
+existing public-key route supports the four-route previous-stamp policy here.
+KDF/direct stamp resets preserve that policy; device deletion blocks it and
+same-ID recreation can restore eligibility. Local rollback and immutable
+historical-bearer regressions establish provider guarantees separately from
+upstream sequential failure semantics. Notifications, remembered 2FA, remaining
+exception endpoints, upstream JWT expiry leeway and full account parity stay open.
+
+
+All eight selected password HTTP cases pass against the actual adapter and
+Vaultwarden 1.37.4: 285 tracked requests each, including 11 identity requests
+(eight password logins, one API-key login and two refresh attempts, one successful), two
+authentication-request creations and four response polls. Direct loopback peers
+keep at most six identity requests per peer under unchanged reference limits.
+The final case waits at least 121 seconds after the latest password change,
+then verifies that an older valid bearer clears the expired latest exception
+before its stamp mismatch is denied. Repeating it does not advance revision again.
+A separate timed account checks expiry and owner isolation. Counts exclude
+shared registration bootstrap.
+
+The separate official CLI 2026.10.0 proof passes ten commands against each server:
+old-password rejection, fresh-cache new-password login, lock/unlock, sync and
+decryption of an item encrypted before the HTTP password change. Seven direct
+HTTP requests and one password grant exclude bootstrap and CLI-internal HTTP.
+No CLI-posted password endpoint or captured request trace is inferred.
+
+
+The final local regression passes all 104 HTTP cases with 4499 tracked
+requests across thirteen groups, including real authentication-request and
+password-exception expiry. The unchanged official CLI 2026.10.0 baseline passes
+all 120 commands against each actual server, separately from the focused KDF
+and password CLI proofs.

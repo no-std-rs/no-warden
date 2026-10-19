@@ -3,6 +3,7 @@ use no_warden::{
     Storage,
     account_kdf::{AccountKdfStorage, ValidatedAccountKdf},
     account_keys::{AccountKeyState, AccountKeyStorage},
+    account_password::{AccountPasswordState, AccountPasswordStorage, ValidatedAccountPassword},
     account_profile::AccountProfileStorage,
     account_security::AccountSecurityStorage,
     auth_login::{AuthRequestLoginRecord, AuthRequestLoginStorage},
@@ -204,6 +205,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS session_devices(access TEXT PRIMARY KEY REFERENCES sessions(access) ON DELETE CASCADE, owner TEXT NOT NULL, identifier TEXT NOT NULL, FOREIGN KEY(owner,identifier) REFERENCES device_registry(owner,identifier) ON DELETE CASCADE);")?;
         db.execute_batch(crate::registration::SCHEMA)?;
         db.execute_batch(crate::account_security::SCHEMA)?;
+        db.execute_batch(crate::account_password::SCHEMA)?;
         // SQLite inherits the private database mode for new sidecars. Also
         // narrow sidecars left behind by an earlier permissive installation.
         #[cfg(unix)]
@@ -635,6 +637,76 @@ impl CipherBulkStorage for Store {
     }
 }
 
+impl AccountPasswordStorage for Store {
+    type Salt = String;
+    fn verify_account_password(
+        &mut self,
+        owner: &str,
+        proof: &Secret<'_>,
+    ) -> rusqlite::Result<Option<AccountPasswordState<String>>> {
+        let account: Option<(String, String)> = self
+            .db
+            .query_row(
+                "SELECT email,password FROM accounts WHERE id=?1",
+                [owner],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((email, verifier)) = account else {
+            return Ok(None);
+        };
+        if verify_credential(Some(&verifier), proof.expose_secret())? {
+            Ok(Some(AccountPasswordState {
+                salt: email,
+                password_hints_allowed: self.registration_policy.password_hints_allowed,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+    fn change_account_password(
+        &mut self,
+        owner: &str,
+        plan: &ValidatedAccountPassword<'_>,
+    ) -> rusqlite::Result<()> {
+        let tx = self.db.savepoint()?;
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT password FROM accounts WHERE id=?1",
+                [owner],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if !verify_credential(
+            previous.as_deref(),
+            plan.old_password_hash().expose_secret(),
+        )? {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        let verifier = Argon2::default()
+            .hash_password(
+                plan.new_password_hash().expose_secret().as_bytes(),
+                &SaltString::generate(&mut OsRng),
+            )
+            .map_err(|_| rusqlite::Error::InvalidQuery)?
+            .to_string();
+        let revision = next_revision(&tx, owner)?;
+        let old_stamp = crate::account_security::stamp(&tx, owner)?;
+        crate::account_password::snapshot(
+            &tx,
+            owner,
+            &old_stamp,
+            plan.stamp_exception_policy(),
+            chrono::Utc::now().timestamp(),
+        )?;
+        require_change(tx.execute("UPDATE accounts SET password=?1,document=json_set(document,'$.key',?2,'$.masterPasswordHint',?3) WHERE id=?4",params![verifier,plan.key().expose_secret(),plan.master_password_hint(),owner])?)?;
+        tx.execute("INSERT INTO account_security(owner,stamp) VALUES(?1,?2) ON CONFLICT(owner) DO UPDATE SET stamp=excluded.stamp",params![owner,uuid::Uuid::new_v4().to_string()])?;
+        bump(&tx, owner, &revision)?;
+        tx.execute("DELETE FROM sessions WHERE owner=?1", [owner])?;
+        tx.commit()
+    }
+}
+
 impl AccountKdfStorage for Store {
     type Salt = String;
     fn verify_account_kdf_password(
@@ -690,6 +762,13 @@ impl AccountKdfStorage for Store {
             .to_string();
         let revision = next_revision(&tx, owner)?;
         let kdf = plan.kdf();
+        let old_stamp = crate::account_security::stamp(&tx, owner)?;
+        crate::account_password::remember_sessions(
+            &tx,
+            owner,
+            &old_stamp,
+            chrono::Utc::now().timestamp(),
+        )?;
         require_change(tx.execute(
             "UPDATE accounts SET password=?1,document=json_set(document,'$.key',?2,'$.kdf',?3,'$.kdfIterations',?4,'$.kdfMemory',?5,'$.kdfParallelism',?6) WHERE id=?7",
             params![verifier,plan.key().expose_secret(),kdf.kdf,kdf.kdf_iterations,kdf.kdf_memory,kdf.kdf_parallelism,owner],
@@ -1269,6 +1348,634 @@ impl Storage for Store {
 mod tests {
     use super::*;
 
+    fn account_password_request<'a>(
+        old: &'a str,
+        new: &'a str,
+        key: &'a str,
+    ) -> no_warden::wire::AccountPasswordRequest<'a> {
+        no_warden::wire::AccountPasswordRequest {
+            master_password_hash: Secret::new(old),
+            master_password_hint: None,
+            authentication_data: None,
+            unlock_data: None,
+            new_master_password_hash: Some(Secret::new(new)),
+            key: Some(Secret::new(key)),
+        }
+    }
+    fn account_password_rows(store: &Store) -> Vec<String> {
+        store.db.prepare("SELECT 'exception:'||owner||':'||stamp||':'||generation||':'||expires FROM account_password_exceptions UNION ALL SELECT 'access:'||access||':'||owner||':'||identifier||':'||stamp||':'||access_expires FROM account_password_access ORDER BY 1").unwrap().query_map([],|row|row.get(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
+    }
+    fn account_password_snapshot(store: &Store) -> Vec<String> {
+        account_security_snapshot(store)
+    }
+    #[test]
+    fn account_password_change_preserves_client_kdf_payloads_and_all_bound_grant_expiries() {
+        let mut store = account_security_fixture();
+        let clock = chrono::Utc::now().timestamp();
+        store.db.execute("INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES(?1,'access-only-fixture','alice',?2,0)",params![crate::digest("password-api-access"),clock+60]).unwrap();
+        crate::devices::bind(&store.db, "alice", "Request-Device", "password-api-access").unwrap();
+        let before = store.account("id", "alice").unwrap().unwrap();
+        let preserved = account_kdf_preserved_rows(&store);
+        let mut request =
+            account_password_request("security-proof\0雪", "legacy-ignored", "legacy-ignored");
+        let arbitrary = no_warden::wire::RegistrationKdf {
+            kdf: 0,
+            kdf_iterations: -1,
+            kdf_memory: Some(-2),
+            kdf_parallelism: Some(-3),
+        };
+        request.authentication_data = Some(no_warden::wire::AccountKdfAuthentication {
+            salt: "alice@example.test",
+            kdf: arbitrary,
+            master_password_authentication_hash: Secret::new("new-proof\0雪"),
+        });
+        request.unlock_data = Some(no_warden::wire::AccountKdfUnlock {
+            salt: "alice@example.test",
+            kdf: arbitrary,
+            master_key_wrapped_user_key: Secret::new("wrapped-key\0雪"),
+        });
+        request.master_password_hint = Some(" \n hint 雪 \t");
+        no_warden::VaultService::new(&mut store)
+            .change_password("alice", &request)
+            .unwrap();
+        let mut account = store.account("id", "alice").unwrap().unwrap();
+        assert!(account["key"] == "wrapped-key\0雪" && account["masterPasswordHint"] == "hint 雪");
+        assert!(account["revisionDate"] != before["revisionDate"]);
+        let mut unchanged = before;
+        for key in ["key", "masterPasswordHint", "revisionDate"] {
+            account.as_object_mut().unwrap().remove(key);
+            unchanged.as_object_mut().unwrap().remove(key);
+        }
+        assert!(
+            account == unchanged && account_kdf_preserved_rows(&store) == preserved,
+            "Password change altered KDF or unrelated private state."
+        );
+        assert!(
+            store
+                .verify_account_password("alice", &Secret::new("new-proof\0雪"))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            store
+                .verify_account_password("alice", &Secret::new("security-proof\0雪"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            crate::account_password::previous_owner(
+                &mut store.db,
+                &crate::digest("security-alice-access"),
+                "get_public_keys",
+                clock
+            )
+            .unwrap()
+            .as_deref()
+                == Some("alice")
+        );
+        assert!(
+            crate::account_password::previous_owner(
+                &mut store.db,
+                &crate::digest("password-api-access"),
+                "get_public_keys",
+                clock + 59
+            )
+            .unwrap()
+            .as_deref()
+                == Some("alice")
+        );
+        assert!(
+            crate::account_password::previous_owner(
+                &mut store.db,
+                &crate::digest("password-api-access"),
+                "get_public_keys",
+                clock + 60
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            crate::account_password::previous_owner(
+                &mut store.db,
+                "profile-access",
+                "get_public_keys",
+                clock
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            crate::account_password::previous_owner(
+                &mut store.db,
+                &crate::digest("security-alice-access"),
+                "profile",
+                clock
+            )
+            .unwrap()
+            .is_none()
+        );
+        let snapshots: i64 = store
+            .db
+            .query_row(
+                "SELECT COUNT(*) FROM account_password_access WHERE owner='alice'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(snapshots, 2);
+        let sessions: i64 = store
+            .db
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE owner='alice'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(sessions, 0);
+    }
+    #[test]
+    fn account_password_failures_roll_back_previous_exception_and_all_account_authority() {
+        for phase in 0..9 {
+            let mut store = account_security_fixture();
+            crate::account_password::snapshot(
+                &store.db,
+                "alice",
+                "prior-old-stamp",
+                no_warden::account_password::PasswordChangeStampPolicy,
+                chrono::Utc::now().timestamp(),
+            )
+            .unwrap();
+            store.db.execute("INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES(?1,'late-refresh','alice',4000000000,4000000000)",[crate::digest("late-access")]).unwrap();
+            crate::devices::bind(&store.db, "alice", "Request-Device", "late-access").unwrap();
+            let before = account_password_snapshot(&store);
+            store.db.execute_batch(match phase {
+                0=>"CREATE TRIGGER fail_password BEFORE INSERT ON account_password_access BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                1=>"CREATE TRIGGER fail_password AFTER INSERT ON account_password_access BEGIN SELECT RAISE(FAIL,'fixture'); END;",
+                2=>"CREATE TRIGGER fail_password BEFORE UPDATE ON account_password_exceptions BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                3=>"CREATE TRIGGER fail_password AFTER UPDATE ON account_password_exceptions BEGIN SELECT RAISE(FAIL,'fixture'); END;",
+                4=>"CREATE TRIGGER fail_password AFTER UPDATE OF password ON accounts BEGIN SELECT RAISE(FAIL,'fixture'); END;",
+                5=>"CREATE TRIGGER fail_password BEFORE INSERT ON account_security BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                6=>"CREATE TRIGGER fail_password BEFORE UPDATE OF revision ON accounts BEGIN SELECT RAISE(ABORT,'fixture'); END;",
+                7=>"CREATE TRIGGER fail_password AFTER DELETE ON sessions BEGIN SELECT RAISE(FAIL,'fixture'); END;",
+                _=>"CREATE TABLE failed_password_commit(owner TEXT REFERENCES accounts(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_password AFTER DELETE ON sessions BEGIN INSERT INTO failed_password_commit(owner) VALUES('missing'); END;",
+            }).unwrap();
+            let request = account_password_request("security-proof\0雪", "new-proof", "new-key");
+            assert!(
+                no_warden::VaultService::new(&mut store)
+                    .change_password("alice", &request)
+                    .is_err()
+            );
+            assert!(
+                account_password_snapshot(&store) == before && store.db.is_autocommit(),
+                "Failed password change escaped its savepoint."
+            );
+            store
+                .db
+                .execute_batch("DROP TRIGGER fail_password")
+                .unwrap();
+            no_warden::VaultService::new(&mut store)
+                .change_password("alice", &request)
+                .unwrap();
+        }
+    }
+    #[test]
+    fn account_password_exception_reopens_overwrites_and_survives_kdf_reset_and_device_recreation()
+    {
+        let directory = std::env::temp_dir().join(format!(
+            "no-warden-password-persistence-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("vault.sqlite");
+        let mut store = account_security_fixture();
+        no_warden::VaultService::new(&mut store)
+            .change_password(
+                "alice",
+                &account_password_request("security-proof\0雪", "one", "key-one"),
+            )
+            .unwrap();
+        let expected = account_password_snapshot(&store);
+        store
+            .db
+            .execute("VACUUM INTO ?1", [path.to_str().unwrap()])
+            .unwrap();
+        drop(store);
+        let mut store = Store::open(path.to_str().unwrap()).unwrap();
+        assert!(account_password_snapshot(&store) == expected);
+        let clock = chrono::Utc::now().timestamp();
+        assert!(
+            crate::account_password::previous_owner(
+                &mut store.db,
+                &crate::digest("security-alice-access"),
+                "get_public_keys",
+                clock
+            )
+            .unwrap()
+            .is_some()
+        );
+        let prior_stamp = crate::account_security::stamp(&store.db, "alice").unwrap();
+        store.db.execute("INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES(?1,'second-refresh','alice',4000000000,4000000000)",[crate::digest("second-access")]).unwrap();
+        crate::devices::bind(&store.db, "alice", "Request-Device", "second-access").unwrap();
+        no_warden::VaultService::new(&mut store)
+            .change_password("alice", &account_password_request("one", "two", "key-two"))
+            .unwrap();
+        let exception_stamp: String = store
+            .db
+            .query_row(
+                "SELECT stamp FROM account_password_exceptions WHERE owner='alice'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(exception_stamp == prior_stamp);
+        assert!(
+            crate::account_password::previous_owner(
+                &mut store.db,
+                &crate::digest("security-alice-access"),
+                "get_public_keys",
+                clock
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            crate::account_password::previous_owner(
+                &mut store.db,
+                &crate::digest("second-access"),
+                "get_public_keys",
+                clock
+            )
+            .unwrap()
+            .is_some()
+        );
+        let exception = account_password_rows(&store);
+        no_warden::VaultService::new(&mut store)
+            .change_kdf(
+                "alice",
+                &account_kdf_request("two", "three", "key-three", account_kdf_settings()),
+            )
+            .unwrap();
+        assert!(account_password_rows(&store) == exception);
+        assert!(
+            crate::account_password::previous_owner(
+                &mut store.db,
+                &crate::digest("second-access"),
+                "get_public_keys",
+                clock
+            )
+            .unwrap()
+            .is_some()
+        );
+        no_warden::VaultService::new(&mut store)
+            .reset_security_stamp(
+                "alice",
+                &no_warden::wire::PasswordOrOtpRequest {
+                    master_password_hash: Some(Secret::new("three")),
+                    otp: None,
+                },
+            )
+            .unwrap();
+        assert!(account_password_rows(&store) == exception);
+        assert!(
+            crate::account_password::previous_owner(
+                &mut store.db,
+                &crate::digest("second-access"),
+                "get_public_keys",
+                clock
+            )
+            .unwrap()
+            .is_none()
+        );
+        no_warden::VaultService::new(&mut store)
+            .register_device(
+                "alice",
+                &DeviceRegistration {
+                    identifier: "Request-Device",
+                    name: "Recreated",
+                    device_type: 14,
+                },
+            )
+            .unwrap();
+        assert!(
+            crate::account_password::previous_owner(
+                &mut store.db,
+                &crate::digest("second-access"),
+                "get_public_keys",
+                clock
+            )
+            .unwrap()
+            .is_some()
+        );
+        drop(store);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn account_password_exception_expiry_orders_device_and_access_guards_and_cleans_best_effort() {
+        let mut store = account_security_fixture();
+        no_warden::VaultService::new(&mut store)
+            .change_password(
+                "alice",
+                &account_password_request("security-proof\0雪", "new", "key"),
+            )
+            .unwrap();
+        let access = crate::digest("security-alice-access");
+        store
+            .db
+            .execute(
+                "UPDATE account_password_exceptions SET expires=20000 WHERE owner='alice'",
+                [],
+            )
+            .unwrap();
+        assert!(
+            crate::account_password::previous_owner(
+                &mut store.db,
+                &access,
+                "get_public_keys",
+                20000
+            )
+            .unwrap()
+            .is_some()
+        );
+        store
+            .db
+            .execute(
+                "UPDATE account_password_access SET access_expires=19999 WHERE access=?1",
+                [&access],
+            )
+            .unwrap();
+        let before = account_password_snapshot(&store);
+        assert!(
+            crate::account_password::previous_owner(
+                &mut store.db,
+                &access,
+                "get_public_keys",
+                20001
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            account_password_snapshot(&store) == before,
+            "Expired bearer triggered exception cleanup before JWT expiry check."
+        );
+        store
+            .db
+            .execute(
+                "UPDATE account_password_access SET access_expires=4000000000 WHERE access=?1",
+                [&access],
+            )
+            .unwrap();
+        store
+            .db
+            .execute(
+                "DELETE FROM device_registry WHERE owner='alice' AND identifier='Request-Device'",
+                [],
+            )
+            .unwrap();
+        let before = account_password_snapshot(&store);
+        assert!(
+            crate::account_password::previous_owner(
+                &mut store.db,
+                &access,
+                "get_public_keys",
+                20001
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            account_password_snapshot(&store) == before,
+            "Missing device triggered expired-exception cleanup."
+        );
+        no_warden::VaultService::new(&mut store)
+            .register_device(
+                "alice",
+                &DeviceRegistration {
+                    identifier: "Request-Device",
+                    name: "Recreated",
+                    device_type: 8,
+                },
+            )
+            .unwrap();
+        store.db.execute_batch("CREATE TRIGGER fail_expiry BEFORE UPDATE OF revision ON accounts BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
+        let before = account_password_snapshot(&store);
+        assert!(
+            crate::account_password::previous_owner(
+                &mut store.db,
+                &access,
+                "unrelated-route",
+                20001
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            account_password_snapshot(&store) == before,
+            "Best-effort expiry cleanup failed to roll back."
+        );
+        store.db.execute_batch("DROP TRIGGER fail_expiry").unwrap();
+        let revision = store.account("id", "alice").unwrap().unwrap()["revisionDate"].clone();
+        assert!(
+            crate::account_password::previous_owner(
+                &mut store.db,
+                &access,
+                "unrelated-route",
+                20001
+            )
+            .unwrap()
+            .is_none()
+        );
+        let exceptions: i64 = store
+            .db
+            .query_row(
+                "SELECT COUNT(*) FROM account_password_exceptions WHERE owner='alice'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exceptions, 0);
+        assert!(
+            !account_password_rows(&store).is_empty(),
+            "Expiry cleanup discarded still-live bearer metadata."
+        );
+        assert!(store.account("id", "alice").unwrap().unwrap()["revisionDate"] != revision);
+        assert!(
+            store
+                .verify_account_password("alice", &Secret::new("new"))
+                .unwrap()
+                .is_some()
+        );
+    }
+    #[test]
+    fn account_password_concurrent_preopened_connections_create_one_exception_generation() {
+        let directory =
+            std::env::temp_dir().join(format!("no-warden-password-race-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("vault.sqlite");
+        let fixture = account_security_fixture();
+        fixture
+            .db
+            .execute("VACUUM INTO ?1", [path.to_str().unwrap()])
+            .unwrap();
+        drop(fixture);
+        let stores = [
+            Store::open(path.to_str().unwrap()).unwrap(),
+            Store::open(path.to_str().unwrap()).unwrap(),
+        ];
+        for store in &stores {
+            store
+                .db
+                .busy_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+        }
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let workers: Vec<_> = stores
+            .into_iter()
+            .enumerate()
+            .map(|(index, mut store)| {
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let new = if index == 0 {
+                        "winner-zero"
+                    } else {
+                        "winner-one"
+                    };
+                    let request = account_password_request("security-proof\0雪", new, new);
+                    barrier.wait();
+                    no_warden::VaultService::new(&mut store)
+                        .change_password("alice", &request)
+                        .is_ok()
+                })
+            })
+            .collect();
+        let outcomes: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        assert_eq!(outcomes.iter().filter(|result| **result).count(), 1);
+        let mut store = Store::open(path.to_str().unwrap()).unwrap();
+        let winner = if outcomes[0] {
+            "winner-zero"
+        } else {
+            "winner-one"
+        };
+        assert!(
+            store
+                .verify_account_password("alice", &Secret::new(winner))
+                .unwrap()
+                .is_some()
+        );
+        let generations:i64=store.db.query_row("SELECT COUNT(DISTINCT generation) FROM account_password_exceptions WHERE owner='alice'",[],|row|row.get(0)).unwrap();
+        assert_eq!(generations, 1);
+        assert!(
+            crate::account_password::previous_owner(
+                &mut store.db,
+                &crate::digest("security-alice-access"),
+                "get_public_keys",
+                chrono::Utc::now().timestamp()
+            )
+            .unwrap()
+            .is_some()
+        );
+        drop(store);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn account_password_expiry_cleanup_recognizes_live_bearers_invalidated_before_password_change()
+    {
+        for direct_reset in [false, true] {
+            let mut store = account_security_fixture();
+            let new_proof = if direct_reset {
+                no_warden::VaultService::new(&mut store)
+                    .reset_security_stamp(
+                        "alice",
+                        &no_warden::wire::PasswordOrOtpRequest {
+                            master_password_hash: Some(Secret::new("security-proof\0雪")),
+                            otp: None,
+                        },
+                    )
+                    .unwrap();
+                no_warden::VaultService::new(&mut store)
+                    .register_device(
+                        "alice",
+                        &DeviceRegistration {
+                            identifier: "Request-Device",
+                            name: "Recreated",
+                            device_type: 8,
+                        },
+                    )
+                    .unwrap();
+                "security-proof\0雪"
+            } else {
+                no_warden::VaultService::new(&mut store)
+                    .change_kdf(
+                        "alice",
+                        &account_kdf_request(
+                            "security-proof\0雪",
+                            "after-kdf",
+                            "key",
+                            account_kdf_settings(),
+                        ),
+                    )
+                    .unwrap();
+                "after-kdf"
+            };
+            store.db.execute("INSERT INTO sessions(access,refresh,owner,access_expires,refresh_expires) VALUES(?1,'current-refresh','alice',4000000000,4000000000)",[crate::digest("current-access")]).unwrap();
+            crate::devices::bind(&store.db, "alice", "Request-Device", "current-access").unwrap();
+            no_warden::VaultService::new(&mut store)
+                .change_password(
+                    "alice",
+                    &account_password_request(new_proof, "latest", "latest-key"),
+                )
+                .unwrap();
+            let old = crate::digest("security-alice-access");
+            let clock = chrono::Utc::now().timestamp();
+            assert!(
+                crate::account_password::previous_owner(
+                    &mut store.db,
+                    &old,
+                    "get_public_keys",
+                    clock
+                )
+                .unwrap()
+                .is_none(),
+                "Historical stamp gained latest exception access."
+            );
+            store
+                .db
+                .execute(
+                    "UPDATE account_password_exceptions SET expires=?1 WHERE owner='alice'",
+                    [clock - 1],
+                )
+                .unwrap();
+            let revision = store.account("id", "alice").unwrap().unwrap()["revisionDate"].clone();
+            assert!(
+                crate::account_password::previous_owner(
+                    &mut store.db,
+                    &old,
+                    "get_public_keys",
+                    clock
+                )
+                .unwrap()
+                .is_none()
+            );
+            let exceptions: i64 = store
+                .db
+                .query_row(
+                    "SELECT COUNT(*) FROM account_password_exceptions WHERE owner='alice'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(exceptions, 0);
+            assert!(
+                store.account("id", "alice").unwrap().unwrap()["revisionDate"] != revision,
+                "Mismatched historical stamp skipped expiry cleanup."
+            );
+        }
+    }
+
     fn account_kdf_request<'a>(
         old: &'a str,
         new: &'a str,
@@ -1693,6 +2400,7 @@ mod tests {
         rows.extend(device_rows(store));
         rows.extend(device_push_rows(store));
         rows.extend(auth_request_rows(store));
+        rows.extend(account_password_rows(store));
         rows.extend(store.db.prepare("SELECT 'stamp:'||owner||':'||stamp FROM account_security UNION ALL SELECT 'binding:'||access||':'||owner||':'||identifier FROM session_devices ORDER BY 1").unwrap().query_map([],|row|row.get::<_,String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap());
         rows
     }

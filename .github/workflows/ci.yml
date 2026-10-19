@@ -91,4 +91,5 @@ jobs:
           node tools/persistence.mjs
           target/debug/no-warden-http-conformance
           target/debug/no-warden-http-conformance --suite account-kdf-cli
+          target/debug/no-warden-http-conformance --suite account-password-cli
           bash tools/e2e.sh
