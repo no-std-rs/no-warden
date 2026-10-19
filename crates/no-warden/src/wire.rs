@@ -277,6 +277,161 @@ impl Serialize for RegistrationFinishResponse {
     }
 }
 
+/// Semantic SendData view after the adapter's full schema/date decoder. It deliberately
+/// accepts any caller-owned serializable text payload, without a collection/string cap.
+/// Timestamp parsing, JSON field order/aliases and ignored file/id fields remain adapter
+/// responsibilities. Credentials and payloads never appear in Debug or implicit Serialize.
+pub struct TextSendRequest<'a, P: ?Sized> {
+    pub kind: i32,
+    pub key: &'a str,
+    pub password: Option<Secret<'a>>,
+    pub max_access_count: Option<crate::sends::SendNumber<'a>>,
+    pub expiration_ns: Option<i128>,
+    pub deletion_ns: i128,
+    pub disabled: bool,
+    pub hide_email: Option<bool>,
+    pub emails: Option<&'a str>,
+    pub name: &'a str,
+    pub notes: Option<&'a str>,
+    pub text: Option<&'a P>,
+}
+impl<P: ?Sized> core::fmt::Debug for TextSendRequest<'_, P> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TextSendRequest").finish_non_exhaustive()
+    }
+}
+
+/// Borrowed send_access form view. Missing/duplicate Option field semantics and complete
+/// form/root-name decoding belong to the HTTP adapter; opaque password input is not decoded.
+#[derive(Deserialize)]
+pub struct SendAccessTokenRequest<'a> {
+    pub grant_type: Option<&'a str>,
+    pub client_id: Option<&'a str>,
+    pub send_id: Option<&'a str>,
+    #[serde(borrow)]
+    pub password_hash_b64: Option<Secret<'a>>,
+}
+impl core::fmt::Debug for SendAccessTokenRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SendAccessTokenRequest")
+            .finish_non_exhaustive()
+    }
+}
+
+pub struct SendOwnerResponse<'a, P: Serialize> {
+    pub(crate) record: crate::sends::SendRecord<'a, P>,
+}
+impl<P: Serialize> core::fmt::Debug for SendOwnerResponse<'_, P> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SendOwnerResponse").finish_non_exhaustive()
+    }
+}
+impl<P: Serialize> Serialize for SendOwnerResponse<'_, P> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let r = &self.record;
+        let mut value = serializer.serialize_struct("SendOwnerResponse", 18)?;
+        value.serialize_field("id", r.id)?;
+        value.serialize_field("accessId", r.access_id)?;
+        value.serialize_field("type", &0_i32)?;
+        value.serialize_field("name", r.name)?;
+        value.serialize_field("notes", &r.notes)?;
+        value.serialize_field("text", &r.text)?;
+        value.serialize_field("file", &None::<()>)?;
+        value.serialize_field("key", r.key)?;
+        value.serialize_field("maxAccessCount", &r.max_access_count)?;
+        value.serialize_field("accessCount", &r.access_count)?;
+        value.serialize_field("password", &r.password_hash)?;
+        value.serialize_field(
+            "authType",
+            &if r.password_hash.is_some() { 1_i32 } else { 2 },
+        )?;
+        value.serialize_field("disabled", &r.disabled)?;
+        value.serialize_field("hideEmail", &r.hide_email.unwrap_or(false))?;
+        value.serialize_field("revisionDate", r.revision_date)?;
+        value.serialize_field("expirationDate", &r.expiration_date)?;
+        value.serialize_field("deletionDate", r.deletion_date)?;
+        value.serialize_field("object", "send")?;
+        value.end()
+    }
+}
+
+pub struct SendRecipientResponse<'a, P: Serialize> {
+    pub(crate) record: crate::sends::SendRecord<'a, P>,
+}
+impl<P: Serialize> core::fmt::Debug for SendRecipientResponse<'_, P> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SendRecipientResponse")
+            .finish_non_exhaustive()
+    }
+}
+impl<P: Serialize> Serialize for SendRecipientResponse<'_, P> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let r = &self.record;
+        let mut value = serializer.serialize_struct("SendRecipientResponse", 8)?;
+        value.serialize_field("id", r.access_id)?;
+        value.serialize_field("type", &0_i32)?;
+        value.serialize_field("name", r.name)?;
+        value.serialize_field("text", &r.text)?;
+        value.serialize_field("file", &None::<()>)?;
+        value.serialize_field("expirationDate", &r.expiration_date)?;
+        value.serialize_field(
+            "creatorIdentifier",
+            &if r.hide_email == Some(true) {
+                None
+            } else {
+                r.creator_identifier
+            },
+        )?;
+        value.serialize_field("object", "send-access")?;
+        value.end()
+    }
+}
+
+pub struct SendListResponse<'a, L: crate::sends::SendListData<'a>> {
+    pub(crate) data: L,
+    pub(crate) marker: core::marker::PhantomData<&'a ()>,
+}
+impl<'a, L: crate::sends::SendListData<'a>> core::fmt::Debug for SendListResponse<'a, L> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SendListResponse").finish_non_exhaustive()
+    }
+}
+impl<'a, L: crate::sends::SendListData<'a>> Serialize for SendListResponse<'a, L> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{SerializeSeq, SerializeStruct};
+        struct Entries<'a, 'b, L: crate::sends::SendListData<'a>> {
+            list: &'b L,
+            marker: core::marker::PhantomData<&'a ()>,
+        }
+        impl<'a, L: crate::sends::SendListData<'a>> Serialize for Entries<'a, '_, L> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                let mut values = serializer.serialize_seq(Some(self.list.len()))?;
+                for index in 0..self.list.len() {
+                    let record = self
+                        .list
+                        .get(index)
+                        .ok_or_else(|| serde::ser::Error::custom("Invalid Send list view"))?;
+                    values.serialize_element(&SendOwnerResponse { record })?;
+                }
+                values.end()
+            }
+        }
+        let mut value = serializer.serialize_struct("SendListResponse", 3)?;
+        value.serialize_field(
+            "data",
+            &Entries {
+                list: &self.data,
+                marker: core::marker::PhantomData,
+            },
+        )?;
+        value.serialize_field("object", "list")?;
+        value.serialize_field("continuationToken", &None::<()>)?;
+        value.end()
+    }
+}
+
 /// Refresh fields after form decoding. The proof stays opaque and is never serialized.
 /// This convenience decoder is not the complete HTTP form/root-name/alias parser;
 /// optional duplicate-field handling and guards belong to the transport. Missing client

@@ -24,5 +24,7 @@ pub mod password_login;
 pub mod purge;
 pub mod refresh_grants;
 pub mod registration;
+pub mod text_sends;
+pub mod text_sends_cli;
 pub mod transport;
 pub mod webauthn_credentials;

@@ -43,6 +43,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | `POST /identity/accounts/register/send-verification-email`, `POST /identity/accounts/register/finish` | No-SMTP new-account verification token and canonical atomic completion; old/current credential shapes | Eight matching corrected Rust HTTP cases on both actual servers; borrowed opt-in core/provider and host parser, token, rollback/reopen and HTTP-dispatch tests; fresh unchanged CLI regression remains separate |
 | Prelogin legacy and identity aliases | PBKDF2/Argon2 parameters | Latest CLI and HTTP |
 | `POST /identity/connect/token` | Reusable ordinary password grant and password-method refresh; valid refresh proofs can be reused with current device authority | CLI baseline, six matching ordinary-password Rust cases and eight matching refresh cases. Refresh JWT encoding and complete identity policy remain open |
+| Personal text Sends, recipient `send_access` grant and sync | Encrypted owner lifecycle, scoped recipient access, password management and atomic access limits | Six matching Rust HTTP cases and twenty matching official CLI commands on both servers. File Sends and full policy/transport parity remain open |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
 | `GET /api/accounts/keys`, `POST /api/accounts/keys`, `GET /api/users/<id>/public-key` | Owner-only private retrieval, initialization of an absent pair, authenticated cross-user public lookup | Borrowed core/provider contracts; Rust HTTP comparison group and SQLite rollback/reopen tests |
 | `POST /api/accounts/api-key`, `POST /api/accounts/rotate-api-key` | Password-reauthenticated personal key retrieval, lazy creation, rotation | Core, HTTP comparison with upstream, rollback and restart tests; keys used by real CLI |
@@ -101,7 +102,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 489 active workspace unit tests pass: 228 core, 177 host and 84 support,
+All 518 active workspace unit tests pass: 245 core, 184 host and 89 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -851,7 +852,7 @@ A fresh official CLI 2026.10.0 regression passes all 120 commands against both
 servers. The generated SDK API shape is documented, but neither that source
 attribution nor the regression establishes an actual client account-deletion
 flow or CLI-route trace. Account recovery, successful
-protected-action OTP, organization/emergency-access/Sends lifecycle and complete
+protected-action OTP, organization/emergency-access/file-Sends lifecycle and complete
 cross-version failure semantics remain open. See the
 [parity notes](api-parity.md#personal-account-deletion-subset).
 
@@ -904,6 +905,43 @@ behavior separately; portable HTTP does not claim a disabled-account API.
 The fresh official CLI 2026.10.0 regression passes all 120 commands against both
 actual servers. It establishes real ordinary password login with client-side
 decryption; no captured request trace or broader identity contract is inferred.
-Refresh remains in the host; its stricter replay policy and full SMTP/2FA/SSO,
-optional form guards, transport and JWT/time variants remain open. See
+Refresh has its separate reusable, replay-preserving provider contract. Full
+SMTP/2FA/SSO, optional form guards, transport and JWT/time variants remain open. See
 [the parity notes](api-parity.md#ordinary-password-grant-core).
+
+## Personal text Sends
+
+Seven route patterns cover owner create/list/read/update/delete/remove-password
+and recipient `POST /api/sends/access`; the existing identity route adds the
+`send_access` grant. Personal sync contains owner Send records, including expired
+or disabled records until separately purged. The reusable core has generic typed
+owner/recipient/list responses and a semantic borrowed write view. It does not
+parse arbitrary JSON, dates, HTTP headers or tokens inside `no_std`.
+
+All six focused HTTP cases pass against both actual servers: 129 counted
+requests each, with two successful password logins, 23 public Send-token grant
+requests and 15 recipient accesses. Two fixture registrations are excluded.
+The cases authenticate and decrypt real ciphertext, unwrap the Send seed under
+the account key, check eighteen/eight-field projections, owner isolation,
+password replacement/removal, issued-capability reuse, disabled/deadline/count
+guards, hidden creator email and unchanged vault/keys/devices/foreign state.
+The separate twenty-command official CLI comparison passes both actual servers; the unchanged
+120-command baseline passes both servers and is separate evidence.
+
+Send names, keys, notes and text remain encrypted opaque values. Upstream does
+normalize projected text-object keys and remove an exact root `response` field;
+accepted array/scalar roots project as null. Owner responses expose the server's
+password verifier marker, not the submitted client proof. Recipient responses
+exclude owner key, notes, password, counts and deletion date. Token minting does
+not consume an access. Access rechecks availability and atomically increments
+below the current limit. Failed count reservation can still advance owner
+revision. Existing capabilities survive password changes but cannot bypass
+current disabled/deadline/count/deletion state.
+
+Local SQL tests separately cover mutation rollback, persisted signer/rows,
+account-deletion cleanup and vault-purge preservation. They do not establish
+identical upstream failure timing. The host signs Send JWTs with HS256 while
+upstream uses RS256. File Sends, email OTP, organization/configuration policies,
+notifications, purge scheduling, rate/abuse controls and full transport/JWT
+equivalence remain open. No captured request trace or full endpoint status is
+claimed.

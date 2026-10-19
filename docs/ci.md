@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 489 active Rust tests: 228 core, 177 host, and 84 conformance
+The workspace has 518 active Rust tests: 245 core, 184 host, and 89 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -351,3 +351,20 @@ split is 22 successes, 15 invalid proofs, four presence/duplicate guards and one
 missing-grant form guard. A fresh official CLI 2026.10.0 regression also passes all
 120 commands against both actual servers. That lifecycle regression is separate
 from captured refresh requests; no route trace or full-identity claim follows.
+
+The selected `--suite text-sends` adds six Rust HTTP cases for seven personal
+text-Send routes plus recipient token issuance and sync. Both actual targets
+pass all six: 129 counted requests, two password logins, 23 public Send-token
+grants and 15 recipient access requests each, with two fixture registrations
+excluded. These counters classify authored requests, not server limiter telemetry.
+The tests use authenticated ciphertext decryption, exact owner/recipient shapes,
+owner isolation, password lifecycle and availability/count behavior.
+`BW_TEXT_SENDS_RECEIPT` writes private authored names and counts.
+The separate opt-in `--suite text-sends-cli` twenty-command official-client
+comparison passes both actual servers; `BW_TEXT_SENDS_CLI_RECEIPT` writes its
+private receipt.
+Sender and recipients use separate private caches. Its deletion check times the
+entire fresh receive/delete/recheck window before client capability expiry can
+explain rejection. The verified baseline remains 120 commands, not a combined
+140-command run. File/email/policy/configuration/notification/rate/cron behavior,
+upstream RS256 equivalence and captured request traces remain outside this slice.

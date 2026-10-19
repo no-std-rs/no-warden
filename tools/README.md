@@ -738,3 +738,36 @@ client. Clock/provider tests separately cover the expiry leeway and type-based
 thirty/ninety-day policy. A fresh official CLI 2026.10.0 lifecycle regression also
 passes all 120 commands against both actual servers. It is separate from captured
 refresh requests, which remain absent.
+
+## Personal text-Send comparisons
+
+`--suite text-sends` selects six Rust HTTP cases covering the seven personal
+text-Send routes, the existing `send_access` identity grant and sync. The
+comparison passes against both actual servers: 129 counted HTTP
+requests per target, including two password logins, 23 public Send-token grants
+and 15 recipient accesses, with two fixture registrations excluded. Selected
+relaxed Chrono timestamp and leap-second examples also pass; this does not
+establish complete timestamp-grammar parity. The selected counter is
+not server-side limiter telemetry. Use a fresh disposable reference process
+under unchanged public/login limits; owner operations require ordinary login,
+while recipient capability issuance consumes the shared public bucket.
+`BW_TEXT_SENDS_RECEIPT` records authored names and counts only.
+
+`--suite text-sends-cli` is a separate twenty-command official CLI 2026.10.0
+lifecycle: create, sync, cached get/list decryption, anonymous protected receive,
+edit, password removal, fresh-recipient public receive and delete. All twenty
+commands pass both actual servers. `BW_TEXT_SENDS_CLI_RECEIPT` records command
+counts/status only. The sender,
+protected recipient and fresh public recipient use separate private app-data
+directories. Wrong-password receive occurs before any successful capability is
+cached. The non-expiry deletion window begins before the fresh receive command.
+No password, fragment seed, decrypted content, token or access URL is logged.
+
+The 120-command baseline remains a separate passing comparison against both
+servers; these are not one combined 140-command run. CLI get/list use decrypted
+cache state after real sync, and do not prove independent owner HTTP reads.
+Actual recipient receive uses Send-token issuance and `POST /sends/access`,
+as established by the focused actual-client comparison. No captured request trace
+is claimed.
+File Sends, email OTP, enterprise/configuration policy, relay/notifications,
+rate controls, purge scheduling and upstream RS256/JWT equivalence remain open.

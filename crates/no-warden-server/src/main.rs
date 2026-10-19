@@ -15,6 +15,7 @@ mod protocol;
 mod purge;
 mod refresh;
 mod registration;
+mod sends;
 mod store;
 
 use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
@@ -81,7 +82,10 @@ struct Failure(StatusCode, &'static str);
 
 impl IntoResponse for Failure {
     fn into_response(self) -> Response {
-        if password_login::is_password_error(self.1) || self.1 == "refresh_token cannot be blank" {
+        if password_login::is_password_error(self.1)
+            || self.1 == "refresh_token cannot be blank"
+            || sends::is_send_error(self.1)
+        {
             return password_login::error_response(self.0, self.1);
         }
         if self.1 == "Invalid refresh token" {
@@ -328,6 +332,9 @@ async fn dispatch_with_peer(
         let response = VaultService::new(&mut *store).known_device(&headers.request())?;
         return Ok(Json(response).into_response());
     }
+    if route == Route::SendAccess {
+        return sends::access(&mut store, &headers);
+    }
     if route == Route::AuthRequestCreate {
         let input = auth_requests::parse_input(&body)?;
         let origin = auth_requests::origin(&app.base)?;
@@ -425,6 +432,9 @@ async fn dispatch_with_peer(
         if let Some(input) = refresh::Input::selected(&body)? {
             return refresh::login(&app, &mut store, &input);
         }
+        if let Some(input) = sends::TokenInput::selected(&body)? {
+            return sends::grant(&mut store, &input);
+        }
         let form = parse_connect_form(&body)?;
         let grant = connect_field(&form, &["grant_type", "granttype"])?.ok_or(Failure(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -515,6 +525,18 @@ async fn dispatch_with_peer(
         .ok_or_else(unauthorized)?,
     };
     let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
+    if matches!(
+        route,
+        Route::SendList
+            | Route::SendGet(_)
+            | Route::SendCreate
+            | Route::SendUpdate(_)
+            | Route::SendDelete(_)
+            | Route::SendRemovePassword(_)
+    ) {
+        // Ordinary Send Headers require current device authority before UUID or JSON guards.
+        devices::access_binding(&store.db, &digest(bearer), &owner)?.ok_or_else(unauthorized)?;
+    }
     if invalid_purge_id {
         devices::access_binding(&store.db, &digest(bearer), &owner)?.ok_or_else(unauthorized)?;
         return Err(Failure(
@@ -851,6 +873,7 @@ async fn dispatch_with_peer(
             Ok(json_response(json!(millis)))
         }
         Route::Sync => {
+            let send_documents = sends::sync(&mut store, &owner)?;
             let exclude_domains = domains::sync_excludes(uri.query())?;
             let settings = if exclude_domains {
                 Value::Null
@@ -867,7 +890,7 @@ async fn dispatch_with_peer(
             };
             Ok(json_response(json!({
                 "object":"sync","profile":profile_document(&store,&account)?,"folders":store.items(&owner,"folder")?.iter().map(protocol::folder).collect::<Vec<_>>(),
-                "ciphers":store.items(&owner,"cipher")?,"collections":[],"policies":[],"sends":[],
+                "ciphers":store.items(&owner,"cipher")?,"collections":[],"policies":[],"sends":send_documents,
                 "domains":settings,
                 "userDecryption":protocol::user_decryption(&account)
             })))
@@ -875,6 +898,46 @@ async fn dispatch_with_peer(
         Route::Folders => Ok(json_response(
             json!({"object":"list","data":store.items(&owner,"folder")?.iter().map(protocol::folder).collect::<Vec<_>>(),"continuationToken":null}),
         )),
+        Route::SendList => {
+            let mut service = VaultService::new(&mut *store);
+            Ok(Json(service.list_sends(&owner)?).into_response())
+        }
+        Route::SendGet(raw) => {
+            let id = sends::path_id(raw)?;
+            let mut service = VaultService::new(&mut *store);
+            Ok(Json(service.get_send(&owner, &id)?).into_response())
+        }
+        Route::SendCreate => {
+            let input = sends::Input::parse(&body)?;
+            input.stage_dates(&mut store);
+            let request = input.request();
+            let mut service = VaultService::new(&mut *store);
+            Ok(
+                Json(service.create_text_send(&owner, &request, &sends::context())?)
+                    .into_response(),
+            )
+        }
+        Route::SendUpdate(raw) => {
+            let id = sends::path_id(raw)?;
+            let input = sends::Input::parse(&body)?;
+            input.stage_dates(&mut store);
+            let request = input.request();
+            let mut service = VaultService::new(&mut *store);
+            Ok(
+                Json(service.update_text_send(&owner, &id, &request, &sends::context())?)
+                    .into_response(),
+            )
+        }
+        Route::SendDelete(raw) => {
+            let id = sends::path_id(raw)?;
+            VaultService::new(&mut *store).delete_send(&owner, &id)?;
+            Ok(StatusCode::OK.into_response())
+        }
+        Route::SendRemovePassword(raw) => {
+            let id = sends::path_id(raw)?;
+            let mut service = VaultService::new(&mut *store);
+            Ok(Json(service.remove_send_password(&owner, &id)?).into_response())
+        }
         Route::Ciphers => Ok(json_response(
             json!({"object":"list","data":store.items(&owner,"cipher")?,"continuationToken":null}),
         )),
