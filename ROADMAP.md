@@ -27,6 +27,7 @@ invoke the pinned official Bitwarden CLI as an external process.
 - [x] Standalone Rust adapter: persistent SQLite, registration, authentication.
 - [x] Personal vault: encrypted ciphers, folders, sync, trash, restore.
 - [x] Cipher ordinary/details/admin read subset: allocation-free authorization, exact guards and opaque projections, verified by six matching actual Rust HTTP cases. Full response and organization/notification contracts remain open.
+- [x] Prelogin discovery subset: allocation-free known/unknown KDF lookup and complete response, six matching actual HTTP cases and twenty-six matching official CLI commands with PBKDF2/Argon2 decryption. Broader identity and rate/transport policies remain open.
 - [x] User-key-ID backfill subset: allocation-free opaque request and atomic one-time provider contract, with six matching actual HTTP cases and fifteen matching official CLI commands. Key rotation and full account/key-management parity remain open.
 - [x] Personal account-deletion aliases: allocation-free proof/policy/provider contract and atomic supported cleanup, verified by six matching actual Rust HTTP cases. Broader account recovery and organization lifecycle remain open.
 - [x] Reauthenticated personal-vault purge: allocation-free provider contract, atomic cleanup/revision and preserved account authority, verified by six matching actual Rust HTTP cases. Organization purge remains open.

@@ -12,6 +12,7 @@ mod cipher_reads;
 mod devices;
 mod domains;
 mod password_login;
+mod prelogin;
 mod protocol;
 mod purge;
 mod refresh;
@@ -460,19 +461,9 @@ async fn dispatch_with_peer(
         return Ok(Json(response).into_response());
     }
     if route == Route::Prelogin {
-        let input: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
-        let email = input["email"]
-            .as_str()
-            .ok_or_else(invalid)?
-            .trim()
-            .to_lowercase();
-        let account = store
-            .account("email", &email)?
-            .unwrap_or(json!({"kdf":0,"kdfIterations":600000}));
-        return Ok(json_response(protocol::prelogin(
-            &account,
-            uri.path().ends_with("/password"),
-        )));
+        let input = prelogin::Input::parse(&body)?;
+        let response = VaultService::new(&mut *store).prelogin(&input.request())?;
+        return Ok(Json(response).into_response());
     }
     if route == Route::RegistrationVerification {
         let input = registration::parse_verification(&body)?;

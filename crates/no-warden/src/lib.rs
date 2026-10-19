@@ -29,6 +29,7 @@ pub mod error;
 pub mod identity;
 pub mod import;
 pub mod password_login;
+pub mod prelogin;
 pub mod purge;
 pub mod refresh;
 pub mod registration;

@@ -15,6 +15,7 @@ use no_warden::{
     domains::{DomainProjection, DomainSettingsView, GlobalDomain},
     identity::Secret,
     password_login::{PasswordLoginAccount, PasswordLoginDevice, PasswordLoginStorage},
+    prelogin::{PreloginLookup, PreloginStorage, UnknownKdfIndex},
     purge::VaultPurgeStorage,
     refresh::{RefreshIdentity, RefreshMethod, RefreshStorage},
     registration::RegistrationEmail,
@@ -36,12 +37,12 @@ use no_warden::{
         DomainSettingsUpdateResponse, FileSendRequest, FolderRequest, ImportRequest,
         InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
         MasterPasswordPolicy, MasterPasswordPolicyResponse, PasswordLoginRequest,
-        PasswordOrOtpRequest, PreloginRequest, PreloginResponse, ProfileUpdateRequest,
-        RefreshTokenRequest, RegisterRequest, RegistrationAuthentication, RegistrationCredentials,
-        RegistrationFinishRequest, RegistrationFinishResponse, RegistrationUnlock,
-        RegistrationVerificationRequest, RegistrationVerificationToken, SecretVerificationRequest,
-        SendAccessTokenRequest, SendFileData, TextSendRequest, UserKeyIdRequest,
-        UserPublicKeyResponse, WebAuthnCredentialsResponse,
+        PasswordOrOtpRequest, PreloginKdfSettings, PreloginRequest, PreloginResponse,
+        ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest, RegistrationAuthentication,
+        RegistrationCredentials, RegistrationFinishRequest, RegistrationFinishResponse,
+        RegistrationUnlock, RegistrationVerificationRequest, RegistrationVerificationToken,
+        SecretVerificationRequest, SendAccessTokenRequest, SendFileData, TextSendRequest,
+        UserKeyIdRequest, UserPublicKeyResponse, WebAuthnCredentialsResponse,
     },
 };
 
@@ -139,6 +140,23 @@ impl Storage for PurgeProbe {
     }
 }
 impl CipherReadStorage for PurgeProbe {}
+impl PreloginStorage for PurgeProbe {
+    fn prelogin(&mut self, raw_email: &str) -> Result<PreloginLookup, ()> {
+        if raw_email == "bare-metal@example.com" {
+            Ok(PreloginLookup::Known(PreloginKdfSettings {
+                iterations: i32::MIN,
+                kdf_type: -7,
+                memory: Some(-8),
+                parallelism: Some(i32::MAX),
+            }))
+        } else {
+            // Compile/link probe only; a production provider supplies normalized
+            // lookup and secret-dependent cryptographic selection externally.
+            let index = UnknownKdfIndex::new(black_box(4)).ok_or(())?;
+            Ok(PreloginLookup::Unknown(index))
+        }
+    }
+}
 impl AccountKeyIdStorage for PurgeProbe {
     fn set_user_key_id_if_absent(
         &mut self,
@@ -509,6 +527,14 @@ pub extern "C" fn _start() -> ! {
             user_key_id: [0; 32],
             user_key_id_len: None,
         };
+        for email in black_box(["bare-metal@example.com", ""]) {
+            let mut discovery = VaultService::new(&mut provider);
+            if let Ok(response) = discovery.prelogin(&PreloginRequest { email }) {
+                let mut encoded = [0; 384];
+                let _ = black_box(serde_json_core::to_slice(&response, &mut encoded));
+                black_box((response.settings(), encoded));
+            }
+        }
         let user_key_id = serde_json_core::from_slice::<UserKeyIdRequest<'_>>(black_box(
             br#"{"userKeyId":"opaque-id"}"#,
         ));

@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 567 active Rust tests: 269 core, 200 host, and 98 conformance
+The workspace has 587 active Rust tests: 277 core, 206 host, and 104 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -401,3 +401,19 @@ rollback/retry, reopen and concurrent one-time assignment. The core's eight
 provider/model tests and typed-422 regression also pass, and the bare-metal
 consumer links a reachable backfill service call without an allocator; firmware
 execution remains unverified.
+
+The required client job also selects `--suite prelogin` and
+`--suite prelogin-cli`. Both actual targets pass six HTTP cases/79 counted
+requests/27 decoded prelogins/two password logins, excluding two modern fixtures.
+The separate official CLI `2026.10.0` selection passes twenty-six commands with
+three CLI logins, two direct prelogin requests and two modern fixtures; it checks
+PBKDF2/Argon2 login, unlock and retained-note decryption plus fresh-cache Argon2
+login. The HTTP selection compares the two upstream identity
+aliases; the local `/api` extension has separate host tests. Optional private
+`BW_PRELOGIN_RECEIPT` and `BW_PRELOGIN_CLI_RECEIPT` distinguish direct fixture
+traffic from uncounted client internals. Core/provider tests cover exact signed
+projections, opaque input, bounded unknown slots, error policy and borrowed
+forwarding; host tests cover schema, normalization, independent keyed selection,
+private SQLite reopen, provider errors and public alias dispatch. The bare-metal
+consumer links real discovery calls and complete response serialization without
+an allocator; firmware execution is unverified.

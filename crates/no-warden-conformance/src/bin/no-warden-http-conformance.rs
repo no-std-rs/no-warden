@@ -31,6 +31,8 @@ enum Suite {
     FileSendsCli,
     UserKeyId,
     UserKeyIdCli,
+    Prelogin,
+    PreloginCli,
 }
 
 impl Suite {
@@ -65,6 +67,8 @@ impl Suite {
             "file-sends-cli" => Self::FileSendsCli,
             "user-key-id" => Self::UserKeyId,
             "user-key-id-cli" => Self::UserKeyIdCli,
+            "prelogin" => Self::Prelogin,
+            "prelogin-cli" => Self::PreloginCli,
             _ => return None,
         })
     }
@@ -89,7 +93,7 @@ fn check<E: Display>(result: Result<(), E>) {
 
 fn usage() {
     eprintln!(
-        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials|personal-vault-purge|account-deletion|cipher-reads|password-grants|refresh-grants|text-sends|text-sends-cli|file-sends|file-sends-cli|user-key-id|user-key-id-cli]"
+        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials|personal-vault-purge|account-deletion|cipher-reads|password-grants|refresh-grants|text-sends|text-sends-cli|file-sends|file-sends-cli|user-key-id|user-key-id-cli|prelogin|prelogin-cli]"
     );
 }
 
@@ -191,5 +195,11 @@ fn main() {
     }
     if suite == Suite::UserKeyIdCli {
         check(no_warden_conformance::user_key_id_cli::run());
+    }
+    if suite == Suite::Prelogin {
+        check(no_warden_conformance::prelogin::run());
+    }
+    if suite == Suite::PreloginCli {
+        check(no_warden_conformance::prelogin_cli::run());
     }
 }

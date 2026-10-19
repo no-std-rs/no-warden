@@ -1360,6 +1360,49 @@ pub struct PreloginResponse {
     pub kdf_parallelism: Option<u32>,
 }
 
+/// Signed account KDF metadata returned by prelogin without registration-policy filtering.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreloginKdfSettings {
+    pub iterations: i32,
+    pub kdf_type: i32,
+    pub memory: Option<i32>,
+    pub parallelism: Option<i32>,
+}
+
+/// The complete six-field discovery response used by both identity prelogin routes.
+///
+/// Construction keeps the legacy and nested projections identical and the salt null.
+/// `PreloginResponse` remains available for existing unsigned four-field consumers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompletePreloginResponse {
+    settings: PreloginKdfSettings,
+}
+
+impl CompletePreloginResponse {
+    pub(crate) const fn from_settings(settings: PreloginKdfSettings) -> Self {
+        Self { settings }
+    }
+
+    pub const fn settings(&self) -> PreloginKdfSettings {
+        self.settings
+    }
+}
+
+impl Serialize for CompletePreloginResponse {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut response = serializer.serialize_struct("CompletePreloginResponse", 6)?;
+        response.serialize_field("kdf", &self.settings.kdf_type)?;
+        response.serialize_field("kdfIterations", &self.settings.iterations)?;
+        response.serialize_field("kdfMemory", &self.settings.memory)?;
+        response.serialize_field("kdfParallelism", &self.settings.parallelism)?;
+        response.serialize_field("kdfSettings", &self.settings)?;
+        response.serialize_field("salt", &Option::<&str>::None)?;
+        response.end()
+    }
+}
+
 impl Default for PreloginResponse {
     fn default() -> Self {
         Self {

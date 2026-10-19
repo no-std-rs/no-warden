@@ -11,7 +11,7 @@ integration results define the demonstrated compatibility of no-warden.
 | --- | --- |
 | Vaultwarden | [`58a980f850464f7d9cdc99a765df36f0a3308b91`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91) |
 | Bitwarden CLI | [`cli-v2026.10.0`, `b449ac1d255784380d75ef026343198891286be7`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7) |
-| Bitwarden SDK | [`c159ee882654e65dd885014001c7f3253d1a170e`](https://github.com/bitwarden/sdk-internal/tree/c159ee882654e65dd885014001c7f3253d1a170e) |
+| Bundled Bitwarden SDK | [`c5e53d3e82ab80fdc9fd79ebd74058399a6444b6`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6) |
 
 This document independently describes observable contracts. It does not import
 upstream implementation code. Upstream projects retain their respective
@@ -48,8 +48,9 @@ Both of these identity routes accept `{"email":"person@example.test"}`:
 - `POST /identity/accounts/prelogin`
 - `POST /identity/accounts/prelogin/password`
 
-The newer route is used by CLI 2026.10.0. A PBKDF2 response with 600,000 iterations
-can expose both generations of response fields:
+The newer route is used by CLI `2026.10.0`. Both routes return the same exact
+six-field response, including legacy and nested settings and `salt:null`. A
+PBKDF2 account with 600,000 iterations returns:
 
 ```json
 {
@@ -67,12 +68,57 @@ can expose both generations of response fields:
 }
 ```
 
-KDF type `0` is PBKDF2-SHA256; `1` is Argon2id. Client password salt for a legacy
-personal account is the trimmed, lowercased email. Argon2 memory and parallelism
-parameters must agree at registration, prelogin, token issuance, and sync.
+The required canonical `email` is an opaque string, including empty, control and
+Unicode values. A one-string positional array is accepted. Missing/null/wrong
+types and duplicate known fields return 422; malformed/surplus positional JSON
+and raw invalid UTF-8 anywhere in the body return 400. Unknown fields and bearer
+credentials are ignored. The route has no Content-Type restriction. Successful
+requests return JSON 200 without changing account, vault, device or revision
+state. `/api/accounts/prelogin` is an additional local alias, not a registered
+Vaultwarden handler or part of the portable comparison.
 
-Sources: [Vaultwarden prelogin](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs),
-[CLI prelogin API](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/auth/password-prelogin/password-prelogin-api.service.ts).
+Lookup trims Unicode whitespace and lowercases the email. Known accounts return
+their stored signed i32 KDF settings verbatim, without registration-policy
+filtering. KDF type `0` is PBKDF2-SHA256; `1` is Argon2id. Unknown accounts select
+from this ordered catalog; memory and parallelism remain explicit nulls when
+absent:
+
+| Slot | KDF | Iterations | Memory | Parallelism |
+| --- | --- | --- | --- | --- |
+| 0, 1 | PBKDF2 | 600000 | null | null |
+| 2 | PBKDF2 | 100000 | null | null |
+| 3 | PBKDF2 | 5000 | null | null |
+| 4 | Argon2id | 3 | 64 | 4 |
+| 5 | Argon2id | 6 | 32 | 4 |
+
+Upstream derives a selection key using HMAC-SHA256 over `prelogin-kdf`, keyed by
+its persisted RSA PEM bytes. A second HMAC over normalized email UTF-8 supplies
+a big-endian two-byte value modulo six. Identical email and key remain stable
+across requests/restarts; independent installations need not choose the same
+slot. The adapter uses an independent persisted random 32-byte key rather than
+RSA-derived key material. It also returns backend errors instead of upstream's
+lookup-error fallback, lacks the shared public limiter, and retains its 16-MiB
+body cap versus upstream's decimal 20,000,000-byte JSON cap. These differences
+remain partial-parity limits.
+
+`PreloginStorage` owns normalization, known lookup, configured policy and secret
+selection outside the allocation-free core. `CompletePreloginResponse` keeps
+legacy/nested settings identical and salt null; the prior unsigned four-field
+`PreloginResponse` remains available. Client password salt for legacy accounts
+is normalized email. The default CLI TS branch uses `kdfSettings` and derives
+from email; the feature-gated SDK branch calls the same endpoint and substitutes
+normalized email when server salt is null. Argon2 memory and parallelism must
+agree at registration, prelogin, token issuance and sync.
+
+The [pinned handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1392-L1439)
+and [release 1.37.4](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/accounts.rs#L1377-L1424)
+match, including unknown selection. Key lifecycle is specified by
+[auth initialization](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth.rs#L74-L120).
+The shipped CLI [password strategy](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/auth/src/common/login-strategies/password-login.strategy.ts#L162-L183)
+uses the [prelogin API](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/auth/password-prelogin/password-prelogin-api.service.ts#L15-L25).
+The [SDK response conversion](https://github.com/bitwarden/sdk-internal/blob/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6/crates/bitwarden-auth/src/login/login_via_password/password_prelogin_response.rs#L27-L55)
+defines the null-salt fallback. Static callers are distinct from captured route
+traces, which remain absent.
 
 ## Fixture cryptography and registration
 

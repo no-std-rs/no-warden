@@ -41,7 +41,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | `GET /api/webauthn` | Fixed empty credential metadata, authenticated owned-device access and existing previous-stamp guards | Six matching Rust HTTP cases against both actual servers; no passkey or CLI call claim |
 | `POST /api/accounts/register` | Legacy strict registration with encrypted keys | Cryptographic fixture |
 | `POST /identity/accounts/register/send-verification-email`, `POST /identity/accounts/register/finish` | No-SMTP new-account verification token and canonical atomic completion; old/current credential shapes | Eight matching corrected Rust HTTP cases on both actual servers; borrowed opt-in core/provider and host parser, token, rollback/reopen and HTTP-dispatch tests; fresh unchanged CLI regression remains separate |
-| Prelogin legacy and identity aliases | PBKDF2/Argon2 parameters | Latest CLI and HTTP |
+| Public identity prelogin aliases; local legacy extension | Complete signed response and stable unknown-account KDF catalog | Six matching identity-route HTTP cases and separate twenty-six-command PBKDF2/Argon2 CLI comparison; local extension uses host tests |
 | `POST /identity/connect/token` | Reusable ordinary password grant and password-method refresh; valid refresh proofs can be reused with current device authority | CLI baseline, six matching ordinary-password Rust cases and eight matching refresh cases. Refresh JWT encoding and complete identity policy remain open |
 | Personal text Sends, recipient `send_access` grant and sync | Encrypted owner lifecycle, scoped recipient access, password management and atomic access limits | Six matching Rust HTTP cases and twenty matching official CLI commands on both servers. File Sends are verified separately below; full policy/transport parity remains open |
 | Personal file Sends: reservation, multipart upload, file-URL issuance and binary GET | Immutable encrypted metadata, exact bytes, scoped capabilities and create-only storage | Six matching HTTP cases and a separate twenty-command official CLI comparison on both servers; configured policies and full transport remain open |
@@ -94,8 +94,10 @@ for those types and blob encryption need their own client fixtures. Keeping
 encrypted passkey records in a login item does not
 implement WebAuthn/passkey account authentication or verify authenticator use.
 
-The fixture uses PBKDF2. Argon2 parameter policy is unit tested; real-client
-Argon2 account interoperability is not yet verified. Browsers, extensions,
+The 120-command baseline fixture uses PBKDF2. A separate twenty-six-command
+comparison now verifies Argon2id password login, unlock and fresh-cache
+decryption with iterations 3, memory 64 MiB and parallelism 4 on both servers.
+Broader Argon2 account/configuration variants remain open. Browsers, extensions,
 desktop and mobile are not covered by the CLI result. Full organization,
 attachment, Send, notification and account-management compatibility remains on
 the [roadmap](../ROADMAP.md).
@@ -103,7 +105,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 567 active workspace unit tests pass: 269 core, 200 host and 98 support,
+All 587 active workspace unit tests pass: 277 core, 206 host and 104 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -1000,3 +1002,24 @@ claim. Local SQL tests separately establish atomic one-time assignment and
 rollback/reopen; upstream's separate check/save is weaker. Full key rotation,
 all account variants, complete token projections and transport-limit parity
 (16,777,216 versus 20,000,000 bytes) remain open.
+
+## Prelogin discovery
+
+The reusable core models public KDF discovery with opaque canonical email input,
+signed known settings and bounded deterministic unknown selection. Its complete
+six-field response keeps legacy/nested settings identical and salt null. Both
+identity routes share it; the legacy `/api` alias remains a local extension.
+All six direct HTTP cases pass against both actual targets: 79 counted requests,
+27 decoded prelogins and two password logins, excluding two explicit modern
+registration fixtures. The separate twenty-six-command official CLI `2026.10.0`
+comparison also passes both: three CLI password logins, two direct prelogin HTTP
+requests, no direct password login, and two modern fixtures. Both PBKDF2 and
+Argon2 notes decrypt after login and unlock; Argon2 also passes fresh-cache
+login/sync/decryption. These results add no captured route, unknown-distribution,
+registration-command or full-policy claim.
+
+The host uses a private persisted random selection key instead of deriving one
+from RSA PEM bytes. It returns backend errors rather than unknown-account
+fallback and does not implement the reference public limiter. The 16-MiB versus
+decimal 20,000,000-byte JSON limit and complete identity/configuration policies
+remain open.

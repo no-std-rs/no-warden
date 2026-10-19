@@ -817,3 +817,24 @@ include one fixture login; two additional logins are real CLI commands.
 `BW_USER_KEY_ID_CLI_RECEIPT` separates these counters. No CLI-internal request
 count, captured route trace, new command form or combined baseline total is
 claimed. Use a fresh reference process under unchanged default limits.
+
+## Prelogin comparisons
+
+`--suite prelogin` selects six Rust cases for the two upstream identity routes.
+Both actual targets pass all six cases with 79 counted HTTP requests, 27 decoded
+prelogins and two password logins, excluding two modern registration fixtures.
+They compare known PBKDF2/Argon2 projections, Unicode lookup, within-installation
+unknown stability/catalog membership, schema/media/UTF-8 guards and public
+read-only account/vault behavior. `/api/accounts/prelogin` is excluded from the
+portable comparison. Independent targets need not choose the same unknown KDF.
+`BW_PRELOGIN_RECEIPT` records private authored names/status/counters only.
+
+`--suite prelogin-cli` is a separate twenty-six-command official CLI comparison
+with real PBKDF2 and Argon2 fixtures, encrypted note creation, sync/decryption,
+lock/unlock and fresh-cache Argon2 login. All twenty-six commands pass against
+both actual targets with three CLI logins, two direct prelogin HTTP requests,
+no direct password login and two explicit modern registration fixtures.
+`BW_PRELOGIN_CLI_RECEIPT` separates direct fixture requests from CLI login
+commands; internal client requests are uncounted and untraced. These commands
+reuse existing forms and remain separate from baseline120 and all other focused
+suites. Reference processes retain their default limits.

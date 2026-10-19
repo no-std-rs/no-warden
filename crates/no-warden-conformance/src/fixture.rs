@@ -19,7 +19,7 @@ use pbkdf2::pbkdf2_hmac;
 use rand::{RngCore, rngs::OsRng};
 use reqwest::{StatusCode, blocking::Client};
 use serde_json::{Value, json};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
 const REGISTRATION_ITERATIONS: u32 = 600_000;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
@@ -42,6 +42,7 @@ enum Failure {
     VerificationToken,
     RegistrationDocument,
     CredentialRewrap,
+    FixtureKdf,
 }
 
 impl FixtureError {
@@ -60,6 +61,7 @@ impl FixtureError {
             Failure::VerificationToken => "Registration verification did not return a token.",
             Failure::RegistrationDocument => "The registration fixture is invalid.",
             Failure::CredentialRewrap => "The PBKDF2 credential rewrap fixture is invalid.",
+            Failure::FixtureKdf => "The fixture KDF configuration is invalid.",
         }
     }
 }
@@ -90,6 +92,29 @@ fn master_key(email: &str, password: &str, iterations: u32) -> [u8; 32] {
         &mut result,
     );
     result
+}
+
+// Standard Argon2id v1.3 with the protocol's SHA-256 email salt and MiB input.
+// This is independently authored fixture glue around the RustCrypto primitive.
+fn argon2_master_key(
+    email: &str,
+    password: &str,
+    iterations: u32,
+    memory_mib: u32,
+    parallelism: u32,
+) -> Result<[u8; 32], FixtureError> {
+    let invalid = || FixtureError(Failure::FixtureKdf);
+    let memory_kib = memory_mib.checked_mul(1024).ok_or_else(invalid)?;
+    let params = argon2::Params::new(memory_kib, iterations, parallelism, Some(32))
+        .map_err(|_| invalid())?;
+    let algorithm =
+        argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
+    let salt = Sha256::digest(email.trim().to_lowercase().as_bytes());
+    let mut result = [0; 32];
+    algorithm
+        .hash_password_into(password.as_bytes(), &salt, &mut result)
+        .map_err(|_| invalid())?;
+    Ok(result)
 }
 
 fn password_hash(master_key: &[u8; 32], password: &str) -> String {
@@ -277,7 +302,48 @@ pub fn registration(email: &str, password: &str, iterations: u32) -> Result<Valu
     }
     let normalized_email = email.trim().to_lowercase();
     let master_key = master_key(&normalized_email, password, iterations);
-    let stretched_key = stretch_key(&master_key);
+    registration_document(
+        &normalized_email,
+        password,
+        &master_key,
+        0,
+        iterations,
+        None,
+        None,
+    )
+}
+
+/// Generate a real client-compatible Argon2id registration. This function is
+/// fixture-only; the no-alloc API and server never derive these client keys.
+pub fn registration_argon2(
+    email: &str,
+    password: &str,
+    iterations: u32,
+    memory_mib: u32,
+    parallelism: u32,
+) -> Result<Value, FixtureError> {
+    let email = email.trim().to_lowercase();
+    let master = argon2_master_key(&email, password, iterations, memory_mib, parallelism)?;
+    registration_document(
+        &email,
+        password,
+        &master,
+        1,
+        iterations,
+        Some(memory_mib),
+        Some(parallelism),
+    )
+}
+fn registration_document(
+    normalized_email: &str,
+    password: &str,
+    master_key: &[u8; 32],
+    kdf: u8,
+    iterations: u32,
+    memory: Option<u32>,
+    parallelism: Option<u32>,
+) -> Result<Value, FixtureError> {
+    let stretched_key = stretch_key(master_key);
     let mut user_key = [0; 64];
     OsRng
         .try_fill_bytes(&mut user_key)
@@ -286,17 +352,17 @@ pub fn registration(email: &str, password: &str, iterations: u32) -> Result<Valu
     Ok(json!({
         "email": normalized_email,
         "name": "no-warden compatibility test",
-        "masterPasswordHash": password_hash(&master_key, password),
+        "masterPasswordHash": password_hash(master_key, password),
         "masterPasswordHint": null,
         "key": encrypt(&user_key, &stretched_key)?,
         "keys": {
             "publicKey": STANDARD.encode(public_key),
             "encryptedPrivateKey": encrypt(&private_key, &user_key)?,
         },
-        "kdf": 0,
+        "kdf": kdf,
         "kdfIterations": iterations,
-        "kdfMemory": null,
-        "kdfParallelism": null,
+        "kdfMemory": memory,
+        "kdfParallelism": parallelism,
         "organizationUserId": null,
         "referenceData": null,
     }))
@@ -310,13 +376,32 @@ pub(crate) fn pbkdf2_fixture_user_key(
     if fixture["kdf"].as_i64() != Some(0) {
         return Err(invalid());
     }
+    fixture_user_key(fixture, password).map_err(|_| invalid())
+}
+
+pub(crate) fn fixture_user_key(fixture: &Value, password: &str) -> Result<[u8; 64], FixtureError> {
+    let invalid = || FixtureError(Failure::FixtureKdf);
     let email = fixture["email"].as_str().ok_or_else(invalid)?;
     let old_iterations = fixture["kdfIterations"]
         .as_u64()
         .and_then(|value| u32::try_from(value).ok())
         .filter(|value| *value > 0)
         .ok_or_else(invalid)?;
-    let old_master_key = master_key(email, password, old_iterations);
+    let old_master_key = match fixture["kdf"].as_i64() {
+        Some(0) => master_key(email, password, old_iterations),
+        Some(1) => {
+            let memory = fixture["kdfMemory"]
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(invalid)?;
+            let parallelism = fixture["kdfParallelism"]
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(invalid)?;
+            argon2_master_key(email, password, old_iterations, memory, parallelism)?
+        }
+        _ => return Err(invalid()),
+    };
     if fixture["masterPasswordHash"].as_str()
         != Some(password_hash(&old_master_key, password).as_str())
     {
@@ -337,6 +422,14 @@ pub fn encrypted_pbkdf2_value(
     plaintext: &[u8],
 ) -> Result<String, FixtureError> {
     encrypt(plaintext, &pbkdf2_fixture_user_key(fixture, password)?)
+}
+
+pub(crate) fn encrypted_fixture_value(
+    fixture: &Value,
+    password: &str,
+    plaintext: &[u8],
+) -> Result<String, FixtureError> {
+    encrypt(plaintext, &fixture_user_key(fixture, password)?)
 }
 
 /// Rewrap the same fixture user key after changing PBKDF2 iterations. Returned
@@ -388,15 +481,19 @@ pub fn rewrap_pbkdf2_password(
     Ok(updated)
 }
 
-fn post_registration(server: &str, body: &Value) -> Result<(), FixtureError> {
+fn registration_client() -> Result<Client, FixtureError> {
     // Registration bodies include password hashes, wrapped keys, and, in the
     // finish phase, verification tokens. Own the transport policy so callers
     // cannot enable redirects that replay those bodies at another origin.
-    let client = Client::builder()
+    Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
         .build()
-        .map_err(|_| FixtureError(Failure::HttpClient))?;
+        .map_err(|_| FixtureError(Failure::HttpClient))
+}
+
+fn post_registration(server: &str, body: &Value) -> Result<(), FixtureError> {
+    let client = registration_client()?;
     let server = server.trim_end_matches('/');
     let response = client
         .post(format!("{server}/api/accounts/register"))
@@ -412,6 +509,22 @@ fn post_registration(server: &str, body: &Value) -> Result<(), FixtureError> {
         };
     }
 
+    post_modern_registration(&client, server, body)
+}
+
+/// Explicit modern setup for fixtures whose supported input deliberately falls
+/// outside the adapter's separately retained strict legacy embedding API.
+pub(crate) fn register_modern_fixture(server: &str, body: &Value) -> Result<(), FixtureError> {
+    post_modern_registration(&registration_client()?, server.trim_end_matches('/'), body)
+}
+
+// The only callers pass a client built by registration_client; callers cannot
+// supply redirect or proxy policy. Keep credentials and tokens in memory only.
+fn post_modern_registration(
+    client: &Client,
+    server: &str,
+    body: &Value,
+) -> Result<(), FixtureError> {
     // Newer upstream versions use a verification/finish registration pair.
     // Disposable instances with email verification disabled return the token
     // directly. The token never appears in logs or the returned fixture.
@@ -464,6 +577,20 @@ pub fn seed_account(server: &str, email: &str, password: &str) -> Result<Value, 
     Ok(body)
 }
 
+/// Register an Argon2id account using the same redirect-safe modern fallback.
+pub fn seed_account_argon2(
+    server: &str,
+    email: &str,
+    password: &str,
+    iterations: u32,
+    memory_mib: u32,
+    parallelism: u32,
+) -> Result<Value, FixtureError> {
+    let body = registration_argon2(email, password, iterations, memory_mib, parallelism)?;
+    post_registration(server, &body)?;
+    Ok(body)
+}
+
 /// Register a password account without submitting its generated RSA key pair.
 ///
 /// Fixture-only distinction: the returned private registration document retains
@@ -489,6 +616,61 @@ pub fn seed_account_without_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn argon2_fixture_matches_public_client_proof_vector_and_normalized_salt() {
+        // Public deterministic client protocol vector (SDK master_key.rs).
+        // The test validates our independent standard-primitive assembly.
+        let master = argon2_master_key(" TEST_SALT ", "asdfasdf", 4, 32, 2).unwrap();
+        assert!(
+            password_hash(&master, "asdfasdf") == "PR6UjYmjmppTYcdyTiNbAhPJuQQOmynKbdEl1oyi/iQ="
+        );
+    }
+
+    #[test]
+    fn argon2_fixture_unwraps_authenticated_fields_and_keeps_pbkdf_helpers_strict() {
+        let password = "synthetic-Argon-fixture-password";
+        let account = registration_argon2(" Fixture-É@EXAMPLE.TEST ", password, 1, 16, 1).unwrap();
+        assert!(
+            account["email"] == "fixture-é@example.test"
+                && account["kdf"] == 1
+                && account["kdfIterations"] == 1
+                && account["kdfMemory"] == 16
+                && account["kdfParallelism"] == 1
+        );
+        let key = fixture_user_key(&account, password).unwrap();
+        let encrypted = encrypted_fixture_value(
+            &account,
+            password,
+            "authenticated Argon fixture\0雪".as_bytes(),
+        )
+        .unwrap();
+        assert!(
+            decrypt(&encrypted, &key)
+                .is_ok_and(|p| p == "authenticated Argon fixture\0雪".as_bytes())
+        );
+        assert!(pbkdf2_fixture_user_key(&account, password).is_err());
+        assert!(fixture_user_key(&account, "wrong synthetic fixture password").is_err());
+    }
+
+    #[test]
+    fn argon2_fixture_parameter_failures_are_bounded_and_redacted() {
+        for (iterations, memory, parallelism) in
+            [(0, 16, 1), (1, 0, 1), (1, 16, 0), (1, u32::MAX, 1)]
+        {
+            let error = argon2_master_key(
+                "private-fixture@example.test",
+                "private-fixture-password",
+                iterations,
+                memory,
+                parallelism,
+            )
+            .err()
+            .unwrap();
+            let output = format!("{error} {error:?}");
+            assert!(!output.contains("private-fixture") && !output.contains("password"));
+        }
+    }
     use std::{
         error::Error as _,
         io::{BufRead, BufReader, Read},
@@ -953,6 +1135,34 @@ mod tests {
         );
         assert!(requests[2].1["emailVerificationToken"] == "synthetic-verification-secret");
         assert!(body.get("emailVerificationToken").is_none());
+    }
+
+    #[test]
+    fn explicit_modern_registration_skips_legacy_and_limits_token_to_finish() {
+        let (server, handle) = server(vec![
+            Reply {
+                path: "/identity/accounts/register/send-verification-email",
+                status: 200,
+                body: "\"synthetic-verification-secret\"",
+            },
+            Reply {
+                path: "/identity/accounts/register/finish",
+                status: 200,
+                body: "{\"object\":\"registerFinish\"}",
+            },
+        ]);
+        let mut body = request_fixture();
+        body["email"] = json!("fixture-café@example.test");
+        register_modern_fixture(&server, &body).unwrap();
+        let requests = handle.join().unwrap();
+        assert!(
+            requests.len() == 2
+                && requests[0].1["email"] == body["email"]
+                && requests[0].1.get("masterPasswordHash").is_none()
+        );
+        let mut expected = body.clone();
+        expected["emailVerificationToken"] = json!("synthetic-verification-secret");
+        assert!(requests[1].1 == expected && body.get("emailVerificationToken").is_none());
     }
 
     #[test]

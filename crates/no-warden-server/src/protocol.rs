@@ -90,19 +90,6 @@ pub fn config(base: &str) -> Value {
     })
 }
 
-/// KDF discovery; upstream exposes both shapes at both prelogin routes.
-pub fn prelogin(account: &Value, _modern: bool) -> Value {
-    let settings = kdf(account, false);
-    json!({
-        "kdf": settings["kdfType"],
-        "kdfIterations": settings["iterations"],
-        "kdfMemory": settings["memory"],
-        "kdfParallelism": settings["parallelism"],
-        "kdfSettings": settings,
-        "salt": null,
-    })
-}
-
 /// Personal-account profile and encrypted account keys.
 pub fn profile(account: &Value, security_stamp: &str) -> Value {
     json!({
