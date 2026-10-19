@@ -14,10 +14,11 @@ also pass eight direct HTTP cases against both servers, including owner session
 revocation and API-key/authentication-request recovery. KDF and password changes
 also have focused real CLI proofs of fresh-cache decryption after rewrapping the
 same user key. Six matching direct HTTP cases verify authenticated empty WebAuthn
-credential metadata and its previous-stamp guards against both servers. Six more
-matching HTTP cases cover reauthenticated personal-vault purge, cleanup and
-preserved account authority. This does not enable passkey
-registration or login. The remaining surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
+credential metadata and its previous-stamp guards against both servers; this
+does not enable passkey registration or login. Six more matching HTTP cases
+cover reauthenticated personal-vault purge with preserved account authority.
+A separate six-case comparison covers both account-deletion aliases, revoked
+authority, and fresh identity after same-email registration. The remaining surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden
 replacement. Client-side vault encryption stays with the client.
 
@@ -82,7 +83,8 @@ bounded collections require no allocator. Opt-in `ImportStorage`,
 `AccountProfileStorage`, `DomainSettingsStorage`, `DeviceStorage`,
 `DevicePushStorage`, `AuthRequestStorage`, `AuthRequestResponseStorage`,
 `AuthRequestLoginStorage`, `RegistrationStorage`, `AccountSecurityStorage`,
-`AccountKdfStorage`, `AccountPasswordStorage`, `VaultPurgeStorage`, and
+`AccountKdfStorage`, `AccountPasswordStorage`, `VaultPurgeStorage`,
+`AccountDeletionStorage`, and
 `AttachmentStorage` providers add
 batch operations,
 credential and account-key services, profile metadata and equivalent-domain updates, device discovery,
@@ -90,7 +92,7 @@ registration after verified login, push-token ordering, pending auth-request
 creation/discovery, approval/code-protected polling, one-use access-code login,
 modern account verification/finish, password verification, security-stamp renewal,
 client KDF transitions, password changes and previous-stamp authorization,
-reauthenticated personal-vault purge,
+reauthenticated personal-vault purge and account deletion,
 and attachment transitions
 without adding an allocator. See [architecture](docs/architecture.md) and
 [CI and review](docs/ci.md).

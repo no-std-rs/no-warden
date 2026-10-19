@@ -1066,3 +1066,47 @@ adapter and release 1.37.4: 327 counted HTTP requests each, six identity request
 three auth-request creations, three polls and eight successful purges. Two shared
 fixture registrations are excluded. Complete error, transport, notification and
 organization variants remain outside this subset.
+
+### Account deletion
+
+`DELETE /api/accounts` and `POST /api/accounts/delete` use the same authenticated
+account-deletion operation. Both reuse `PasswordOrOtpRequest`: optional
+`masterPasswordHash` (alias `MasterPasswordHash`) followed by optional `otp`.
+Exactly one non-null string selects proof verification. Invalid/missing/both
+proofs return 400; schema and malformed-JSON distinctions match personal purge.
+The proof belongs to the authenticated account, regardless of body or query
+owner/organization fields. Success returns empty HTTP 200, including for the
+POST alias; it does not return a deleted-user JSON projection.
+
+After verifying the proof, upstream rejects a confirmed organization owner if
+its organization has at most one confirmed owner. The guard is after successful
+protected-action OTP consumption but before cleanup. The personal adapter has
+no organization membership implementation; the reusable provider must enforce
+that trusted policy when embedded in an organization-aware application.
+
+Pinned cleanup removes Sends, emergency-access relationships/invitations,
+memberships and their collection/group links, personal ciphers and attachments,
+favorites, folders, auth requests, devices, two-factor records and invitations,
+then the user. It does not delete organization vaults. The local adapter removes
+all of its supported account-dependent rows, credentials, issued access/refresh
+and historical authority, attachments/bytes/capabilities and settings in one
+transaction. There is no surviving account revision to advance. Unrelated
+accounts and instance-wide registration signing state remain intact.
+
+Sources: [pinned aliases](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1321-L1333),
+[pinned model cleanup](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/user.rs#L365-L389),
+[release 1.37.4 aliases](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/accounts.rs#L1306-L1318)
+and [release cleanup](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/db/models/user.rs#L360-L384).
+Release cleanup omits the pin's explicit auth-request deletion. Its SQLite
+[auth-request foreign key](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/migrations/sqlite/2023-09-01-170620_update_auth_request_table/up.sql#L18)
+does not specify cascade. Selected portable fixtures therefore contain no auth
+requests; local SQL tests separately establish their deletion. No identical
+cross-version cleanup/failure guarantee is inferred. All six selected direct
+Rust HTTP cases pass against both actual servers, with 257 counted requests
+per target and three excluded fixture registrations. Six identity requests
+comprise three successful password logins, two refresh attempts (one success),
+and a rejected old API grant. The proof covers both exact aliases, ignored
+queries, guarded rejections, live authority revocation, fresh identity after
+same-email registration and foreign preservation. Each deletion checks fresh
+owned/foreign attachment capabilities within 30 seconds; local SQL tests,
+separately, establish physical cleanup and atomic failure rollback.

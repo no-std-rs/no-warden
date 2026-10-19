@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 422 active Rust tests: 190 core, 156 host, and 76 conformance
+The workspace has 439 active Rust tests: 198 core, 163 host, and 78 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -287,3 +287,21 @@ checks prove pre-purge bytes and post-purge revocation within 30 seconds; physic
 BLOB/grant/row deletion is separate SQL evidence. A fresh official CLI 2026.10.0
 regression also passes all 120 commands against both actual servers. It remains
 separate and establishes no purge command or captured route claim.
+
+The account-deletion extension adds two authenticated aliases with one borrowed
+proof/provider service. Seven core module tests and one route test exercise proof
+ordering, trusted policy rejection, atomic failure mapping and redaction. The
+bare-metal consumer decodes the borrowed proof and calls the real service against
+a fixed stack-owned provider, without an allocator or implicit proof serialization.
+The explicit Rust `--suite account-deletion` comparison passes all six cases
+against the adapter and actual Vaultwarden 1.37.4: 257 counted HTTP requests per
+server, including six identity requests (three successful password logins, two
+refresh attempts with one success, and one rejected old API credential). Three
+fixture registrations across two emails are excluded. Both deletion aliases
+return empty 200; schema, proof, query and method guards, live authority
+revocation, same-email re-registration and foreign preservation match. Each
+delete has a fresh capability check within 30 seconds. Its portable fixtures
+avoid the release/pin auth-request cleanup difference; local SQL tests establish
+that cleanup, failure rollback and durable reopen. The unchanged official CLI
+2026.10.0 regression also passes all 120 commands against both actual servers.
+It establishes no account-deletion caller, generated-SDK execution or route trace.

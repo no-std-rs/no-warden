@@ -35,6 +35,7 @@ pub enum Route<'a> {
     AccountSecurityStamp,
     AccountKdfChange,
     AccountPasswordChange,
+    AccountDelete,
     AccountKeysGet,
     AccountKeysInitialize,
     UserPublicKey(&'a str),
@@ -141,6 +142,7 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (Post, "/api/accounts/security-stamp") => Some(AccountSecurityStamp),
         (Post, "/api/accounts/kdf") => Some(AccountKdfChange),
         (Post, "/api/accounts/password") => Some(AccountPasswordChange),
+        (Delete, "/api/accounts") | (Post, "/api/accounts/delete") => Some(AccountDelete),
         (Get, "/api/accounts/keys") => Some(AccountKeysGet),
         (Post, "/api/accounts/keys") => Some(AccountKeysInitialize),
         (Get, "/api/webauthn") => Some(WebAuthnCredentials),
@@ -305,6 +307,34 @@ fn valid_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_deletion_aliases_require_authentication_and_preserve_exact_methods() {
+        for (method, path) in [
+            (Method::Delete, "/api/accounts"),
+            (Method::Post, "/api/accounts/delete"),
+        ] {
+            assert_eq!(classify(method, path), Some(Route::AccountDelete));
+            assert_eq!(
+                classify(method, &std::format!("{path}/?ignored=true")),
+                Some(Route::AccountDelete)
+            );
+            assert!(Route::AccountDelete.requires_authentication());
+            for wrong in [
+                Method::Get,
+                Method::Post,
+                Method::Put,
+                Method::Delete,
+                Method::Options,
+            ] {
+                if wrong != method {
+                    assert!(classify(wrong, path).is_none());
+                }
+            }
+            assert!(classify(method, &std::format!("{path}/extra")).is_none());
+        }
+        assert!(classify(Method::Post, "/api/accounts/Delete").is_none());
+    }
 
     #[test]
     fn personal_vault_purge_is_authenticated_post_and_reserves_literal_other_methods() {
