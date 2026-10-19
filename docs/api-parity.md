@@ -55,7 +55,7 @@ wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
 The ledger records positive or restart HTTP evidence for 80 patterns, negative
-HTTP evidence for 79, 189 named HTTP cases, and 31 CLI command patterns. These are
+HTTP evidence for 79, 195 named HTTP cases, and 31 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -1034,3 +1034,42 @@ personal ownership, shared readable-but-not-writable overrides, exact IDs,
 lifecycle preservation, error mapping and grant redaction. Broad organization
 policy, notifications, complete cipher response models and global transport/error
 contracts remain open; all full-parity and captured-trace flags remain false.
+
+## Ordinary password-grant core
+
+This chunk deepens the existing partial `POST /identity/connect/token` contract;
+it adds no route or newly covered upstream handler. The 294-handler inventory and
+209 unimplemented handlers remain unchanged. `PasswordLoginRequest`,
+`PasswordLoginStorage` and `VaultService::authenticate_password` add a reusable
+allocation-free ordinary password path beside API-key and auth-request login.
+OAuth token response projection and refresh are still adapter-owned; no typed
+OAuth response model or full identity-family claim is introduced.
+
+The service preserves upstream required-field order, exact scope, raw proof and
+trimmed username semantics before trusted lookup/proof/enabled/preparation hooks.
+The adapter corrects previously omitted ordinary scope/client-ID guards and
+case-sensitive username/password lookups, and follows root aliases with first
+required-grant versus duplicate-absent optional-field semantics for this branch. Existing auth-request selection remains distinct and cannot
+fall back to account-password verification. Duplicate policies for other grants
+are not broadened by this correction. See
+[protocol references](protocol.md#ordinary-password-grant-validation) for precise
+pin/release guards and source response behavior.
+
+A concrete shipped client path is
+[CLI password credentials](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/auth/commands/login.command.ts#L222-L224),
+[password strategy](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/auth/src/common/login-strategies/password-login.strategy.ts#L102-L111),
+[base login strategy](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/auth/src/common/login-strategies/login.strategy.ts#L117-L124)
+and [ApiService token request](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/services/api.service.ts#L161-L185).
+The request models set the client authentication hash, exact scope, client ID
+and device metadata. The existing real CLI baseline exercises ordinary password
+login. All six focused Rust cases pass against both actual servers: 85 counted
+HTTP requests per target, including 45 token POSTs, with one fixture registration
+excluded. The suite classifies 39 pre-limiter guard requests and six
+credential-flow attempts, including two ordinary successes and one auth-request
+selector canary. It verifies selected complete API errors, required order, exact
+scope, raw proof, root aliases, duplicate-absent optional fields, empty client and
+device input, token authority and account/vault preservation. Private enabled and
+provider failures are separate unit/SQL evidence. A fresh official CLI 2026.10.0
+regression also passes all 120 commands against both actual servers. No captured
+trace, complete transport/error/2FA/mail/SSO
+behavior or refresh-core parity follows from these checks.

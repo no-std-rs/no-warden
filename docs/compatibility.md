@@ -42,7 +42,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | `POST /api/accounts/register` | Legacy strict registration with encrypted keys | Cryptographic fixture |
 | `POST /identity/accounts/register/send-verification-email`, `POST /identity/accounts/register/finish` | No-SMTP new-account verification token and canonical atomic completion; old/current credential shapes | Eight matching corrected Rust HTTP cases on both actual servers; borrowed opt-in core/provider and host parser, token, rollback/reopen and HTTP-dispatch tests; fresh unchanged CLI regression remains separate |
 | Prelogin legacy and identity aliases | PBKDF2/Argon2 parameters | Latest CLI and HTTP |
-| `POST /identity/connect/token` | Password grant, expiring sessions, rotating refresh | CLI and HTTP |
+| `POST /identity/connect/token` | Reusable ordinary password grant and expiring access; adapter refresh tokens are consumed once | CLI baseline and six matching Rust guard/core cases. Refresh replay differs from pinned upstream and remains a separate parity task |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
 | `GET /api/accounts/keys`, `POST /api/accounts/keys`, `GET /api/users/<id>/public-key` | Owner-only private retrieval, initialization of an absent pair, authenticated cross-user public lookup | Borrowed core/provider contracts; Rust HTTP comparison group and SQLite rollback/reopen tests |
 | `POST /api/accounts/api-key`, `POST /api/accounts/rotate-api-key` | Password-reauthenticated personal key retrieval, lazy creation, rotation | Core, HTTP comparison with upstream, rollback and restart tests; keys used by real CLI |
@@ -101,7 +101,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 452 active workspace unit tests pass: 205 core, 167 host and 80 support,
+All 471 active workspace unit tests pass: 216 core, 173 host and 82 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -871,3 +871,33 @@ flow nor a real CLI execution of either alias has been established. The generate
 SDK methods and baseline CLI regression remain separate evidence. See
 [the parity notes](api-parity.md#ordinary-details-and-admin-cipher-reads) for
 source/release references and narrower ownership/provider limits.
+
+## Ordinary password identity core
+
+Ordinary password login now has a borrowed request, opt-in provider and sealed
+grant in the allocation-free core. The adapter applies the source's required
+presence order, exact scope, Unicode username trimming/lowercase lookup and
+unmodified proof. Empty client/device strings are accepted; device type parsing
+retains fallback 14. Trusted providers check enabled state after a valid proof
+and prepare subsequent policy/upgrade work before issuance. The host uses fixed
+verifier parameters with no SMTP/2FA/SSO preparation; the generic hook is not
+evidence that those policies or dynamic upgrades are implemented. Ordered form
+roots follow first-value semantics for the required grant; repeated optional
+fields become absent and fail the applicable presence guard. A single recognized
+auth-request selector cannot fall back, while ambiguous duplicate selectors retain
+the adapter's stricter rejection policy as an explicit gap.
+
+All six focused cases pass against the adapter and actual Vaultwarden 1.37.4:
+85 counted HTTP requests per target, 45 token POSTs, 39 authored pre-limiter
+guards, six credential-flow attempts and two ordinary successes. One fixture
+registration is excluded. The cases verify selected nine-field API errors,
+required/scope ordering, raw proof, single aliases and optional-duplicate absence,
+empty device/client inputs, token/profile/sync authority and preserved vault
+state. Provider/local tests establish hidden enabled/policy/error/rollback
+behavior separately; portable HTTP does not claim a disabled-account API.
+The fresh official CLI 2026.10.0 regression passes all 120 commands against both
+actual servers. It establishes real ordinary password login with client-side
+decryption; no captured request trace or broader identity contract is inferred.
+Refresh remains in the host; its stricter replay policy and full SMTP/2FA/SSO,
+optional form guards, transport and JWT/time variants remain open. See
+[the parity notes](api-parity.md#ordinary-password-grant-core).

@@ -285,7 +285,7 @@ pub fn respond(
 
 // Root extraction follows the same pinned Rocket NameView rules used for the
 // verified sync query: leading dot/bracket and scalar nested suffixes are valid.
-fn query_root(name: &str) -> &str {
+pub(crate) fn query_root(name: &str) -> &str {
     if name.starts_with('=') {
         return "";
     }

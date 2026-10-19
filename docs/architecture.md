@@ -754,3 +754,42 @@ no-allocator consumer links the real service against bounded stack-owned storage
 All six focused HTTP cases pass against both actual servers, including active,
 trashed and archived alias equivalence, capability-backed exact byte retrieval,
 revoked-authority rejection and unchanged owner/foreign snapshots.
+
+## Ordinary password identity grants
+
+`password_login::PasswordLoginStorage` moves ordinary password-grant validation
+into the allocation-free core. The borrowed `PasswordLoginRequest` preserves
+field presence and an opaque redacted proof. `VaultService::authenticate_password`
+requires the password grant, excludes a present auth-request selector, checks
+required fields in upstream order, then requires the exact password scope before
+provider access. It trims the username by borrowing a subslice and passes the
+unmodified proof to the provider. Unicode email lowercase lookup, password
+verification, account-enabled state, private verifier upgrade and subsequent
+login policy belong to trusted provider hooks. No plaintext vault decryption or
+crypto implementation is added to the core.
+
+A sealed `AuthorizedPasswordGrant` returns the verified owner, supplied client ID
+and raw `PasswordLoginDevice` metadata, fixed password scope, two-hour access
+lifetime and refresh permission. `PasswordLoginAccount<OwnerId>` supplies a
+trusted enabled flag and an owned, potentially fixed-capacity account handle,
+releasing provider borrows before issuance. The grant is not a token response;
+the adapter still issues JWTs, registers/touches the retained device, persists
+sessions and builds the existing response metadata. The core does not promise
+whole-login rollback: prior verifier upgrades may survive a later policy error,
+as in upstream. Embeddings own their transaction boundaries. The local host
+keeps device/session issuance atomic, while its fixed-verifier, SMTP/2FA/SSO-free
+preparation hook has no additional work; it does not implement dynamic verifier
+upgrades or those richer policies.
+
+The host's ordered form parser selects ordinary password login only when the
+first matching grant root is `password` and no recognized auth-request root is
+present. Matching is uncased for declared aliases and uses Rocket's first name
+segment. The required grant string keeps its first matching value. Optional
+scalar fields instead become absent when more than one alias/root matches,
+because Rocket forces strict inner decoding for `Option<T>` and discards its
+error. Other grants and ambiguous auth-request selectors retain their existing
+stricter parser policy. Refresh remains host-owned, with its
+previous replay-policy difference; SSO, mail, 2FA and full transport/OAuth response
+contracts remain partial. Six focused Rust cases pass against both actual
+servers, including duplicate-absent optional fields, exact selected errors, raw
+proof semantics, successful authority and unchanged account/vault snapshots.

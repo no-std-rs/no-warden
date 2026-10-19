@@ -277,6 +277,34 @@ impl Serialize for RegistrationFinishResponse {
     }
 }
 
+/// Ordinary password-grant fields after form decoding. This borrowed convenience decoder
+/// is not the complete HTTP form/root-name/alias parser. Presence checks accept blank
+/// strings; an `auth_request` must instead be dispatched to authentication-request login.
+/// The proof cannot be serialized and Debug redacts every field.
+#[derive(Deserialize)]
+pub struct PasswordLoginRequest<'a> {
+    pub grant_type: Option<&'a str>,
+    pub client_id: Option<&'a str>,
+    #[serde(borrow)]
+    pub password: Option<Secret<'a>>,
+    pub scope: Option<&'a str>,
+    pub username: Option<&'a str>,
+    #[serde(rename = "deviceIdentifier", alias = "device_identifier")]
+    pub device_identifier: Option<&'a str>,
+    #[serde(rename = "deviceName", alias = "device_name")]
+    pub device_name: Option<&'a str>,
+    #[serde(rename = "deviceType", alias = "device_type")]
+    pub device_type: Option<&'a str>,
+    #[serde(rename = "authRequest")]
+    pub auth_request: Option<&'a str>,
+}
+impl core::fmt::Debug for PasswordLoginRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PasswordLoginRequest")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Authentication-request password-grant fields after form decoding. All fields must be
 /// present, including an opaque access code in `password`; present blank strings are not
 /// missing fields. This convenience decoder is not a complete HTTP form/alias parser.

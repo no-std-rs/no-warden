@@ -20,6 +20,7 @@ pub mod devices;
 pub mod domains;
 pub mod fixture;
 pub mod folders;
+pub mod password_login;
 pub mod purge;
 pub mod registration;
 pub mod transport;

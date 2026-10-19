@@ -688,3 +688,27 @@ Client source shows a notification-upsert caller for the details helper, but thi
 harness does not execute notifications or claim that the CLI requested either
 alias. A fresh official CLI 2026.10.0 regression passes all 120 commands against
 both actual servers and supplies separate lifecycle evidence.
+
+## Ordinary password-grant comparison
+
+`--suite password-grants` selects six focused Rust cases for the existing token route
+with source-backed required-field/scope order, canonical and root/uncased form
+aliases, first required-grant versus absent repeated optional fields, exact raw
+proof semantics and opaque client/device
+metadata. It must use a fresh disposable reference process under unchanged rate
+limits; pre-limiter guard requests are counted separately from admitted login
+attempts. All six cases pass against the adapter and actual Vaultwarden 1.37.4:
+85 counted HTTP requests per target, including 45 token POSTs, with one fixture
+registration excluded. The source-backed authored classification is 39
+pre-limiter guards and six credential-flow attempts, including two ordinary
+successes and one existing auth-request selector canary. This is not server-side
+limiter telemetry. The matrix verifies selected full API errors and state/token
+authority after single aliases and empty device/client input.
+`BW_PASSWORD_GRANTS_RECEIPT` selects a new private authored-case/count receipt.
+
+The ordinary branch is separate from recognized auth-request proof selection,
+API credentials and refresh. The pinned CLI performs real password login through
+its password strategy and token request. A fresh official CLI 2026.10.0
+regression also passes all 120 commands against both actual servers, without a
+captured request trace. Complete form transport, 2FA/mail/SSO, optional unrelated fields, timed
+expiry and refresh-core behavior are outside this comparison's current claims.
