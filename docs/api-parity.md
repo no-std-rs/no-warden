@@ -1256,7 +1256,7 @@ Creation is atomic in the adapter, while upstream performs sequential saves.
 Default creation permission does not implement all enterprise policies or
 configuration variants. General organization CRUD, invitations, members,
 collection administration, sharing, notification and transport contracts remain
-open. All six selected HTTP cases pass both actual targets with 133 counted
+open. The corrected six-case HTTP comparison passes both targets with 137 counted
 requests, two password logins, two refreshes and two organization creates,
 excluding two modern-registration fixtures. They verify decrypted initial
 collection content, exact projections/guards and both last-owner deletion
@@ -1268,4 +1268,6 @@ collections after login, unlock and fresh-cache login, with preserved personal
 note decryption. Cached reads do not prove direct discovery endpoint calls.
 The ledger binds 119 source hashes and adds two existing CLI command forms to
 its catalog: organization and collection lists. Full-parity and captured-trace
-catalogs stay empty.
+catalogs stay empty. Corrected raw-segment classification passes dotted-ID
+401/422 and percent-encoded valid-UUID regression checks in the expanded
+137-request comparison.

@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 610 active Rust tests: 290 core, 214 host, and 106 conformance
+The workspace has 612 active Rust tests: 291 core, 215 host, and 106 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -420,7 +420,7 @@ an allocator; firmware execution is unverified.
 
 The client job also selects `--suite organization-owner` and
 `--suite organization-owner-cli`, separately from the default 104-case group and
-the baseline CLI runner. Both actual targets pass the six HTTP cases with 133
+the baseline CLI runner. The corrected comparison passes both targets with six cases and 137
 counted requests, two password logins, two refreshes and two organization creates,
 excluding two modern fixtures. They cover creation, owner guards, exact
 public/profile/collection projections, last-owner deletion rejection and
@@ -434,3 +434,5 @@ Private `BW_ORGANIZATION_OWNER_RECEIPT` and
 `BW_ORGANIZATION_OWNER_CLI_RECEIPT` record names/status/counters, not credentials
 or request traces. Source references keep these checks distinct from broader
 organization administration and sharing.
+The expanded raw-path regression passes dotted-ID 401/422 and percent-encoded
+valid-ID lookup checks.

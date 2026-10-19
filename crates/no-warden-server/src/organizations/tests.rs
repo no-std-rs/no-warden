@@ -470,3 +470,59 @@ fn organization_opaque_state_survives_reopen_and_concurrent_last_owner_cleanup()
             == 1
     );
 }
+
+#[tokio::test]
+async fn organization_raw_path_segments_reach_authentication_before_uuid_errors() {
+    let mut store = fixture(":memory:");
+    let organization = create(&mut store, "alice");
+    let id = organization["id"].as_str().unwrap();
+    let encoded = format!("%{:02X}{}", id.as_bytes()[0], &id[1..]);
+    let app = App {
+        store: Arc::new(Mutex::new(store)),
+        base: "http://localhost".into(),
+        signing_key: [3; 32],
+    };
+    for (path, authorized, expected) in [
+        ("/api/organizations/bad.id".to_owned(), false, 401),
+        ("/api/organizations/bad.id".to_owned(), true, 401),
+        (
+            format!("/api/organizations/bad.id?organizationId={id}"),
+            true,
+            422,
+        ),
+        (format!("/api/organizations/{encoded}"), false, 401),
+        (format!("/api/organizations/{encoded}"), true, 200),
+        (format!("/api/organizations/%25{id}"), true, 401),
+        (
+            format!("/api/organizations/%25{id}?organizationId={id}"),
+            true,
+            422,
+        ),
+        (format!("/api/organizations/{id}/collections"), true, 404),
+    ] {
+        let mut headers = HeaderMap::new();
+        if authorized {
+            headers.insert(
+                "authorization",
+                "Bearer organization-fixture-access".parse().unwrap(),
+            );
+        }
+        let response = dispatch(
+            State(app.clone()),
+            Method::GET,
+            path.parse().unwrap(),
+            headers,
+            Bytes::new(),
+        )
+        .await
+        .unwrap_or_else(IntoResponse::into_response);
+        assert!(
+            response.status().as_u16() == expected,
+            "Organization path status differs"
+        );
+        if expected == 200 {
+            let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+            assert!(serde_json::from_slice::<Value>(&bytes).unwrap() == organization);
+        }
+    }
+}

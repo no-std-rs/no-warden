@@ -985,7 +985,10 @@ memberships and basic/sync collections. Private organization key material is
 excluded from public discovery; only the authenticated membership projection
 contains its opaque wrapped organization key. Caller-owned indexed views avoid
 a fixed collection count or allocation. Owner discovery checks actual confirmed
-role and exact identity; collection views resolve trusted access before exposing
+role and exact identity. Classification retains raw nonempty path segments so
+device authentication and the organization/UUID guards run before malformed-ID
+rejection; dotted/percent spelling cannot cause an earlier classifier 404.
+Collection views resolve trusted access before exposing
 records. Whole profile and sync responses remain adapter-built. An
 organization-aware deletion provider must reject a last confirmed owner before
 cleanup. General administration, invitations, sharing and policy management are

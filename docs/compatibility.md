@@ -106,7 +106,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 610 active workspace unit tests pass: 290 core, 214 host and 106 support,
+All 612 active workspace unit tests pass: 291 core, 215 host and 106 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -1043,15 +1043,17 @@ invitations, organization/collection administration or shared ciphers. Event,
 group and SMTP-dependent flags describe source configuration; they are not
 evidence that those features work here. JSON/body-limit, cross-cutting errors,
 notifications and complete failure/transport behavior remain partial. All six
-HTTP cases pass both actual targets: 133 counted requests, two password logins,
+HTTP cases pass both actual targets: 137 counted requests, two password logins,
 two refreshes and two organization creates, excluding two modern fixtures. Both
 account-deletion aliases reject a last confirmed owner without changing complete
 sync/revision state; existing access and refresh authority remain usable. The
-separate official CLI `2026.10.0` comparison also passes nineteen commands on
+separate official CLI `2026.10.0` comparison passes nineteen commands on
 both servers, including decrypted collections after login, unlock and fresh-cache
 login and retained personal-note decryption. It records two CLI logins, one
 direct setup login and thirteen direct HTTP requests, excluding one fixture;
 client internals are not counted or traced. Organization creation uses direct
 HTTP, and CLI list operations consume synced cache. This does not verify the
 different organization-scoped collection administration endpoints. No route
-trace or full-parity status is claimed.
+trace or full-parity status is claimed. A route correction now preserves raw
+segments before authentication/UUID guards; dotted/percent-path probes pass in
+the expanded 137-request comparison.

@@ -1573,7 +1573,8 @@ local provider's atomic creation/revision contract is stronger than those
 sequential saves; it does not establish notifications or general administration.
 
 The [owner guard](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth.rs#L747-L829)
-first applies current device/stamp authentication, then exact membership and
+receives the raw nonempty path segment, including dotted or percent-encoded
+spellings, before current device/stamp authentication and exact membership and
 confirmed-owner checks. A missing or inaccessible organization is 401. A valid
 UUID path keeps its exact spelling and takes precedence over query values.
 Only malformed paths fall back to the case-sensitive decoded `organizationId`
@@ -1615,7 +1616,7 @@ remain separate work. All implementation remains independently authored under
 MIT OR Apache-2.0; upstream references describe protocol facts only.
 
 All six selected direct Rust HTTP cases pass against the adapter and actual
-Vaultwarden 1.37.4: 133 counted requests, two password logins, two refreshes and
+Vaultwarden 1.37.4: 137 counted requests, two password logins, two refreshes and
 two organization creates per target, excluding two modern registration fixtures.
 The cases compare exact public/member/collection projections, decrypt the initial
 collection, verify guards and both last-owner deletion rejections, and preserve
@@ -1625,4 +1626,6 @@ collection decryption after login, unlock and fresh-cache login and retained
 personal-note decryption. Thirteen direct setup HTTP requests include one
 password login; two more logins are CLI commands, and one registration fixture
 is excluded. Client internals are not counted or traced. Neither result implies
-general organization or captured request-trace parity.
+general organization or captured request-trace parity. A route-classifier
+regression verifies dotted-ID authentication/fallback and percent-encoded valid-ID
+checks in those same six cases.

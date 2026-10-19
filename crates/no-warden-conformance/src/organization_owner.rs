@@ -624,6 +624,13 @@ fn get_guards(s: &mut Suite) -> Result<(), Error> {
             Some(own.as_str()),
             401,
         ),
+        ("/api/organizations/bad.id".into(), None, 401),
+        ("/api/organizations/bad.id".into(), Some(own.as_str()), 401),
+        (
+            format!("/api/organizations/bad.id?organizationId={id}"),
+            Some(own.as_str()),
+            422,
+        ),
     ] {
         s.http
             .raw(Method::GET, &path, bearer, None, None)?
@@ -636,6 +643,20 @@ fn get_guards(s: &mut Suite) -> Result<(), Error> {
         None,
     )?;
     organization_shape(&fetched, &s.organizations[0].body, false)?;
+    let (first, tail) = id
+        .split_at_checked(1)
+        .ok_or(Error("Organization fixture ID was not ASCII"))?;
+    let encoded_id = format!("%{:02X}{tail}", first.as_bytes()[0]);
+    let encoded = s.http.json(
+        Method::GET,
+        &format!("/api/organizations/{encoded_id}"),
+        &own,
+        None,
+    )?;
+    require(
+        encoded == fetched,
+        "Percent-decoded organization lookup differed from ordinary lookup",
+    )?;
     s.http
         .raw(
             Method::PATCH,

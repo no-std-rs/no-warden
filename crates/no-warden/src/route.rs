@@ -225,7 +225,10 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         ) => None,
         _ => {
             if let Some(id) = path.strip_prefix("/api/organizations/") {
-                return (method == Get && valid_segment(id)).then_some(OrganizationGet(id));
+                // Request authentication and the adapter's decoded UUID guard run
+                // before rejecting malformed IDs, including owned query fallbacks.
+                return (method == Get && !id.is_empty() && !id.contains('/'))
+                    .then_some(OrganizationGet(id));
             }
             if let Some(tail) = path.strip_prefix("/api/sends/") {
                 if let Some(file_id) = tail.strip_prefix("access/file/") {
@@ -389,6 +392,35 @@ fn valid_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn organization_get_keeps_raw_segments_for_adapter_authentication_and_uuid_guards() {
+        for id in [
+            "bad.id",
+            "%300000000-0000-0000-0000-000000000001",
+            "bad%2Fid",
+            "malformed%",
+        ] {
+            let path = std::format!("/api/organizations/{id}?organizationId=owned");
+            assert_eq!(
+                classify(Method::Get, &path),
+                Some(Route::OrganizationGet(id))
+            );
+            assert!(
+                classify(Method::Get, &path)
+                    .unwrap()
+                    .requires_authentication()
+            );
+            assert_eq!(classify(Method::Put, &path), None);
+        }
+        for path in [
+            "/api/organizations/",
+            "/api/organizations//",
+            "/api/organizations/bad.id/collections",
+        ] {
+            assert_eq!(classify(Method::Get, path), None);
+        }
+    }
 
     #[test]
     fn organization_owner_routes_remain_distinct_authenticated_and_method_specific() {

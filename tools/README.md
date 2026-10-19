@@ -1,10 +1,10 @@
 # Real-client compatibility checks
 
-The explicit Rust `--suite organization-owner` selection passes six HTTP cases
-against both actual servers: 133 counted requests, two password logins, two
+The explicit Rust `--suite organization-owner` comparison passes six HTTP cases
+against both actual servers: 137 counted requests, two password logins, two
 refreshes and two organization creates, excluding two modern fixtures. It is
 separate from the default 104-case HTTP group and 120-command CLI baseline.
-The focused `--suite organization-owner-cli` run also passes both servers with
+The focused `--suite organization-owner-cli` run passes both servers with
 nineteen official CLI `2026.10.0` commands, two CLI logins, one direct setup login
 and thirteen direct HTTP requests, excluding one registration. It verifies
 decrypted collections after login, unlock and fresh-cache login plus retained
@@ -12,6 +12,8 @@ personal-note decryption. Organization creation uses direct HTTP and CLI lists
 read synchronized membership/collection state; no CLI creation or direct
 discovery trace is claimed. Private receipts use `BW_ORGANIZATION_OWNER_RECEIPT`
 and `BW_ORGANIZATION_OWNER_CLI_RECEIPT`.
+The expanded raw-path regression passes dotted-ID 401/422 and percent-encoded
+valid-ID lookup checks.
 
 The compatibility harness requires Linux, Rust 1.89 or newer, Node.js 22 or newer,
 OpenSSL, util-linux `prlimit`, a `kill` utility, and the pinned official Bitwarden
