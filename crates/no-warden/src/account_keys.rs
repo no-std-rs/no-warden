@@ -10,6 +10,7 @@ use crate::{
     service::require_owner,
     wire::{
         AccountKeys, AccountKeysResponse, InitializedAccountKeysResponse, UserPublicKeyResponse,
+        WebAuthnCredentialsResponse,
     },
 };
 
@@ -76,6 +77,19 @@ fn unavailable() -> ApiError {
         ErrorKind::NotFound,
         "The requested account keys are unavailable.",
     )
+}
+
+impl<S: Storage> VaultService<S> {
+    /// Returns the pinned empty credential metadata after the adapter authenticates
+    /// the owner. This operation reads no provider state and changes no account data.
+    /// It does not enumerate registered two-factor keys or enable passkey login.
+    pub fn get_webauthn_credentials(
+        &self,
+        owner: &str,
+    ) -> Result<WebAuthnCredentialsResponse, ApiError> {
+        require_owner(owner)?;
+        Ok(WebAuthnCredentialsResponse)
+    }
 }
 
 impl<S: AccountKeyStorage> VaultService<S> {
@@ -311,6 +325,40 @@ mod tests {
             encrypted_private_key: "future-private:opaque",
             public_key: "future-public:opaque",
         }
+    }
+
+    #[test]
+    fn webauthn_credentials_require_authentication_without_reading_storage() {
+        let service = VaultService::new(Memory::new());
+        assert_eq!(
+            service.get_webauthn_credentials("").unwrap_err().kind,
+            ErrorKind::Unauthorized
+        );
+        assert!(service.storage().calls.is_empty());
+    }
+
+    #[test]
+    fn webauthn_credentials_do_not_require_stored_keys_or_an_opt_in_key_provider() {
+        fn get<S: Storage>(
+            service: &VaultService<S>,
+            owner: &str,
+        ) -> Result<WebAuthnCredentialsResponse, ApiError> {
+            service.get_webauthn_credentials(owner)
+        }
+
+        let mut storage = Memory::new();
+        storage.fail_at = Some("state");
+        let before = storage.records.clone();
+        let service = VaultService::new(&mut storage);
+        for owner in ["alice", "bob", "adapter-verified-owner"] {
+            let response = get(&service, owner).unwrap();
+            assert_eq!(
+                serde_json::to_value(response).unwrap(),
+                serde_json::json!({"object":"list","data":[],"continuationToken":null})
+            );
+        }
+        assert!(service.storage().calls.is_empty());
+        assert_eq!(service.storage().records, before);
     }
 
     #[test]

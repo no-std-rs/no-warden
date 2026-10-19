@@ -530,14 +530,20 @@ async fn dispatch_with_peer(
         )
         .optional()?;
     let owner = match owner {
-        Some(owner) => owner,
+        Some(owner) => {
+            if route == Route::WebAuthnCredentials {
+                devices::access_binding(&store.db, &digest(bearer), &owner)?
+                    .ok_or_else(unauthorized)?;
+            }
+            owner
+        }
         None => account_password::previous_owner(
             &mut store.db,
             &digest(bearer),
-            if matches!(route, Route::UserPublicKey(_)) {
-                "get_public_keys"
-            } else {
-                ""
+            match route {
+                Route::UserPublicKey(_) => "get_public_keys",
+                Route::WebAuthnCredentials => "get_api_webauthn",
+                _ => "",
             },
             chrono::Utc::now().timestamp(),
         )?
@@ -545,6 +551,10 @@ async fn dispatch_with_peer(
     };
     let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
     match route {
+        Route::WebAuthnCredentials => {
+            let response = VaultService::new(&mut *store).get_webauthn_credentials(&owner)?;
+            Ok(Json(response).into_response())
+        }
         Route::AccountPasswordChange => {
             devices::access_binding(&store.db, &digest(bearer), &owner)?
                 .ok_or_else(unauthorized)?;
@@ -1600,6 +1610,224 @@ mod tests {
         ])
         .unwrap()
     }
+
+    async fn webauthn_document(app: &App, bearer: &str, path: &str, body: &[u8]) {
+        let document = device_document(
+            device_request(
+                app,
+                Method::GET,
+                path,
+                device_authorization(Some(bearer)),
+                body,
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(
+            document,
+            json!({"object":"list","data":[],"continuationToken":null})
+        );
+    }
+
+    #[tokio::test]
+    async fn webauthn_credentials_http_requires_owned_bound_current_access_and_never_writes() {
+        let app = auth_request_fixture_app();
+        let changes = app.store.lock().unwrap().db.total_changes();
+        for bearer in [None, Some("invalid"), Some("legacy-auth-access")] {
+            let Err(error) = device_request(
+                &app,
+                Method::GET,
+                "/api/webauthn",
+                device_authorization(bearer),
+                b"{",
+            )
+            .await
+            else {
+                panic!("Unauthenticated credential discovery succeeded.")
+            };
+            assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        }
+        for bearer in ["device-fixture-alice", "device-fixture-bob"] {
+            for path in [
+                "/api/webauthn",
+                "/api/webauthn/",
+                "/api/webauthn?unknown=ignored&userId=foreign",
+            ] {
+                webauthn_document(&app, bearer, path, b"malformed ignored body").await;
+            }
+        }
+        assert_eq!(app.store.lock().unwrap().db.total_changes(), changes);
+        app.store
+            .lock()
+            .unwrap()
+            .db
+            .execute(
+                "UPDATE sessions SET access_expires=0 WHERE access=?1",
+                [digest("device-fixture-alice")],
+            )
+            .unwrap();
+        let Err(error) = device_request(
+            &app,
+            Method::GET,
+            "/api/webauthn",
+            device_authorization(Some("device-fixture-alice")),
+            b"",
+        )
+        .await
+        else {
+            panic!("Expired current access authorized credential discovery.")
+        };
+        assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn webauthn_credentials_http_cannot_borrow_another_owners_device() {
+        let app = auth_request_fixture_app();
+        app.store
+            .lock()
+            .unwrap()
+            .db
+            .execute(
+                "DELETE FROM device_registry WHERE owner='alice' AND identifier='Request-Device'",
+                [],
+            )
+            .unwrap();
+        let mut headers = device_authorization(Some("device-fixture-alice"));
+        headers.insert("device-identifier", "Request-Device".parse().unwrap());
+        let Err(error) = device_request(&app, Method::GET, "/api/webauthn", headers, b"").await
+        else {
+            panic!("Foreign owned device authorized credential discovery.")
+        };
+        assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        webauthn_document(&app, "device-fixture-bob", "/api/webauthn", b"").await;
+    }
+
+    #[tokio::test]
+    async fn webauthn_credentials_http_preserves_previous_access_deadline_and_expiry_cleanup_order()
+    {
+        let app = auth_request_fixture_app();
+        let body = account_password_body("fixture-master-hash", "next-proof", "next-key");
+        device_push_empty(
+            device_request(
+                &app,
+                Method::POST,
+                "/api/accounts/password",
+                device_authorization(Some("device-fixture-alice")),
+                body.to_string().as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        let changes = app.store.lock().unwrap().db.total_changes();
+        webauthn_document(&app, "device-fixture-alice", "/api/webauthn", b"{").await;
+        assert_eq!(app.store.lock().unwrap().db.total_changes(), changes);
+        let Err(error) = device_request(
+            &app,
+            Method::GET,
+            "/api/accounts/profile",
+            device_authorization(Some("device-fixture-alice")),
+            b"",
+        )
+        .await
+        else {
+            panic!("Credential-discovery exception authorized profile access.")
+        };
+        assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        {
+            let store = app.store.lock().unwrap();
+            store
+                .db
+                .execute(
+                    "UPDATE account_password_access SET access_expires=0 WHERE access=?1",
+                    [digest("device-fixture-alice")],
+                )
+                .unwrap();
+            store
+                .db
+                .execute(
+                    "UPDATE account_password_exceptions SET expires=0 WHERE owner='alice'",
+                    [],
+                )
+                .unwrap();
+        }
+        let changes = app.store.lock().unwrap().db.total_changes();
+        let Err(error) = device_request(
+            &app,
+            Method::GET,
+            "/api/webauthn",
+            device_authorization(Some("device-fixture-alice")),
+            b"",
+        )
+        .await
+        else {
+            panic!("Credential discovery extended the original access deadline.")
+        };
+        assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(app.store.lock().unwrap().db.total_changes(), changes);
+        {
+            let store = app.store.lock().unwrap();
+            let count: i64 = store
+                .db
+                .query_row(
+                    "SELECT COUNT(*) FROM account_password_exceptions WHERE owner='alice'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1);
+            store
+                .db
+                .execute(
+                    "UPDATE account_password_access SET access_expires=4000000000 WHERE access=?1",
+                    [digest("device-fixture-alice")],
+                )
+                .unwrap();
+        }
+        let revision = app
+            .store
+            .lock()
+            .unwrap()
+            .account("id", "alice")
+            .unwrap()
+            .unwrap()["revisionDate"]
+            .clone();
+        let Err(error) = device_request(
+            &app,
+            Method::GET,
+            "/api/webauthn",
+            device_authorization(Some("device-fixture-alice")),
+            b"",
+        )
+        .await
+        else {
+            panic!("Expired password-change exception authorized discovery.")
+        };
+        assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        let changes = app.store.lock().unwrap().db.total_changes();
+        assert!(
+            app.store
+                .lock()
+                .unwrap()
+                .account("id", "alice")
+                .unwrap()
+                .unwrap()["revisionDate"]
+                != revision
+        );
+        let Err(error) = device_request(
+            &app,
+            Method::GET,
+            "/api/webauthn",
+            device_authorization(Some("device-fixture-alice")),
+            b"",
+        )
+        .await
+        else {
+            panic!("Expired exception authorized repeated discovery.")
+        };
+        assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(app.store.lock().unwrap().db.total_changes(), changes);
+    }
+
     #[tokio::test]
     async fn account_password_http_guards_schema_hint_policy_and_partial_nested_legacy_fallback() {
         let app = auth_request_fixture_app();

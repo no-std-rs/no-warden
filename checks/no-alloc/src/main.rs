@@ -26,7 +26,7 @@ use no_warden::{
         ProfileUpdateRequest, RegistrationAuthentication, RegistrationCredentials,
         RegistrationFinishRequest, RegistrationFinishResponse, RegistrationUnlock,
         RegistrationVerificationRequest, RegistrationVerificationToken, SecretVerificationRequest,
-        UserPublicKeyResponse,
+        UserPublicKeyResponse, WebAuthnCredentialsResponse,
     },
 };
 
@@ -120,7 +120,7 @@ pub extern "C" fn _start() -> ! {
     let verification = serde_json_core::from_slice::<SecretVerificationRequest<'_>>(black_box(
         br#"{"masterPasswordHash":"test-only-authorization-hash"}"#,
     ));
-    black_box(verification);
+    let _ = black_box(verification);
     let mut policy_output = [0_u8; 512];
     for policy in [
         None,
@@ -152,7 +152,7 @@ pub extern "C" fn _start() -> ! {
     let password = serde_json_core::from_slice::<AccountPasswordRequest<'_>>(black_box(
         br#"{"masterPasswordHash":"old-opaque-proof","newMasterPasswordHash":"new-opaque-proof","key":"opaque-rewrapped-key"}"#,
     ));
-    black_box(password);
+    let _ = black_box(password);
     black_box(classify(Method::Post, black_box("/api/accounts/password")));
     let policy = no_warden::account_password::PasswordChangeStampPolicy;
     black_box(policy.expires_at(black_box(1_800_000_000)));
@@ -228,6 +228,16 @@ pub extern "C" fn _start() -> ! {
         let _ = black_box(serde_json_core::to_slice(&public_key, &mut key_output));
         black_box(key_output);
     }
+    let mut credential_output = [0_u8; 64];
+    let _ = black_box(serde_json_core::to_slice(
+        &WebAuthnCredentialsResponse,
+        &mut credential_output,
+    ));
+    black_box(credential_output);
+    black_box(classify(
+        Method::Get,
+        black_box("/api/webauthn/?ignored=true"),
+    ));
     let profile = serde_json_core::from_slice::<ProfileUpdateRequest<'_>>(black_box(
         br#"{"name":"bare-metal profile"}"#,
     ));
@@ -305,7 +315,7 @@ pub extern "C" fn _start() -> ! {
     let request_login = serde_json_core::from_slice::<AuthRequestLoginRequest<'_>>(black_box(
         br#"{"grant_type":"password","username":"bare-metal@example.com","password":"caller-supplied-test-code","authRequest":"authentication-request","scope":"api offline_access","client_id":"embedded","deviceIdentifier":"new-device","deviceName":"caller-name","deviceType":"25"}"#,
     ));
-    black_box(request_login);
+    let _ = black_box(request_login);
     black_box(AuthRequestLoginContext {
         request_ip: "127.0.0.1",
         now_unix_nanos: 1_800_000_000_000_000_000,

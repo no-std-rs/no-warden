@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 398 active Rust tests: 178 core, 146 host, and 74 conformance
+The workspace has 406 active Rust tests: 182 core, 149 host, and 75 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -54,7 +54,7 @@ configuration with push disabled; actual relay behavior remains open.
 Reference comparisons use `--suite personal`, `--suite devices`, and
 `--suite device-tokens`, `--suite auth-requests`, `--suite auth-responses`,
 `--suite auth-login`, `--suite registration`, `--suite account-security`, and
-`--suite account-kdf`, and `--suite account-password` in separate
+`--suite account-kdf`, `--suite account-password`, and `--suite webauthn-credentials` in separate
 fresh disposable Vaultwarden processes. The separate reference CLI comparison starts another fresh process, preserving the
 reference's default ten-login limit.
 The required client job reruns the unchanged 120-command CLI flow for the final
@@ -255,3 +255,15 @@ requests across thirteen groups, including real authentication-request and
 password-exception expiry. The unchanged official CLI 2026.10.0 baseline passes
 all 120 commands against each actual server, separately from the focused KDF
 and password CLI proofs.
+
+The required client job separately invokes `--suite webauthn-credentials` after
+its default 104-case HTTP selection. Six authored cases target authenticated
+empty credential metadata and its previous-stamp guards, including a real wait
+of at least 121 seconds for exception expiry. This group uses its own fresh
+reference process without changing rate limits. `BW_WEBAUTHN_CREDENTIALS_RECEIPT`
+selects an optional private counts-only receipt. All six cases pass against the
+actual adapter and Vaultwarden 1.37.4: 129 counted HTTP requests each, eight
+identity requests (six successful grants and two rejected refreshes), and a real
+121-second exception wait. The two direct peers receive three and five identity
+requests, preserving unchanged reference limits. Two shared fixture registrations
+are excluded. No CLI call or full WebAuthn authentication claim is inferred.

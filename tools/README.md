@@ -199,7 +199,8 @@ BW_E2E_SERVER=http://127.0.0.1:8001 cargo run --locked \
 
 By default the binary runs folders, account keys, profile/avatar, equivalent
 domains, devices, device tokens, authentication requests, responses, login, then
-registration, account security, KDF and password changes: 104 cases. `--suite personal` selects the first four groups;
+registration, account security, KDF and password changes: 104 cases. The six-case
+WebAuthn credential-metadata group is selected separately. `--suite personal` selects the first four groups;
 `--suite devices` selects discovery; `--suite device-tokens` selects token routes;
 `--suite auth-requests` selects authentication-request creation and reads.
 `--suite auth-responses` selects approval, rejection and public response polling.
@@ -208,6 +209,8 @@ registration, account security, KDF and password changes: 104 cases. `--suite pe
 `--suite account-security` selects password verification and security-stamp renewal.
 `--suite account-kdf` selects nested client-KDF changes.
 `--suite account-password` selects password changes and previous-stamp authorization.
+`--suite webauthn-credentials` selects read-only WebAuthn credential metadata and
+its current-device/previous-stamp guards; it is separate from `--suite all`.
 `--suite account-password-cli` separately runs the ten-command fresh-cache password
 change proof and is excluded from `--suite all`.
 `--suite account-kdf-cli` separately verifies fresh-cache CLI decryption after an
@@ -218,7 +221,8 @@ Invalid arguments return exit code 2 without echoing supplied values.
 `BW_FOLDER_RECEIPT`, `BW_ACCOUNT_KEYS_RECEIPT`, `BW_PROFILE_RECEIPT`,
 `BW_DOMAINS_RECEIPT`, `BW_DEVICES_RECEIPT`, `BW_DEVICE_TOKENS_RECEIPT`,
 `BW_AUTH_REQUESTS_RECEIPT`, `BW_AUTH_RESPONSES_RECEIPT`, `BW_AUTH_LOGIN_RECEIPT`,
-`BW_REGISTRATION_RECEIPT`, `BW_ACCOUNT_SECURITY_RECEIPT`, and `BW_ACCOUNT_KDF_RECEIPT`
+`BW_REGISTRATION_RECEIPT`, `BW_ACCOUNT_SECURITY_RECEIPT`, `BW_ACCOUNT_KDF_RECEIPT`,
+`BW_ACCOUNT_PASSWORD_RECEIPT`, and `BW_WEBAUTHN_CREDENTIALS_RECEIPT`
 optionally name new private result
 files for their respective groups. Existing paths are
 rejected; files are created with mode 0600 and contain authored case names,
@@ -582,3 +586,22 @@ requests across thirteen groups, including real authentication-request and
 password-exception expiry. The unchanged official CLI 2026.10.0 baseline passes
 all 120 commands against each actual server, separately from the focused KDF
 and password CLI proofs.
+
+## WebAuthn credential metadata comparison
+
+Run `--suite webauthn-credentials` against a fresh disposable server. It is
+separate from the default 104-case selection and the required CI invokes both.
+The six authored cases cover exact empty-list projection, authentication,
+methods/paths/ignored queries, state preservation, password/API historical
+bearers, owner/device isolation, same-ID device recreation and a real 121-second
+exception expiry with one revision cleanup. The verified identity budget is eight
+requests: six successful grants and two rejected refresh attempts, with three
+and five requests on the two direct loopback peers. Shared account registration
+bootstrap is not included in the direct HTTP counter. No rate configuration or forwarded-IP override is used.
+
+`BW_WEBAUTHN_CREDENTIALS_RECEIPT` is a new private mode-0600 file containing only
+authored case names, status and counters. All six cases pass against the actual
+adapter and Vaultwarden 1.37.4: 129 counted HTTP requests per server and a real
+121-second wait, excluding two shared fixture registrations. The unchanged
+CLI120 baseline regression does not establish a GET `/api/webauthn` call, passkey
+login or key rotation; see the [source notes](../docs/api-parity.md#webauthn-credential-metadata-subset).
