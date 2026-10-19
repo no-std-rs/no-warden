@@ -197,7 +197,8 @@ known revision while holding the same storage lock. Other providers can override
 409), while retaining generic errors for unexpected storage failures. They must
 check revisions atomically with the write. Access tokens are signed JWTs with a
 random token ID, and refresh tokens contain random bytes. The host stores their
-SHA-256 digests and checks expiry; refresh tokens rotate atomically. The
+SHA-256 digests and checks expiry. Password-method refresh issues another pair
+without consuming earlier valid proofs or extending their original deadlines. The
 server stores an Argon2 verifier of the client-derived authentication hash,
 and never receives the master password or decrypted vault contents.
 
@@ -321,10 +322,11 @@ its authenticated owner and device; the JWT includes that exact identifier in
 `device`; `devicetype` uses the retained registry type label.
 
 Refresh uses the stored binding and ignores submitted device metadata. It
-atomically touches the registered device, rotates refresh authority, and binds
+atomically touches the registered device, issues new refresh authority, and binds
 the new session to the same owner and identifier. Existing access tokens retain
-their original expiry. Older sessions without binding rows remain usable and
-refresh without inventing a device; no legacy registry backfill is implemented.
+their original expiry. Older sessions without binding rows retain their existing
+access behavior, but cannot refresh without a current
+binding and registered device; no legacy registry backfill is implemented.
 Registry and binding records survive private-database reopen. Expiry cleanup,
 device removal and notification delivery remain separate tracked work.
 
@@ -475,9 +477,11 @@ the supplied client ID, or `undefined` when absent. Refresh reads its own option
 client ID, retains the verified device binding and projects the stored type label
 as `devicetype`; submitted replacement metadata does not overwrite it. Personal
 API-key authority retains its existing separate policy. Legacy unbound sessions
-remain refreshable without inventing device claims. The host's strict rotating
-refresh policy and thirty-day refresh lifetime still differ from upstream's
-replay behavior and ninety-day mobile lifetime. Two-factor/mail/SSO policy,
+cannot refresh without current device authority. Password refresh now preserves
+valid earlier proofs and selects the source thirty/ninety-day lifetime from the
+retained device type. The host still uses opaque handles rather than upstream
+refresh JWTs, so refresh JWT encoding and `nbf` behavior remain unimplemented.
+Two-factor/mail/SSO policy,
 administrative account management, notification delivery, expiry cleanup,
 trusted-proxy IP handling and rate controls remain outside this adapter slice.
 The eight focused login HTTP cases pass against both the adapter and actual
@@ -788,8 +792,44 @@ segment. The required grant string keeps its first matching value. Optional
 scalar fields instead become absent when more than one alias/root matches,
 because Rocket forces strict inner decoding for `Option<T>` and discards its
 error. Other grants and ambiguous auth-request selectors retain their existing
-stricter parser policy. Refresh remains host-owned, with its
-previous replay-policy difference; SSO, mail, 2FA and full transport/OAuth response
+stricter parser policy. The separate refresh contract below now owns supported
+password-method authorization; SSO, mail, 2FA and full transport/OAuth response
 contracts remain partial. Six focused Rust cases pass against both actual
 servers, including duplicate-absent optional fields, exact selected errors, raw
 proof semantics, successful authority and unchanged account/vault snapshots.
+
+`RefreshStorage` adds an opt-in password-method contract without new obligations
+for existing storage adapters. `RefreshTokenRequest` borrows the decoded grant,
+optional redacted proof and optional client ID. `authenticate_refresh` checks
+presence, verifies trusted owner/device/method through the provider, then prepares
+device activity before returning a sealed `AuthorizedRefreshGrant`. Owned
+provider handles avoid retained storage borrows; clocks, cryptography, Unicode
+whitespace normalization, persistence and issuance stay outside the core.
+There is no consumption, enabled-state check or previous-stamp comparison.
+
+The provider must resolve current device authority, preserve the original proof
+deadline and permit repeated use until expiration or revocation. Issuing another
+proof does not revoke still-valid earlier proofs. The host joins its stored
+SHA-256 proof digest to both the session binding and current registry row, strips
+all Unicode whitespace before lookup, and admits expiry equality through thirty
+seconds of leeway. It rejects unbound legacy refresh proofs. New opaque handles
+expire after ninety days only for retained Android/iOS types 0/1; all other types,
+including Android Amazon 15, use thirty days. No JWT refresh representation or
+`nbf` equivalence is claimed. Password/KDF/stamp changes invalidate the owner's
+old proof rows; recreating a device identifier cannot revive them.
+
+The adapter's outer savepoint includes preparation, activity, new sessions and
+binding, with rollback on issuance or deferred commit errors. This is stronger
+than upstream's separate activity writes. Refresh returns only the five OAuth
+fields and preserves old access deadlines, account keys/KDF/revision, vault
+contents and other devices. Missing or repeated optional proof fields use the
+default API error; present invalid proofs use only `error: "invalid_grant"`.
+Twelve core tests and the actual no-allocator consumer cover the reusable
+boundary. All eight selected direct HTTP cases pass against both actual servers:
+268 counted requests each, including six password logins and 42 refresh POSTs.
+The refresh split is 22 successes, 15 invalid proofs, four presence/duplicate
+guards and one missing-grant form guard. Two fixture registrations are excluded.
+The cases prove original-proof reuse, exact selected responses, owner/device
+isolation, revocation/recovery and retained ciphertext decryption. Clock/provider
+tests separately cover hidden deadline/leeway policy. No complete identity or
+refresh-JWT parity follows from these comparisons.

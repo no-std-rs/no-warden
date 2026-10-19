@@ -75,7 +75,7 @@ The CLI suite checks incorrect-password rejection, password login, key
 decryption, encrypted folder and login item CRUD, custom fields, Unicode notes,
 sync, lock/unlock, trash/restore, permanent deletion, and a fresh local cache
 after logout/login. The HTTP suite checks authentication, cross-account
-isolation, owner references, malformed input, refresh token rotation, and
+isolation, owner references, malformed input, refresh proof reuse, and
 preservation of unknown JSON extensions. It also verifies stored key-ID
 enforcement, escaped opaque cipher blobs, encrypted FIDO2 records, clone
 wrappers, legacy folder aliases, organization alias rejection, and preservation
@@ -711,4 +711,30 @@ API credentials and refresh. The pinned CLI performs real password login through
 its password strategy and token request. A fresh official CLI 2026.10.0
 regression also passes all 120 commands against both actual servers, without a
 captured request trace. Complete form transport, 2FA/mail/SSO, optional unrelated fields, timed
-expiry and refresh-core behavior are outside this comparison's current claims.
+expiry and the separate refresh comparison are outside this group's claims.
+
+## Password-method refresh comparison
+
+`--suite refresh-grants` selects eight Rust cases for the existing token route:
+form/error guards, original-proof reuse across issuance, request client IDs and
+retained device identity, multiple devices and foreign-account isolation,
+password/KDF changes, security-stamp reset and final real ciphertext decryption.
+`BW_REFRESH_GRANTS_RECEIPT` selects a new private authored-case/count receipt.
+All eight cases pass against the adapter and actual Vaultwarden 1.37.4: 268
+counted HTTP requests per target, including 48 token POSTs. Six are successful
+ordinary password logins and 42 are refresh requests: 22 successful refreshes,
+15 invalid proofs, four presence/duplicate guards and one missing-grant form
+guard. Two fixture registrations are excluded. These are authored
+classifications rather than limiter telemetry.
+
+Run this selection against a fresh disposable reference process with unchanged
+limits. Refresh itself has no login-limiter call in the pinned source; six
+password logins remain subject to the normal limiter. No request is retried.
+The proof is forwarded opaquely, including the selected Unicode-whitespace
+normalization case. Earlier proofs can remain valid after new issuance, while
+their original deadline stays unchanged. Tests do not require different issued
+token strings, parse upstream refresh JWTs, wait thirty days or execute a mobile
+client. Clock/provider tests separately cover the expiry leeway and type-based
+thirty/ninety-day policy. A fresh official CLI 2026.10.0 lifecycle regression also
+passes all 120 commands against both actual servers. It is separate from captured
+refresh requests, which remain absent.

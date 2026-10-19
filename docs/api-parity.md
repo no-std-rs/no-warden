@@ -55,7 +55,7 @@ wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
 The ledger records positive or restart HTTP evidence for 80 patterns, negative
-HTTP evidence for 79, 195 named HTTP cases, and 31 CLI command patterns. These are
+HTTP evidence for 79, 203 named HTTP cases, and 31 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -488,8 +488,8 @@ The adapter binds newly issued sessions to that identity and retains it on
 refresh. Its savepoint provides atomic registration/session issuance, with
 rollback and database-reopen evidence. Device-only operations preserve account
 revision and vault contents. Legacy sessions remain valid without fabricated
-bindings; the existing stricter single-use refresh policy remains a separate
-compatibility limitation.
+bindings for access. Refresh requires current bound device authority and now
+preserves valid earlier proofs through the supported password-method provider.
 
 Borrowed core records and streamed responses require no allocator. The
 known-device request represents decoded headers and has no JSON decoder. The
@@ -659,8 +659,8 @@ account authority; registration and profile extras cannot change it. Successful
 login preserves approval/key/hash fields, and public polling remains readable.
 Shared password/refresh issuance now uses upstream's two-hour access lifetime,
 requested client ID (or `undefined` when omitted), and retained registered-device
-type. API-key grants keep their access-only scope. Existing stricter refresh
-rotation and unimplemented mobile lifetime, 2FA/mail/SSO/admin policy, events,
+type. API-key grants keep their access-only scope. Refresh JWT representation,
+mobile runtime, 2FA/mail/SSO/admin policy, events,
 notifications, purge/rate/proxy variants keep this route partial.
 
 The eight selected login cases passed against the adapter and actual Vaultwarden
@@ -1042,8 +1042,9 @@ it adds no route or newly covered upstream handler. The 294-handler inventory an
 209 unimplemented handlers remain unchanged. `PasswordLoginRequest`,
 `PasswordLoginStorage` and `VaultService::authenticate_password` add a reusable
 allocation-free ordinary password path beside API-key and auth-request login.
-OAuth token response projection and refresh are still adapter-owned; no typed
-OAuth response model or full identity-family claim is introduced.
+OAuth token response projection remains adapter-owned; refresh now has its own
+supported-method core contract below. No typed OAuth response model or full
+identity-family claim is introduced.
 
 The service preserves upstream required-field order, exact scope, raw proof and
 trimmed username semantics before trusted lookup/proof/enabled/preparation hooks.
@@ -1073,3 +1074,38 @@ provider failures are separate unit/SQL evidence. A fresh official CLI 2026.10.0
 regression also passes all 120 commands against both actual servers. No captured
 trace, complete transport/error/2FA/mail/SSO
 behavior or refresh-core parity follows from these checks.
+
+## Password-method refresh contract
+
+This deepens the existing token route without adding a routed pattern, typed
+OAuth response or newly covered upstream handler. `RefreshTokenRequest`, opt-in
+`RefreshStorage` and `authenticate_refresh` return a sealed owner/device grant
+without allocating. Provider verification owns proof authenticity/time and
+current persistent device authority. The service preserves valid proof reuse
+and does not add password, enabled-state or previous-stamp checks. Preparation
+and issuance transaction boundaries stay with the embedding application.
+
+The adapter replaces its earlier single-use policy with nonconsuming opaque
+handle verification, original deadlines, current device/binding joins and source
+Unicode-whitespace normalization. It returns the exact five refresh fields,
+uses the current optional client ID, keeps old access deadlines and preserves
+account/vault state. Optional repeated proof/client roots become absent; the
+required grant keeps its first matching root. Unbound legacy refresh fails even
+when its older access behavior remains available. The private issuance savepoint
+is stronger failure atomicity than upstream's separate device activity writes.
+
+The [pin and release contract](protocol.md#password-method-refresh-grants) agrees
+on this password-method path. Shipped TS CLI sync calls the concrete refresh
+service, and the bundled SDK also constructs renewal forms. Both forward refresh
+proofs opaquely. The host does not implement upstream's refresh JWT encoding or
+`nbf` claims. Unsupported SSO/API methods and their failure-write timing, mobile
+runtime, full expiry waits, complete policy/configuration and transport remain
+open. All eight focused Rust comparison cases pass against both actual servers:
+268 counted HTTP requests each, six successful password logins and 42 refresh
+POSTs (22 successes, 15 invalid proofs, four missing/duplicate-proof guards and
+one missing-grant form guard). Two fixture registrations are excluded. The
+cases include real retained-cipher decryption after password/KDF/stamp recovery.
+Source-authored refresh counters are separate from password-login attempts and
+are not server-side limiter telemetry. Deadline/leeway/mobile policy uses
+separate host clock tests, not long-expiry or mobile runtime proof.
+No full-parity or captured request-trace claim is introduced.

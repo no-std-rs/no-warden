@@ -277,6 +277,25 @@ impl Serialize for RegistrationFinishResponse {
     }
 }
 
+/// Refresh fields after form decoding. The proof stays opaque and is never serialized.
+/// This convenience decoder is not the complete HTTP form/root-name/alias parser;
+/// optional duplicate-field handling and guards belong to the transport. Missing client
+/// ID defaults to "undefined" during authorization; a present empty ID stays empty.
+#[derive(Deserialize)]
+pub struct RefreshTokenRequest<'a> {
+    pub grant_type: Option<&'a str>,
+    #[serde(borrow, alias = "refreshtoken")]
+    pub refresh_token: Option<Secret<'a>>,
+    #[serde(alias = "clientid")]
+    pub client_id: Option<&'a str>,
+}
+impl core::fmt::Debug for RefreshTokenRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("RefreshTokenRequest")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Ordinary password-grant fields after form decoding. This borrowed convenience decoder
 /// is not the complete HTTP form/root-name/alias parser. Presence checks accept blank
 /// strings; an `auth_request` must instead be dispatched to authentication-request login.

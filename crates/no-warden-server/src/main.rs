@@ -13,6 +13,7 @@ mod domains;
 mod password_login;
 mod protocol;
 mod purge;
+mod refresh;
 mod registration;
 mod store;
 
@@ -80,8 +81,11 @@ struct Failure(StatusCode, &'static str);
 
 impl IntoResponse for Failure {
     fn into_response(self) -> Response {
-        if password_login::is_password_error(self.1) {
+        if password_login::is_password_error(self.1) || self.1 == "refresh_token cannot be blank" {
             return password_login::error_response(self.0, self.1);
+        }
+        if self.1 == "Invalid refresh token" {
+            return (self.0, Json(json!({"error":"invalid_grant"}))).into_response();
         }
         let error = if self.1 == "Invalid grant" {
             "invalid_grant"
@@ -418,6 +422,9 @@ async fn dispatch_with_peer(
         if let Some(input) = password_login::Input::ordinary(&body)? {
             return password_login::login(&app, &mut store, &input);
         }
+        if let Some(input) = refresh::Input::selected(&body)? {
+            return refresh::login(&app, &mut store, &input);
+        }
         let form = parse_connect_form(&body)?;
         let grant = connect_field(&form, &["grant_type", "granttype"])?.ok_or(Failure(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -468,44 +475,8 @@ async fn dispatch_with_peer(
                 return Err(invalid());
             }
             "refresh_token" => {
-                let refresh = form.get("refresh_token").ok_or_else(invalid_grant)?;
-                let owner: Option<String> = store
-                    .db
-                    .query_row(
-                        "SELECT owner FROM sessions WHERE refresh=?1 AND refresh_expires>?2",
-                        params![digest(refresh), chrono::Utc::now().timestamp()],
-                        |r| r.get(0),
-                    )
-                    .optional()?;
-                let account = store
-                    .account("id", &owner.ok_or_else(invalid_grant)?)?
-                    .ok_or_else(invalid_grant)?;
-                let owner = account["id"].as_str().ok_or_else(invalid_grant)?;
-                let binding = devices::refresh_binding(&store.db, &digest(refresh), owner)?;
-                let tx = store.db.transaction()?;
-                // Consume only refresh authority. Clients may still have requests
-                // in flight with the old bearer; it remains valid until its
-                // original access_expires deadline, as in Vaultwarden.
-                let consumed = tx.execute(
-                    "UPDATE sessions SET refresh_expires=0 WHERE refresh=?1 AND refresh_expires>?2",
-                    params![digest(refresh), chrono::Utc::now().timestamp()],
-                )?;
-                if consumed != 1 {
-                    return Err(invalid_grant());
-                }
-                if let Some(identifier) = binding.as_deref() {
-                    devices::touch(&tx, owner, identifier)?;
-                }
-                let tokens = issue_token_grant_bound(
-                    &app,
-                    &tx,
-                    &account,
-                    None,
-                    binding.as_deref(),
-                    connect_field(&form, &["client_id", "clientid"])?,
-                )?;
-                tx.commit()?;
-                return Ok(json_response(tokens));
+                // Refresh forms are handled before inherited strict parsing.
+                return Err(invalid());
             }
             _ => return Err(Failure(StatusCode::BAD_REQUEST, "Unsupported grant type")),
         }
@@ -1219,8 +1190,8 @@ fn issue_token_grant_bound(
 ) -> Result<Value, Failure> {
     let timestamp = chrono::Utc::now().timestamp();
     db.execute(
-        "DELETE FROM sessions WHERE access_expires<=?1 AND refresh_expires<=?1",
-        [timestamp],
+        "DELETE FROM sessions WHERE access_expires<=?1 AND refresh_expires<?2",
+        params![timestamp, timestamp.saturating_sub(30)],
     )?;
     let expires_in = api.map_or(7200_i64, |grant| i64::from(grant.expires_in()));
     let client_id = api.map_or(password_client_id.unwrap_or("undefined"), |grant| {
@@ -1236,11 +1207,15 @@ fn issue_token_grant_bound(
     let mut claims = json!({"sub":account["id"],"email":account["email"],"email_verified":true,
         "name":account["name"],"premium":true,"iss":app.base,"iat":timestamp,"nbf":timestamp,"exp":timestamp+expires_in,
         "client_id":client_id,"scope":scopes,"amr":["Application"],"sstamp":security_stamp,"jti":random_token()});
+    let mut refresh_days = 30;
     if let Some(identifier) = device {
         claims["device"] = json!(identifier);
         let registered =
             devices::load(db, account["id"].as_str().ok_or_else(invalid)?, identifier)?
                 .ok_or_else(invalid)?;
+        if matches!(registered.device_type, 0 | 1) {
+            refresh_days = 90;
+        }
         claims["devicetype"] = json!(no_warden::auth_requests::device_type_name(
             registered.device_type
         ));
@@ -1258,7 +1233,7 @@ fn issue_token_grant_bound(
         .map(digest)
         .unwrap_or_else(|| format!("access-only:{}", digest(&access)));
     let refresh_expires = if refresh.is_some() {
-        timestamp + 30 * 24 * 3600
+        timestamp + refresh_days * 24 * 3600
     } else {
         0
     };
@@ -5892,7 +5867,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn device_refresh_preserves_binding_activity_and_legacy_session_authority() {
+    async fn device_refresh_reuses_bound_proofs_and_rejects_unbound_legacy_authority() {
         let app = device_fixture_app();
         let first = device_document(
             device_request(
@@ -5964,43 +5939,228 @@ mod tests {
         )
         .await;
         assert_eq!(list["data"].as_array().unwrap().len(), 1);
-        let snapshot = device_persisted_state(&app.store.lock().unwrap());
-        assert!(
-            device_request(
-                &app,
-                Method::POST,
-                "/identity/connect/token",
-                HeaderMap::new(),
-                body.as_bytes()
+        let original_deadline: i64 = app
+            .store
+            .lock()
+            .unwrap()
+            .db
+            .query_row(
+                "SELECT refresh_expires FROM sessions WHERE refresh=?1",
+                [digest(first["refresh_token"].as_str().unwrap())],
+                |row| row.get(0),
             )
-            .await
-            .is_err()
-        );
-        assert!(device_persisted_state(&app.store.lock().unwrap()) == snapshot);
-        let legacy_body = b"grant_type=refresh_token&refresh_token=device-fixture-refresh-bob";
-        let legacy = device_document(
+            .unwrap();
+        let replayed = device_document(
             device_request(
                 &app,
                 Method::POST,
                 "/identity/connect/token",
                 HeaderMap::new(),
-                legacy_body,
+                body.as_bytes(),
             )
             .await,
         )
         .await;
-        assert!(device_claims(&legacy).get("device").is_none());
+        assert!(device_claims(&replayed)["device"] == "Refresh-Device");
+        {
+            let store = app.store.lock().unwrap();
+            let deadline: i64 = store
+                .db
+                .query_row(
+                    "SELECT refresh_expires FROM sessions WHERE refresh=?1",
+                    [digest(first["refresh_token"].as_str().unwrap())],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(
+                deadline == original_deadline
+                    && store.account("id", "alice").unwrap().unwrap() == before
+            );
+        }
+        let snapshot = device_persisted_state(&app.store.lock().unwrap());
+        let legacy_body = b"grant_type=refresh_token&refresh_token=device-fixture-refresh-bob";
+        let Err(error) = device_request(
+            &app,
+            Method::POST,
+            "/identity/connect/token",
+            HeaderMap::new(),
+            legacy_body,
+        )
+        .await
+        else {
+            panic!("Unbound legacy refresh authorized")
+        };
+        assert!(error.0 == StatusCode::BAD_REQUEST);
         let store = app.store.lock().unwrap();
+        assert!(device_persisted_state(&store) == snapshot);
         assert!(devices::list(&store.db, "bob").unwrap().0.is_empty());
-        assert!(
-            devices::refresh_binding(
-                &store.db,
-                &digest(legacy["refresh_token"].as_str().unwrap()),
-                "bob"
+    }
+
+    #[tokio::test]
+    async fn refresh_http_keeps_original_deadlines_and_uses_stored_mobile_type() {
+        for (kind, days) in [("0", 90), ("1", 90), ("15", 30), ("8", 30)] {
+            let app = device_fixture_app();
+            let first = device_document(
+                device_request(
+                    &app,
+                    Method::POST,
+                    "/identity/connect/token",
+                    HeaderMap::new(),
+                    &device_login_body("alice", "TTL-Device", "Original", kind),
+                )
+                .await,
             )
-            .unwrap()
-            .is_none()
-        );
+            .await;
+            let original = first["refresh_token"].as_str().unwrap();
+            let before: (i64, i64) = app
+                .store
+                .lock()
+                .unwrap()
+                .db
+                .query_row(
+                    "SELECT access_expires,refresh_expires FROM sessions WHERE refresh=?1",
+                    [digest(original)],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert!(before.1 - (before.0 - 7200) == days * 86400);
+            let spaced = format!("\u{2003}{}\n {}\u{a0}", &original[..5], &original[5..]);
+            let form = serde_urlencoded::to_string([
+                ("GRANTTYPE.x", "refresh_token"),
+                ("[REFRESHTOKEN]", spaced.as_str()),
+                (".CLIENTID", "changed"),
+                ("deviceType", "15"),
+                ("deviceIdentifier", "forged"),
+            ])
+            .unwrap();
+            for _ in 0..2 {
+                let tokens = device_document(
+                    device_request(
+                        &app,
+                        Method::POST,
+                        "/identity/connect/token",
+                        HeaderMap::new(),
+                        form.as_bytes(),
+                    )
+                    .await,
+                )
+                .await;
+                assert!(
+                    tokens.as_object().unwrap().len() == 5
+                        && device_claims(&tokens)["client_id"] == "changed"
+                        && device_claims(&tokens)["device"] == "TTL-Device"
+                );
+                let store = app.store.lock().unwrap();
+                let after: (i64, i64) = store
+                    .db
+                    .query_row(
+                        "SELECT access_expires,refresh_expires FROM sessions WHERE refresh=?1",
+                        [digest(original)],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .unwrap();
+                let new: (i64, i64) = store
+                    .db
+                    .query_row(
+                        "SELECT access_expires,refresh_expires FROM sessions WHERE refresh=?1",
+                        [digest(tokens["refresh_token"].as_str().unwrap())],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .unwrap();
+                assert!(after == before && new.1 - (new.0 - 7200) == days * 86400);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_http_rolls_back_every_issuance_stage_and_retries_original_proof() {
+        fn snapshot(store: &Store) -> Vec<String> {
+            let mut rows = device_persisted_state(store);
+            rows.extend(store.db.prepare("SELECT json_array(access,owner,identifier,stamp,access_expires) FROM account_password_access ORDER BY access").unwrap().query_map([], |row| row.get::<_,String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap());
+            rows
+        }
+        for stage in ["activity", "session", "binding", "history", "commit"] {
+            let app = device_fixture_app();
+            let first = device_document(
+                device_request(
+                    &app,
+                    Method::POST,
+                    "/identity/connect/token",
+                    HeaderMap::new(),
+                    &device_login_body("alice", "Refresh-Atomic", "Original", "8"),
+                )
+                .await,
+            )
+            .await;
+            {
+                let store = app.store.lock().unwrap();
+                store.db.execute("UPDATE device_registry SET updated='2000-01-01T00:00:00.000000Z' WHERE owner='alice'",[]).unwrap();
+                store
+                    .db
+                    .execute(
+                        "INSERT INTO sessions VALUES('expired-access','expired-proof','alice',0,0)",
+                        [],
+                    )
+                    .unwrap();
+                let trigger = match stage {
+                    "activity" => {
+                        "CREATE TRIGGER fail_refresh BEFORE UPDATE ON device_registry BEGIN SELECT RAISE(ABORT,'injected activity failure'); END;"
+                    }
+                    "session" => {
+                        "CREATE TRIGGER fail_refresh BEFORE INSERT ON sessions BEGIN SELECT RAISE(ABORT,'injected session failure'); END;"
+                    }
+                    "binding" => {
+                        "CREATE TRIGGER fail_refresh BEFORE INSERT ON session_devices BEGIN SELECT RAISE(ABORT,'injected binding failure'); END;"
+                    }
+                    "history" => {
+                        "CREATE TRIGGER fail_refresh BEFORE INSERT ON account_password_access BEGIN SELECT RAISE(ABORT,'injected history failure'); END;"
+                    }
+                    "commit" => {
+                        "CREATE TABLE failed_refresh(owner TEXT REFERENCES accounts(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_refresh AFTER INSERT ON account_password_access BEGIN INSERT INTO failed_refresh VALUES('missing'); END;"
+                    }
+                    _ => unreachable!(),
+                };
+                store.db.execute_batch(trigger).unwrap();
+            }
+            let before = snapshot(&app.store.lock().unwrap());
+            let form = serde_urlencoded::to_string([
+                ("grant_type", "refresh_token"),
+                ("refresh_token", first["refresh_token"].as_str().unwrap()),
+            ])
+            .unwrap();
+            let Err(error) = device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                form.as_bytes(),
+            )
+            .await
+            else {
+                panic!("Injected refresh failure succeeded")
+            };
+            assert!(error.0 == StatusCode::INTERNAL_SERVER_ERROR);
+            {
+                let store = app.store.lock().unwrap();
+                assert!(snapshot(&store) == before && store.db.is_autocommit());
+                store.db.execute_batch("DROP TRIGGER fail_refresh").unwrap();
+            }
+            let tokens = device_document(
+                device_request(
+                    &app,
+                    Method::POST,
+                    "/identity/connect/token",
+                    HeaderMap::new(),
+                    form.as_bytes(),
+                )
+                .await,
+            )
+            .await;
+            assert!(
+                tokens.as_object().unwrap().len() == 5
+                    && device_claims(&tokens)["device"] == "Refresh-Atomic"
+            );
+        }
     }
 
     #[tokio::test]
@@ -7193,7 +7353,8 @@ mod tests {
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        assert_eq!(remaining.len(), 3); // Two live authorities and the new pair.
+        assert_eq!(remaining.len(), 4); // Two live authorities, refresh leeway and the new pair.
+        assert!(remaining.iter().any(|access| access == "expiry-boundary"));
         assert!(remaining.iter().any(|access| access == "live-access"));
         assert!(remaining.iter().any(|access| access == "live-refresh"));
     }

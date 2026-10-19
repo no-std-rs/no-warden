@@ -20,7 +20,8 @@ invoke the pinned official Bitwarden CLI as an external process.
 - [ ] Implement every inventoried API contract and verify its behavior in green PRs.
 
 - [x] Allocation-free core: borrowed wire types, routing, policy, storage traits.
-- [x] Ordinary password identity grant subset: allocation-free presence/scope/proof/policy contract and source-backed HTTP parsing, verified by six matching actual Rust cases. Refresh and complete identity policies remain open.
+- [x] Ordinary password identity grant subset: allocation-free presence/scope/proof/policy contract and source-backed HTTP parsing, verified by six matching actual Rust cases. Complete identity policies remain open.
+- [x] Password-method refresh subset: allocation-free replay-preserving provider contract, current-device authority, original proof deadlines and exact responses, verified by eight matching actual Rust cases. JWT refresh encoding, SSO and broader identity policies remain open.
 - [x] Standalone Rust adapter: persistent SQLite, registration, authentication.
 - [x] Personal vault: encrypted ciphers, folders, sync, trash, restore.
 - [x] Cipher ordinary/details/admin read subset: allocation-free authorization, exact guards and opaque projections, verified by six matching actual Rust HTTP cases. Full response and organization/notification contracts remain open.

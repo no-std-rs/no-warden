@@ -95,6 +95,7 @@ jobs:
           target/debug/no-warden-http-conformance --suite account-deletion
           target/debug/no-warden-http-conformance --suite cipher-reads
           target/debug/no-warden-http-conformance --suite password-grants
+          target/debug/no-warden-http-conformance --suite refresh-grants
           target/debug/no-warden-http-conformance --suite account-kdf-cli
           target/debug/no-warden-http-conformance --suite account-password-cli
           bash tools/e2e.sh
