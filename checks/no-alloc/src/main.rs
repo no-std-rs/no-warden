@@ -13,6 +13,7 @@ use no_warden::{
     devices::{DeviceRecord, PendingDeviceAuthRequest},
     domains::{DomainProjection, DomainSettingsView, GlobalDomain},
     identity::Secret,
+    password_login::{PasswordLoginAccount, PasswordLoginDevice, PasswordLoginStorage},
     purge::VaultPurgeStorage,
     registration::RegistrationEmail,
     route::{Method, classify},
@@ -26,11 +27,11 @@ use no_warden::{
         DeviceResponse, DomainSettingsRequest, DomainSettingsResponse,
         DomainSettingsUpdateResponse, FolderRequest, ImportRequest, InitializedAccountKeysResponse,
         KnownDeviceRequest, KnownDeviceResponse, MasterPasswordPolicy,
-        MasterPasswordPolicyResponse, PasswordOrOtpRequest, PreloginRequest, PreloginResponse,
-        ProfileUpdateRequest, RegisterRequest, RegistrationAuthentication, RegistrationCredentials,
-        RegistrationFinishRequest, RegistrationFinishResponse, RegistrationUnlock,
-        RegistrationVerificationRequest, RegistrationVerificationToken, SecretVerificationRequest,
-        UserPublicKeyResponse, WebAuthnCredentialsResponse,
+        MasterPasswordPolicyResponse, PasswordLoginRequest, PasswordOrOtpRequest, PreloginRequest,
+        PreloginResponse, ProfileUpdateRequest, RegisterRequest, RegistrationAuthentication,
+        RegistrationCredentials, RegistrationFinishRequest, RegistrationFinishResponse,
+        RegistrationUnlock, RegistrationVerificationRequest, RegistrationVerificationToken,
+        SecretVerificationRequest, UserPublicKeyResponse, WebAuthnCredentialsResponse,
     },
 };
 
@@ -78,6 +79,35 @@ impl Storage for PurgeProbe {
     }
 }
 impl CipherReadStorage for PurgeProbe {}
+impl PasswordLoginStorage for PurgeProbe {
+    type OwnerId = &'static str;
+
+    fn verify_password_login(
+        &mut self,
+        username: &str,
+        password: &Secret<'_>,
+    ) -> Result<Option<PasswordLoginAccount<Self::OwnerId>>, ()> {
+        // Compile/link probe only: an external verifier supplies this trusted flag.
+        black_box(password);
+        Ok(
+            (self.verified && self.account_present && username == "bare-metal@example.com")
+                .then_some(PasswordLoginAccount {
+                    owner: "embedded-owner",
+                    enabled: true,
+                }),
+        )
+    }
+
+    fn prepare_password_login(
+        &mut self,
+        owner: &str,
+        password: &Secret<'_>,
+        device: PasswordLoginDevice<'_>,
+    ) -> Result<(), ()> {
+        black_box((owner, password, device));
+        Ok(())
+    }
+}
 impl VaultPurgeStorage for PurgeProbe {
     fn verify_vault_purge_proof(
         &mut self,
@@ -202,6 +232,24 @@ pub extern "C" fn _start() -> ! {
             personal_items: black_box([true, true]),
             revision: black_box(0),
         };
+        let password_login = serde_json_core::from_slice::<PasswordLoginRequest<'_>>(black_box(
+            br#"{"grant_type":"password","client_id":"cli","password":"test-only-proof","scope":"api offline_access","username":" bare-metal@example.com ","deviceIdentifier":"","deviceName":"","deviceType":""}"#,
+        ));
+        let grant = password_login.ok().and_then(|(request, _)| {
+            VaultService::new(&mut provider)
+                .authenticate_password(&request)
+                .ok()
+        });
+        if let Some(grant) = grant {
+            black_box((
+                grant.user_id(),
+                grant.client_id(),
+                grant.device(),
+                grant.scope(),
+                grant.expires_in(),
+                grant.allows_refresh(),
+            ));
+        }
         if let Ok(grant) = VaultService::new(&mut provider)
             .authorize_cipher_read(black_box("embedded-owner"), black_box("embedded-cipher"))
         {

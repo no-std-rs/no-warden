@@ -10,12 +10,13 @@ mod auth_requests;
 mod cipher_reads;
 mod devices;
 mod domains;
+mod password_login;
 mod protocol;
 mod purge;
 mod registration;
 mod store;
 
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
+use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
 use axum::{
     Json, Router,
     body::Bytes,
@@ -79,6 +80,9 @@ struct Failure(StatusCode, &'static str);
 
 impl IntoResponse for Failure {
     fn into_response(self) -> Response {
+        if password_login::is_password_error(self.1) {
+            return password_login::error_response(self.0, self.1);
+        }
         let error = if self.1 == "Invalid grant" {
             "invalid_grant"
         } else {
@@ -411,6 +415,9 @@ async fn dispatch_with_peer(
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
     if route == Route::Token {
+        if let Some(input) = password_login::Input::ordinary(&body)? {
+            return password_login::login(&app, &mut store, &input);
+        }
         let form = parse_connect_form(&body)?;
         let grant = connect_field(&form, &["grant_type", "granttype"])?.ok_or(Failure(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -457,31 +464,8 @@ async fn dispatch_with_peer(
                         &app, &mut store, &request, &context,
                     )?));
                 }
-                let registration = devices::login_registration(&form)?;
-                let email = form
-                    .get("username")
-                    .ok_or_else(unauthorized)?
-                    .trim()
-                    .to_lowercase();
-                let account = store.account("email", &email)?.ok_or_else(invalid_grant)?;
-                let encoded: String = store.db.query_row(
-                    "SELECT password FROM accounts WHERE id=?1",
-                    [account["id"].as_str()],
-                    |r| r.get(0),
-                )?;
-                let password = form.get("password").ok_or_else(invalid_grant)?;
-                let parsed = PasswordHash::new(&encoded).map_err(|_| invalid_grant())?;
-                Argon2::default()
-                    .verify_password(password.as_bytes(), &parsed)
-                    .map_err(|_| invalid_grant())?;
-                return Ok(json_response(authenticated_login(
-                    &app,
-                    &mut store,
-                    &account,
-                    &registration,
-                    None,
-                    connect_field(&form, &["client_id", "clientid"])?,
-                )?));
+                // Ordinary password forms are handled before legacy grant parsing.
+                return Err(invalid());
             }
             "refresh_token" => {
                 let refresh = form.get("refresh_token").ok_or_else(invalid_grant)?;
@@ -1883,6 +1867,8 @@ mod tests {
     fn account_password_login(proof: &str, id: &str) -> String {
         serde_urlencoded::to_string([
             ("grant_type", "password"),
+            ("client_id", "cli"),
+            ("scope", "api offline_access"),
             ("username", "alice@example.test"),
             ("password", proof),
             ("deviceIdentifier", id),
@@ -3098,6 +3084,8 @@ mod tests {
         let login = |proof: &str| {
             serde_urlencoded::to_string([
                 ("grant_type", "password"),
+                ("client_id", "cli"),
+                ("scope", "api offline_access"),
                 ("username", "alice@example.test"),
                 ("password", proof),
                 ("deviceIdentifier", "Request-Device"),
@@ -5416,6 +5404,8 @@ mod tests {
     fn device_login_body(owner: &str, identifier: &str, name: &str, kind: &str) -> Vec<u8> {
         serde_urlencoded::to_string([
             ("grant_type", "password"),
+            ("client_id", "cli"),
+            ("scope", "api offline_access"),
             ("username", &format!("{owner}@example.test")),
             ("password", "fixture-master-hash"),
             ("DeviceIdentifier", identifier),
@@ -5425,6 +5415,147 @@ mod tests {
         .unwrap()
         .into_bytes()
     }
+    #[tokio::test]
+    async fn password_login_guards_fail_before_verification_or_device_mutation() {
+        let app = device_fixture_app();
+        let before = device_persisted_state(&app.store.lock().unwrap());
+        for (body, message) in [
+            ("grant_type=password", "client_id cannot be blank"),
+            (
+                "grant_type=password&client_id=cli",
+                "password cannot be blank",
+            ),
+            (
+                "grant_type=password&client_id=cli&password=x",
+                "scope cannot be blank",
+            ),
+            (
+                "grant_type=password&client_id=cli&password=x&scope=bad",
+                "username cannot be blank",
+            ),
+            (
+                "grant_type=password&client_id=cli&password=x&scope=bad&username=missing",
+                "device_identifier cannot be blank",
+            ),
+            (
+                "grant_type=password&client_id=cli&password=x&scope=bad&username=missing&deviceIdentifier=x",
+                "device_name cannot be blank",
+            ),
+            (
+                "grant_type=password&client_id=cli&password=x&scope=bad&username=missing&deviceIdentifier=x&deviceName=",
+                "device_type cannot be blank",
+            ),
+        ] {
+            let Err(error) = device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                body.as_bytes(),
+            )
+            .await
+            else {
+                panic!("Incomplete password form authorized")
+            };
+            assert!(error.0 == StatusCode::BAD_REQUEST && error.1 == message);
+            let response = error.into_response();
+            let document: Value = serde_json::from_slice(
+                &axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(
+                document["error"] == ""
+                    && document["error_description"] == ""
+                    && document["errorModel"]["message"] == message
+                    && document["validationErrors"][""][0] == message
+            );
+        }
+        let response = device_request(&app, Method::POST, "/identity/connect/token", HeaderMap::new(), b"grant_type=password&client_id=&password=&scope=api%0Aoffline_access&username=&deviceIdentifier=&deviceName=&deviceType=").await.unwrap_or_else(|_| panic!("Scope response unavailable"));
+        assert!(response.status() == StatusCode::BAD_REQUEST);
+        let document: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            document["message"] == "Scope (api\\noffline_access) not supported"
+                && document["error"] == ""
+        );
+        assert!(device_persisted_state(&app.store.lock().unwrap()) == before);
+    }
+
+    #[tokio::test]
+    async fn password_login_checks_authoritative_enabled_policy_after_proof() {
+        let app = device_fixture_app();
+        {
+            let store = app.store.lock().unwrap();
+            store
+                .db
+                .execute(
+                    "INSERT INTO account_auth_policy(owner,enabled) VALUES('alice',0)",
+                    [],
+                )
+                .unwrap();
+            store.db.execute("UPDATE accounts SET document=json_set(document,'$.enabled',1,'$.disabled',0) WHERE id='alice'", []).unwrap();
+        }
+        let before = device_persisted_state(&app.store.lock().unwrap());
+        for (proof, message) in [
+            ("wrong", "Username or password is incorrect. Try again"),
+            ("fixture-master-hash", "This user has been disabled"),
+        ] {
+            let body = account_password_login(proof, "Disabled-Device");
+            let Err(error) = device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                body.as_bytes(),
+            )
+            .await
+            else {
+                panic!("Disabled account authorized")
+            };
+            assert!(error.0 == StatusCode::BAD_REQUEST && error.1 == message);
+            assert!(device_persisted_state(&app.store.lock().unwrap()) == before);
+        }
+    }
+
+    #[tokio::test]
+    async fn password_login_nested_aliases_and_first_grant_drive_owner_and_device_binding() {
+        let app = device_fixture_app();
+        let form = serde_urlencoded::to_string([
+            ("[GrAnTtYpE].ignored", "password"),
+            ("grant_type", "other"),
+            (".CLIENTID[nested]", "first-client"),
+            ("[USERNAME]", "\u{2003}ALICE@EXAMPLE.TEST \n"),
+            ("PASSWORD.x", "fixture-master-hash"),
+            ("scope.x", "api offline_access"),
+            ("[deviceIdentifier]", "Opaque_+/雪"),
+            ("deviceName.x", ""),
+            ("deviceType.x", "invalid"),
+        ])
+        .unwrap();
+        let tokens = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                form.as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        let claims = device_claims(&tokens);
+        assert!(claims["sub"] == "alice" && claims["client_id"] == "first-client");
+        let store = app.store.lock().unwrap();
+        let record: (String,i32) = store.db.query_row("SELECT name,device_type FROM device_registry WHERE owner='alice' AND identifier=?1", ["Opaque_+/雪"], |row| Ok((row.get(0)?,row.get(1)?))).unwrap();
+        assert!(record.0.is_empty() && record.1 == 14 && tokens["refresh_token"].is_string());
+    }
+
     fn device_persisted_state(store: &Store) -> Vec<String> {
         store.db.prepare("SELECT 'account:'||id||':'||document||':'||password||':'||revision FROM accounts UNION ALL SELECT 'session:'||access||':'||refresh||':'||owner||':'||access_expires||':'||refresh_expires FROM sessions UNION ALL SELECT 'device:'||owner||':'||identifier||':'||name||':'||device_type||':'||created||':'||updated FROM device_registry UNION ALL SELECT 'binding:'||access||':'||owner||':'||identifier FROM session_devices ORDER BY 1").unwrap().query_map([],|row|row.get(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
     }

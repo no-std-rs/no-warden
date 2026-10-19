@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 452 active Rust tests: 205 core, 167 host, and 80 conformance
+The workspace has 471 active Rust tests: 216 core, 173 host, and 82 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -318,3 +318,20 @@ and 34 attachment byte checks per target. The default HTTP selection is unchange
 official CLI 2026.10.0 regression also passes all 120 commands against both actual
 servers. It is separate lifecycle evidence and establishes no client alias
 execution or captured route trace.
+
+The ordinary password-grant extension moves the supported request validation and
+proof/policy ordering into an opt-in allocation-free service. Eleven core tests
+cover required/scope order, no auth-request fallback, raw fields, enabled state,
+provider preparation/error mapping, borrowed adapters and redaction. No new route or
+typed OAuth response is counted. The no-allocator consumer exercises the real
+service, leaving crypto, Unicode lowercase lookup, clocks, HTTP forms and token
+issuance in adapters. All six selected `--suite password-grants` cases pass
+against both actual servers: 85 counted HTTP requests per target, including 45
+token requests, with one fixture registration excluded. The authored classification
+is 39 pre-limiter guards and six credential-flow attempts, two successful, under
+unchanged reference limits. `BW_PASSWORD_GRANTS_RECEIPT` records private authored
+case names and counters. A fresh official CLI 2026.10.0 regression passes all
+120 commands against both actual servers, separately from the focused HTTP
+matrix. The final-source default HTTP regression also passes all 104 cases,
+including its real authentication-request and password-exception expiry checks.
+Refresh and complete identity policy remain open.

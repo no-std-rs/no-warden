@@ -20,7 +20,9 @@ cover reauthenticated personal-vault purge with preserved account authority.
 A separate six-case comparison covers both account-deletion aliases, revoked
 authority, and fresh identity after same-email registration. Six matching HTTP
 cases also verify ordinary/details/admin cipher reads, their guards and exact
-attachment bytes. The remaining surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
+attachment bytes. Six focused cases also verify the reusable ordinary
+password-grant core and source-backed form/error guards against both servers.
+The remaining surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden
 replacement. Client-side vault encryption stays with the client.
 
@@ -86,7 +88,7 @@ bounded collections require no allocator. Opt-in `ImportStorage`,
 `DevicePushStorage`, `AuthRequestStorage`, `AuthRequestResponseStorage`,
 `AuthRequestLoginStorage`, `RegistrationStorage`, `AccountSecurityStorage`,
 `AccountKdfStorage`, `AccountPasswordStorage`, `VaultPurgeStorage`,
-`AccountDeletionStorage`, `CipherReadStorage`, and
+`AccountDeletionStorage`, `CipherReadStorage`, `PasswordLoginStorage`, and
 `AttachmentStorage` providers add
 batch operations,
 credential and account-key services, profile metadata and equivalent-domain updates, device discovery,
@@ -95,7 +97,8 @@ creation/discovery, approval/code-protected polling, one-use access-code login,
 modern account verification/finish, password verification, security-stamp renewal,
 client KDF transitions, password changes and previous-stamp authorization,
 reauthenticated personal-vault purge and account deletion,
-authorization for ordinary/details/admin cipher reads, and attachment transitions
+authorization for ordinary/details/admin cipher reads, ordinary password-grant
+validation and attachment transitions
 without adding an allocator. See [architecture](docs/architecture.md) and
 [CI and review](docs/ci.md).
 

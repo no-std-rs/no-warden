@@ -1150,3 +1150,65 @@ accompany normalized alias/snapshot comparisons; normalization changes only
 attachment URL tokens. The cases verify current authority, exact error messages,
 UUID/body/query/method guards and nonmutation of account/vault snapshots.
 These direct comparisons establish no actual notification or CLI alias call.
+
+### Ordinary password-grant validation
+
+The [pinned dispatcher](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L57-L80)
+and [release 1.37.4 dispatcher](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/identity.rs#L53-L81)
+require present fields in this order: `client_id`, `password`, `scope`, `username`,
+`device_identifier`, `device_name`, `device_type`. Missing fields produce 400;
+present empty strings pass presence checks. Missing `grant_type` fails Rocket's
+form guard with 422, whose response need not be JSON. A present empty grant type
+reaches dispatch and fails with 400. The SSO-only configuration policy precedes
+ordinary required-field checks and remains outside this personal baseline.
+
+[Password login](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L370-L498)
+requires scope exactly `api offline_access` before limiter/account/proof access.
+It trims the username using Rust Unicode whitespace semantics before lowercase
+email lookup. The password field is an opaque client authentication hash, with
+no trimming or case conversion. Unknown accounts and invalid proofs have the
+same 400 error. A disabled account is rejected only after proof verification.
+The internal verifier upgrade then precedes mail verification, device retrieval,
+2FA and issuance; it does not change the client KDF or wrapped user key.
+
+[ConnectData](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L1107-L1167)
+uses uncased compact/underscore aliases for `grant_type`, `client_id` and device
+fields; `username`, `password` and `scope` have only their uncased canonical
+names. Rocket matches the first name root, including dotted/bracketed forms,
+and the required grant string keeps its first matching value. Optional fields
+have different duplicate semantics: Rocket
+[`Option<T>` decoding](https://github.com/rwf2/Rocket/blob/v0.5.1/core/lib/src/form/from_form.rs#L818-L836)
+forces strict inner parsing and turns its errors into `None`. Two matching
+optional aliases/roots therefore make that field absent, triggering the ordered
+400 presence check. The adapter follows this distinction for ordinary forms.
+A single recognized present `authRequest`, even empty, selects its separate proof
+flow and cannot fall back. Its underscore spelling is not an alias. Duplicate
+auth-request selection retains the adapter's stricter rejection policy, an explicit
+source gap; other identity grants keep their existing parser/policy limits.
+
+Device IDs and names are opaque strings, including empty values. `deviceType`
+is a string form field; nonnumeric, empty or out-of-i32-range input reaches the
+[device fallback](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L776-L797)
+value 14. Reusing an owned device identifier retains its original metadata.
+The supplied client ID is preserved, including an empty string.
+
+Ordinary presence, scope, proof and disabled-account failures use 400 default API
+errors, rather than OAuth `invalid_grant`. The
+[pinned error serializer](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/error.rs#L230-L273)
+and [release serializer](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/error.rs#L209-L238)
+provide the message, validation map and lowercase error model, empty OAuth error
+strings, null exception fields and `object: "error"`. The adapter has a dedicated
+ordinary-login renderer; full global error-envelope parity is not inferred.
+All six focused direct Rust cases pass against the adapter and actual
+Vaultwarden 1.37.4: 85 counted HTTP requests per target, including 45 token POSTs.
+The authored classification is 39 pre-limiter guards and six credential-flow
+attempts, including two ordinary successes and one auth-request no-fallback
+canary, on one peer under unchanged limits. One fixture registration is excluded.
+The checks compare the selected nine-field errors, required-field order, exact
+scope, optional-duplicate absence, raw proof, alias/empty-device success, JWT
+authority and account/vault invariants. They are not server-side rate telemetry.
+A fresh official CLI 2026.10.0 regression also passes all 120 commands against
+both actual servers. It is separate lifecycle evidence, without a captured
+request trace. Refresh processing,
+SMTP/2FA/SSO, optional unrelated guards, universal JWT/time behavior and complete
+form transport remain separate contracts.
