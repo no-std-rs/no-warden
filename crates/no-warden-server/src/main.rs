@@ -9,6 +9,7 @@ mod auth_requests;
 mod devices;
 mod domains;
 mod protocol;
+mod purge;
 mod registration;
 mod store;
 
@@ -273,7 +274,17 @@ async fn dispatch_with_peer(
         return Ok(json_response(json!({"status":"ok"})));
     }
     let method = route::Method::parse(method.as_str()).ok_or_else(missing)?;
-    let route = route::classify(method, uri.path()).ok_or_else(missing)?;
+    // Upstream's non-POST methods select ordinary cipher-ID handlers, authenticate,
+    // then reject the literal `purge` as a UUID. They never perform a purge.
+    let invalid_purge_id = uri.path().strip_suffix('/').unwrap_or(uri.path())
+        == "/api/ciphers/purge"
+        && matches!(
+            method,
+            route::Method::Get | route::Method::Put | route::Method::Delete
+        );
+    let route = route::classify(method, uri.path())
+        .or_else(|| invalid_purge_id.then_some(Route::CipherGet("purge")))
+        .ok_or_else(missing)?;
     if let Route::FolderGet(id) | Route::FolderUpdate(id) | Route::FolderDelete(id) = route {
         // Upstream's FromParam validates UUID syntax but keeps its original
         // spelling. In particular, an upper-case UUID must not alias another ID.
@@ -550,7 +561,30 @@ async fn dispatch_with_peer(
         .ok_or_else(unauthorized)?,
     };
     let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
+    if invalid_purge_id {
+        devices::access_binding(&store.db, &digest(bearer), &owner)?.ok_or_else(unauthorized)?;
+        return Err(Failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Invalid cipher ID",
+        ));
+    }
     match route {
+        Route::CipherPurge => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            if purge::organization_requested(uri.query()) {
+                // This adapter has personal accounts and no organization
+                // memberships. A selected organization route must never fall
+                // through to destructive personal-vault handling.
+                return Err(Failure(
+                    StatusCode::UNAUTHORIZED,
+                    "The current user isn't member of the organization",
+                ));
+            }
+            let input = account_security::parse_stamp(&body)?;
+            VaultService::new(&mut *store).purge_personal_vault(&owner, &input.request())?;
+            Ok(StatusCode::OK.into_response())
+        }
         Route::WebAuthnCredentials => {
             let response = VaultService::new(&mut *store).get_webauthn_credentials(&owner)?;
             Ok(Json(response).into_response())
@@ -1609,6 +1643,156 @@ mod tests {
             ("deviceType", "14"),
         ])
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn personal_purge_http_requires_bound_authority_and_keeps_org_queries_out_of_personal_scope()
+     {
+        let app = auth_request_fixture_app();
+        {
+            let store = app.store.lock().unwrap();
+            for owner in ["alice", "bob"] {
+                store.db.execute("INSERT INTO items(id,owner,kind,document,revision,created) VALUES(?1,?2,'cipher',json_object('id',?1),?3,?3)",params![format!("purge-{owner}"),owner,store::now()]).unwrap();
+            }
+        }
+        let before = device_push_persisted_state(&app.store.lock().unwrap());
+        for bearer in [None, Some("invalid"), Some("legacy-auth-access")] {
+            let Err(error) = device_request(
+                &app,
+                Method::POST,
+                "/api/ciphers/purge",
+                device_authorization(bearer),
+                b"{",
+            )
+            .await
+            else {
+                panic!("Unbound purge accepted.")
+            };
+            assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        }
+        for method in [Method::GET, Method::PUT, Method::DELETE] {
+            for (bearer, expected) in [
+                (None, StatusCode::UNAUTHORIZED),
+                (
+                    Some("device-fixture-alice"),
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                ),
+            ] {
+                let Err(error) = device_request(
+                    &app,
+                    method.clone(),
+                    "/api/ciphers/purge",
+                    device_authorization(bearer),
+                    b"",
+                )
+                .await
+                else {
+                    panic!("Non-POST cipher action accepted the purge literal.")
+                };
+                assert_eq!(error.0, expected);
+            }
+        }
+        for query in [
+            "organizationId",
+            "organizationId=",
+            "organizationId=invalid",
+            "organizationId=00000000-0000-0000-0000-000000000000",
+            "organizationId.x=ignored",
+            "%5BorganizationId%5D=ignored",
+            ".organizationId=ignored",
+            "organizationId=invalid&organizationId=",
+        ] {
+            let path = format!("/api/ciphers/purge?{query}");
+            let Err(error) = device_request(
+                &app,
+                Method::POST,
+                &path,
+                device_authorization(Some("device-fixture-alice")),
+                br#"{"masterPasswordHash":"fixture-master-hash"}"#,
+            )
+            .await
+            else {
+                panic!("Organization query purged the personal vault.")
+            };
+            assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        }
+        for (body,expected) in [
+            (b"{".as_slice(),StatusCode::BAD_REQUEST),
+            (b"[]",StatusCode::UNPROCESSABLE_ENTITY),
+            (b"{}",StatusCode::BAD_REQUEST),
+            (br#"{"masterPasswordHash":"wrong"}"#,StatusCode::BAD_REQUEST),
+            (br#"{"otp":"unsupported"}"#,StatusCode::BAD_REQUEST),
+            (br#"{"masterPasswordHash":"fixture-master-hash","otp":"unsupported"}"#,StatusCode::BAD_REQUEST),
+            (br#"{"masterPasswordHash":"fixture-master-hash","MasterPasswordHash":"fixture-master-hash"}"#,StatusCode::UNPROCESSABLE_ENTITY),
+        ] {
+            let Err(error)=device_request(&app,Method::POST,"/api/ciphers/purge",device_authorization(Some("device-fixture-alice")),body).await else {panic!("Invalid purge proof accepted.")};
+            assert_eq!(error.0,expected);
+        }
+        assert!(device_push_persisted_state(&app.store.lock().unwrap()) == before);
+        device_push_empty(device_request(&app,Method::POST,"/api/ciphers/purge/?unknown=ignored",device_authorization(Some("device-fixture-alice")),br#"{"MasterPasswordHash":"fixture-master-hash","owner":"bob","organizationId":"forged"}"#).await).await;
+        let store = app.store.lock().unwrap();
+        assert!(store.items("alice", "cipher").unwrap().is_empty());
+        assert_eq!(store.items("bob", "cipher").unwrap().len(), 1);
+        assert!(
+            devices::access_binding(&store.db, &digest("device-fixture-alice"), "alice")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn personal_purge_http_rejects_previous_stamp_and_allows_only_fresh_bound_credentials() {
+        let app = auth_request_fixture_app();
+        let body = account_password_body("fixture-master-hash", "next-proof", "next-key");
+        device_push_empty(
+            device_request(
+                &app,
+                Method::POST,
+                "/api/accounts/password",
+                device_authorization(Some("device-fixture-alice")),
+                body.to_string().as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        let changes = app.store.lock().unwrap().db.total_changes();
+        let Err(error) = device_request(
+            &app,
+            Method::POST,
+            "/api/ciphers/purge",
+            device_authorization(Some("device-fixture-alice")),
+            br#"{"masterPasswordHash":"next-proof"}"#,
+        )
+        .await
+        else {
+            panic!("Previous-stamp bearer authorized personal purge.")
+        };
+        assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(app.store.lock().unwrap().db.total_changes(), changes);
+        let form = account_password_login("next-proof", "Fresh-Purge-Device");
+        let tokens = device_document(
+            device_request(
+                &app,
+                Method::POST,
+                "/identity/connect/token",
+                HeaderMap::new(),
+                form.as_bytes(),
+            )
+            .await,
+        )
+        .await;
+        let bearer = tokens["access_token"].as_str().unwrap();
+        device_push_empty(
+            device_request(
+                &app,
+                Method::POST,
+                "/api/ciphers/purge",
+                device_authorization(Some(bearer)),
+                br#"["next-proof",null]"#,
+            )
+            .await,
+        )
+        .await;
     }
 
     async fn webauthn_document(app: &App, bearer: &str, path: &str, body: &[u8]) {

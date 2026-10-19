@@ -67,6 +67,7 @@ pub enum Route<'a> {
     CipherCreate,
     CipherCreateWrapped,
     CipherImport,
+    CipherPurge,
     CipherBulkTrash,
     CipherBulkRestore,
     CipherBulkDelete,
@@ -164,6 +165,8 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (_, "/api/ciphers/create") => None,
         (Post, "/api/ciphers/import") => Some(CipherImport),
         (_, "/api/ciphers/import") => None,
+        (Post, "/api/ciphers/purge") => Some(CipherPurge),
+        (_, "/api/ciphers/purge") => None,
         (Delete, "/api/ciphers" | "/api/ciphers/admin") => Some(CipherBulkDelete),
         (Post, "/api/ciphers/delete" | "/api/ciphers/delete-admin") => Some(CipherBulkDelete),
         (Put, "/api/ciphers/delete" | "/api/ciphers/delete-admin") => Some(CipherBulkTrash),
@@ -302,6 +305,27 @@ fn valid_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn personal_vault_purge_is_authenticated_post_and_reserves_literal_other_methods() {
+        for path in [
+            "/api/ciphers/purge",
+            "/api/ciphers/purge/",
+            "/api/ciphers/purge?organizationId=adapter-owned-selection",
+        ] {
+            assert_eq!(classify(Method::Post, path), Some(Route::CipherPurge));
+            assert!(Route::CipherPurge.requires_authentication());
+            for method in [Method::Get, Method::Put, Method::Delete, Method::Options] {
+                assert!(classify(method, path).is_none());
+            }
+        }
+        assert!(classify(Method::Post, "/api/ciphers/purge/extra").is_none());
+        // The reserved lowercase action does not normalize opaque item identifiers.
+        assert_eq!(
+            classify(Method::Post, "/api/ciphers/Purge"),
+            Some(Route::CipherUpdate("Purge"))
+        );
+    }
 
     #[test]
     fn webauthn_credential_metadata_is_authenticated_get_without_two_factor_aliases() {

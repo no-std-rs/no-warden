@@ -20,6 +20,7 @@ enum Suite {
     AccountPassword,
     AccountPasswordCli,
     WebauthnCredentials,
+    PersonalVaultPurge,
 }
 
 impl Suite {
@@ -43,6 +44,7 @@ impl Suite {
             "account-password" => Self::AccountPassword,
             "account-password-cli" => Self::AccountPasswordCli,
             "webauthn-credentials" => Self::WebauthnCredentials,
+            "personal-vault-purge" => Self::PersonalVaultPurge,
             _ => return None,
         })
     }
@@ -67,7 +69,7 @@ fn check<E: Display>(result: Result<(), E>) {
 
 fn usage() {
     eprintln!(
-        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials]"
+        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials|personal-vault-purge]"
     );
 }
 
@@ -135,5 +137,9 @@ fn main() {
     // Explicit opt-in: this independent comparison includes its own expiry wait.
     if suite == Suite::WebauthnCredentials {
         check(no_warden_conformance::webauthn_credentials::run());
+    }
+    // Destructive disposable fixtures are an explicit independent selection.
+    if suite == Suite::PersonalVaultPurge {
+        check(no_warden_conformance::purge::run());
     }
 }

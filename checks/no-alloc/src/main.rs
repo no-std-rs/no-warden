@@ -5,14 +5,16 @@
 
 use core::{hint::black_box, panic::PanicInfo};
 use no_warden::{
+    Storage, VaultService,
     auth_login::{AuthRequestLoginContext, AuthRequestLoginDevice, AuthRequestLoginRecord},
     auth_requests::{AuthRequestContext, AuthRequestRecord},
     devices::{DeviceRecord, PendingDeviceAuthRequest},
     domains::{DomainProjection, DomainSettingsView, GlobalDomain},
     identity::Secret,
+    purge::VaultPurgeStorage,
     registration::RegistrationEmail,
     route::{Method, classify},
-    service::ImportData,
+    service::{ImportData, ItemMetadata},
     wire::{
         AccountKdfRequest, AccountKeys, AccountKeysResponse, AccountPasswordRequest,
         ApiKeyResponse, AttachmentRequest, AttachmentResponse, AttachmentUploadResponse,
@@ -20,15 +22,68 @@ use no_warden::{
         AuthRequestResponse, AuthRequestUpdateRequest, AvatarUpdateRequest, CipherIdsRequest,
         CipherRequest, ClientCredentialsRequest, DeviceListResponse, DevicePushTokenRequest,
         DeviceResponse, DomainSettingsRequest, DomainSettingsResponse,
-        DomainSettingsUpdateResponse, ImportRequest, InitializedAccountKeysResponse,
+        DomainSettingsUpdateResponse, FolderRequest, ImportRequest, InitializedAccountKeysResponse,
         KnownDeviceRequest, KnownDeviceResponse, MasterPasswordPolicy,
         MasterPasswordPolicyResponse, PasswordOrOtpRequest, PreloginRequest, PreloginResponse,
-        ProfileUpdateRequest, RegistrationAuthentication, RegistrationCredentials,
+        ProfileUpdateRequest, RegisterRequest, RegistrationAuthentication, RegistrationCredentials,
         RegistrationFinishRequest, RegistrationFinishResponse, RegistrationUnlock,
         RegistrationVerificationRequest, RegistrationVerificationToken, SecretVerificationRequest,
         UserPublicKeyResponse, WebAuthnCredentialsResponse,
     },
 };
+
+// Compile/link probe only: the trusted flag stands in for an external verifier.
+// Its caller-owned fixed buffers prove the business-logic call needs no allocator.
+struct PurgeProbe {
+    verified: bool,
+    personal_items: [bool; 2],
+    revision: u64,
+}
+impl Storage for PurgeProbe {
+    type Error = ();
+    fn account_exists(&mut self, _: &str) -> Result<bool, ()> {
+        unreachable!()
+    }
+    fn insert_account(&mut self, _: &str, _: &RegisterRequest<'_>) -> Result<(), ()> {
+        unreachable!()
+    }
+    fn folder_metadata(&mut self, _: &str) -> Result<Option<ItemMetadata<'_>>, ()> {
+        unreachable!()
+    }
+    fn save_folder(&mut self, _: &str, _: &str, _: &FolderRequest<'_>) -> Result<(), ()> {
+        unreachable!()
+    }
+    fn delete_folder(&mut self, _: &str, _: &str) -> Result<(), ()> {
+        unreachable!()
+    }
+    fn cipher_metadata(&mut self, _: &str) -> Result<Option<ItemMetadata<'_>>, ()> {
+        unreachable!()
+    }
+    fn save_cipher(&mut self, _: &str, _: &str, _: &CipherRequest<'_>) -> Result<(), ()> {
+        unreachable!()
+    }
+    fn set_cipher_deleted(&mut self, _: &str, _: &str, _: bool) -> Result<(), ()> {
+        unreachable!()
+    }
+    fn delete_cipher(&mut self, _: &str, _: &str) -> Result<(), ()> {
+        unreachable!()
+    }
+}
+impl VaultPurgeStorage for PurgeProbe {
+    fn verify_vault_purge_proof(
+        &mut self,
+        owner: &str,
+        proof: no_warden::identity::ReauthenticationProof<'_>,
+    ) -> Result<bool, ()> {
+        black_box(proof);
+        Ok(owner == "embedded-owner" && self.verified)
+    }
+    fn purge_personal_vault(&mut self, _: &str) -> Result<(), ()> {
+        self.personal_items.fill(false);
+        self.revision += 1;
+        Ok(())
+    }
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
@@ -116,7 +171,18 @@ pub extern "C" fn _start() -> ! {
     ));
     if let Ok((proof, _)) = proof {
         let _ = black_box(proof.proof());
+        let mut provider = PurgeProbe {
+            verified: black_box(true),
+            personal_items: black_box([true, true]),
+            revision: black_box(0),
+        };
+        let _ = black_box(
+            VaultService::new(&mut provider)
+                .purge_personal_vault(black_box("embedded-owner"), &proof),
+        );
+        black_box((provider.personal_items, provider.revision));
     }
+    black_box(classify(Method::Post, black_box("/api/ciphers/purge")));
     let verification = serde_json_core::from_slice::<SecretVerificationRequest<'_>>(black_box(
         br#"{"masterPasswordHash":"test-only-authorization-hash"}"#,
     ));

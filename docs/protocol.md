@@ -1025,3 +1025,44 @@ The six selected HTTP cases pass against the actual adapter and Vaultwarden
 1.37.4: 129 counted requests, eight identity requests and a real 121-second
 exception wait per server. Shared registration bootstrap is excluded. This
 establishes the documented metadata subset; it adds no CLI-route trace.
+
+### Personal vault purge
+
+`POST /api/ciphers/purge` uses the existing `PasswordOrOtpRequest`: optional
+`masterPasswordHash` (also `MasterPasswordHash`) followed by optional `otp`.
+Exactly one non-null string selects a proof; both or neither return 400. The
+hash is the opaque client authentication hash, not the plaintext password.
+Protected-action OTP validation consumes a valid token; it is distinct from TOTP.
+A host without that facility rejects the OTP branch. Unknown body fields cannot
+select an owner or organization. Positional input retains both slots, such as
+`["<hash>",null]`; a missing slot is a schema error. Schema errors return 422,
+while malformed JSON and surplus positional elements return 400.
+
+Normal owned-device authentication precedes JSON decoding. Personal success
+returns empty HTTP 200, deletes every owned personal cipher (active, trashed or
+archived) and owned folder, and advances account revision even for an empty
+vault. Cipher deletion removes its attachment bytes and associations. Account
+credentials, client KDF, keys, stamp/exception, devices, sessions, API secrets,
+authentication requests and unrelated account settings survive.
+
+The same path has a separate organization handler. Rocket matches the
+case-sensitive decoded root `organizationId`, including nested dotted/bracket
+names and leading delimiters. A present value is initially a string, including
+empty or non-UUID input; it selects organization authorization rather than the
+personal purge. For the supported personal account, those organization requests
+return 401 without deleting its vault. Missing, unrelated or differently cased
+names select the personal handler. Duplicate scalar values use the first value.
+Organization-owner purge remains a distinct unimplemented inventory variant.
+Other methods do not become purge aliases: GET, PUT and DELETE match upstream
+dynamic cipher-ID paths and return 422 after valid authentication, or 401
+without it; PATCH returns 404. These failures do not delete vault data.
+
+Both the [pinned handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L1703-L1775)
+and [release 1.37.4](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/ciphers.rs#L1703-L1775)
+have identical purge declarations and handlers. Query dispatch follows
+[`OrgIdGuard`/`OrgHeaders`](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth.rs#L753-L829),
+not the UUID path guard. All six selected Rust cases pass against the actual
+adapter and release 1.37.4: 327 counted HTTP requests each, six identity requests,
+three auth-request creations, three polls and eight successful purges. Two shared
+fixture registrations are excluded. Complete error, transport, notification and
+organization variants remain outside this subset.

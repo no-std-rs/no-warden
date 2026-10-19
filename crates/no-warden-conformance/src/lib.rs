@@ -18,6 +18,7 @@ pub mod devices;
 pub mod domains;
 pub mod fixture;
 pub mod folders;
+pub mod purge;
 pub mod registration;
 pub mod transport;
 pub mod webauthn_credentials;

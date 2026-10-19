@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 406 active Rust tests: 182 core, 149 host, and 75 conformance
+The workspace has 422 active Rust tests: 190 core, 156 host, and 76 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -251,7 +251,7 @@ at least 121 real seconds after the latest password change; exact equal-second
 boundary behavior has separate pure-core/provider tests.
 
 
-The final local regression passes all 104 HTTP cases with 4499 tracked
+The preceding password milestone passed all 104 local HTTP cases with 4499 tracked
 requests across thirteen groups, including real authentication-request and
 password-exception expiry. The unchanged official CLI 2026.10.0 baseline passes
 all 120 commands against each actual server, separately from the focused KDF
@@ -268,3 +268,22 @@ identity requests (six successful grants and two rejected refreshes), and a real
 121-second exception wait. The two direct peers receive three and five identity
 requests, preserving unchanged reference limits. Two shared fixture registrations
 are excluded. No CLI call or full WebAuthn authentication claim is inferred.
+
+The personal-vault purge extension adds allocation-free proof-before-mutation
+provider tests and a separate Rust `--suite personal-vault-purge` comparison.
+The six cases run separately from the default 104-case selection and from the
+six WebAuthn metadata cases. Its exact empty response does not count as a typed
+JSON response. `BW_PURGE_RECEIPT` names an optional private counts-only receipt.
+Seven core module tests plus one route test exercise the borrowed provider
+contract. Host tests prove cascade/folder/revision/deferred-commit rollback,
+private-database reopen, bound authority, organization-query isolation and old
+stamp rejection. The selected
+comparison passes all six cases against the actual adapter and unchanged-limit
+Vaultwarden 1.37.4: 327 counted HTTP requests each, six identity requests (five
+successful grants and one refresh), three auth-request creations, three polls
+and eight successful purges. Two shared fixture registrations are excluded; all
+six identity requests use one direct peer. The fresh attachment capability
+checks prove pre-purge bytes and post-purge revocation within 30 seconds; physical
+BLOB/grant/row deletion is separate SQL evidence. A fresh official CLI 2026.10.0
+regression also passes all 120 commands against both actual servers. It remains
+separate and establishes no purge command or captured route claim.

@@ -211,6 +211,8 @@ WebAuthn credential-metadata group is selected separately. `--suite personal` se
 `--suite account-password` selects password changes and previous-stamp authorization.
 `--suite webauthn-credentials` selects read-only WebAuthn credential metadata and
 its current-device/previous-stamp guards; it is separate from `--suite all`.
+`--suite personal-vault-purge` separately selects six destructive disposable-vault
+checks; it is also excluded from `--suite all`.
 `--suite account-password-cli` separately runs the ten-command fresh-cache password
 change proof and is excluded from `--suite all`.
 `--suite account-kdf-cli` separately verifies fresh-cache CLI decryption after an
@@ -222,7 +224,7 @@ Invalid arguments return exit code 2 without echoing supplied values.
 `BW_DOMAINS_RECEIPT`, `BW_DEVICES_RECEIPT`, `BW_DEVICE_TOKENS_RECEIPT`,
 `BW_AUTH_REQUESTS_RECEIPT`, `BW_AUTH_RESPONSES_RECEIPT`, `BW_AUTH_LOGIN_RECEIPT`,
 `BW_REGISTRATION_RECEIPT`, `BW_ACCOUNT_SECURITY_RECEIPT`, `BW_ACCOUNT_KDF_RECEIPT`,
-`BW_ACCOUNT_PASSWORD_RECEIPT`, and `BW_WEBAUTHN_CREDENTIALS_RECEIPT`
+`BW_ACCOUNT_PASSWORD_RECEIPT`, `BW_WEBAUTHN_CREDENTIALS_RECEIPT`, and `BW_PURGE_RECEIPT`
 optionally name new private result
 files for their respective groups. Existing paths are
 rejected; files are created with mode 0600 and contain authored case names,
@@ -581,7 +583,7 @@ HTTP requests and one password grant exclude bootstrap and CLI-internal HTTP.
 No CLI-posted password endpoint or captured request trace is inferred.
 
 
-The final local regression passes all 104 HTTP cases with 4499 tracked
+The preceding password milestone passed all 104 local HTTP cases with 4499 tracked
 requests across thirteen groups, including real authentication-request and
 password-exception expiry. The unchanged official CLI 2026.10.0 baseline passes
 all 120 commands against each actual server, separately from the focused KDF
@@ -605,3 +607,32 @@ adapter and Vaultwarden 1.37.4: 129 counted HTTP requests per server and a real
 121-second wait, excluding two shared fixture registrations. The unchanged
 CLI120 baseline regression does not establish a GET `/api/webauthn` call, passkey
 login or key rotation; see the [source notes](../docs/api-parity.md#webauthn-credential-metadata-subset).
+
+## Personal vault purge comparison
+
+`--suite personal-vault-purge` selects the Rust proof, cleanup and preservation
+checks for `POST /api/ciphers/purge`. Run the selected reference comparison in a
+fresh disposable Vaultwarden process without changing its limiter policy. The
+suite uses cryptographically valid disposable accounts and records no passwords,
+proofs, attachment capabilities or vault contents. Its six authored cases cover authentication/proofs, JSON/method guards,
+organization-query isolation, complete personal cleanup, repeated empty/unknown
+query operations, and preserved authority/recovery. All six pass against the
+actual adapter and Vaultwarden 1.37.4 with 327 counted HTTP requests each. The
+verified identity budget is six requests on one direct loopback peer: five
+successful grants (including API-key login) and one refresh. Three auth-request
+creations, three public polls and eight successful purges are included; two shared
+fixture registrations are excluded from the direct HTTP counter. The tests
+confirm empty server lists, foreign attachment bytes remain intact and a fresh
+post-purge cipher decrypts through the Rust fixture. Fresh URLs for three owned
+and one foreign attachment return exact bytes before purge; owned URLs then
+return 404 while the foreign URL remains byte-exact 200, all within 30 seconds
+of issuance. Physical BLOB/grant deletion has separate local SQL proof. Rate settings
+and forwarded-IP overrides are unchanged.
+`BW_PURGE_RECEIPT` names a new private mode-0600 counts-only result file.
+
+This is personal purge, preserving account credentials, sessions, devices,
+settings and authentication requests. The separate organization-query handler
+remains unimplemented. A fresh official CLI 2026.10.0 regression passes all
+120 commands against both actual servers; it is independent and supplies no purge
+command caller or request trace. See the
+[protocol references](../docs/protocol.md#personal-vault-purge).
