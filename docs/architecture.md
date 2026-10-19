@@ -5,7 +5,8 @@ permissions before opening it. Startup also restricts existing database, WAL,
 shared-memory, and rollback-journal files. Filesystem providers remain outside
 the allocation-free core.
 
-The standalone host caps encoded HTTP bodies at 16 MiB. Encrypted-field validation normally caps decoded values at 1 MiB; the larger
+The standalone host caps ordinary encoded HTTP bodies at 16 MiB; file-Send
+multipart uploads use the upstream decimal 525,000,000-byte cap. Encrypted-field validation normally caps decoded values at 1 MiB; the larger
 transport budget accommodates JSON escaping and request metadata. Folder CRUD
 uses the explicit opaque-name policy described below. Oversized requests fail
 before dispatch.
@@ -887,6 +888,43 @@ All six selected HTTP cases pass against the adapter and actual Vaultwarden
 grant requests and 15 recipient access requests. Two fixture registrations are
 excluded. Authenticated ciphertext decryption, exact projections, ownership,
 password lifecycle, access limits and preserved unrelated state are compared.
-The separate official CLI 2026.10.0 run passes all twenty commands on both servers. File Sends, email verification,
+The separate official CLI 2026.10.0 text run passes all twenty commands on both servers. File Send support is described below; email verification,
 enterprise/configuration policy, notification delivery, rate controls and
 scheduled purge remain outside this supported subset; full API parity stays open.
+
+## Personal file Sends
+
+`FileSendStorage` extends the opt-in Send provider without adding operations to
+existing `SendStorage` adapters. The core validates reservation length/quota,
+immutable file updates, upload ownership/name/identity/exact size, recipient
+count reservation and binary-capability authorization. `FileSendRequest<P>` is
+a borrowed semantic view after adapter decoding; `SendFileUpload` contains
+measured facts, not a multipart decoder or byte buffer. Generic reservation and
+download serializers emit four and three fields. Provider-owned URL/string
+handles keep allocation outside the library.
+
+Reservation stores a fresh 64-character lowercase-hex file ID and authoritative
+metadata. The declared encrypted-length limit is 550,502,400 bytes (525 MiB);
+upstream's actual multipart/file cap is decimal 525,000,000 bytes. The host uses
+that multipart cap and retains its ordinary 16 MiB body limit. No live maximum
+upload is claimed. Type-1 updates preserve raw file metadata and bytes. Upload
+requires the exact raw encrypted filename; retained CLI device types 23–25 also
+allow the received filename to be a suffix of the stored name. It requires
+exact measured length, preserves rejected reservations, and cannot overwrite
+existing bytes. Successful upload advances only account revision.
+
+The host commits BLOB insertion and account revision together, stronger than the
+upstream filesystem sequence. Tests inject insertion, revision and deferred-FK
+commit failures, then prove clean retries. Binary data, reservation and signer
+survive reopen; Send/account-FK cleanup preserves foreign state. Later response
+or capability generation can fail after a stored mutation, as in the source.
+File metadata access does not consume count but touches owner revision; file-URL
+issuance reserves count before minting a 120-second capability with 30-second
+leeway. Binary GET checks only token/path and existing bytes, so an issued URL
+survives policy/date/count changes until expiry or physical deletion.
+
+Six Rust HTTP cases pass against both actual servers. A separate twenty-command
+official CLI run passes both and compares received arbitrary bytes exactly.
+Object storage, configured quota/policy matrices, email OTP, notifications,
+rate controls, purge scheduling, Range/full transport and RS256 equivalence
+remain outside this personal subset. No full API or captured-trace claim follows.

@@ -43,7 +43,8 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | `POST /identity/accounts/register/send-verification-email`, `POST /identity/accounts/register/finish` | No-SMTP new-account verification token and canonical atomic completion; old/current credential shapes | Eight matching corrected Rust HTTP cases on both actual servers; borrowed opt-in core/provider and host parser, token, rollback/reopen and HTTP-dispatch tests; fresh unchanged CLI regression remains separate |
 | Prelogin legacy and identity aliases | PBKDF2/Argon2 parameters | Latest CLI and HTTP |
 | `POST /identity/connect/token` | Reusable ordinary password grant and password-method refresh; valid refresh proofs can be reused with current device authority | CLI baseline, six matching ordinary-password Rust cases and eight matching refresh cases. Refresh JWT encoding and complete identity policy remain open |
-| Personal text Sends, recipient `send_access` grant and sync | Encrypted owner lifecycle, scoped recipient access, password management and atomic access limits | Six matching Rust HTTP cases and twenty matching official CLI commands on both servers. File Sends and full policy/transport parity remain open |
+| Personal text Sends, recipient `send_access` grant and sync | Encrypted owner lifecycle, scoped recipient access, password management and atomic access limits | Six matching Rust HTTP cases and twenty matching official CLI commands on both servers. File Sends are verified separately below; full policy/transport parity remains open |
+| Personal file Sends: reservation, multipart upload, file-URL issuance and binary GET | Immutable encrypted metadata, exact bytes, scoped capabilities and create-only storage | Six matching HTTP cases and a separate twenty-command official CLI comparison on both servers; configured policies and full transport remain open |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
 | `GET /api/accounts/keys`, `POST /api/accounts/keys`, `GET /api/users/<id>/public-key` | Owner-only private retrieval, initialization of an absent pair, authenticated cross-user public lookup | Borrowed core/provider contracts; Rust HTTP comparison group and SQLite rollback/reopen tests |
 | `POST /api/accounts/api-key`, `POST /api/accounts/rotate-api-key` | Password-reauthenticated personal key retrieval, lazy creation, rotation | Core, HTTP comparison with upstream, rollback and restart tests; keys used by real CLI |
@@ -102,7 +103,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 521 active workspace unit tests pass: 245 core, 184 host and 92 support,
+All 548 active workspace unit tests pass: 260 core, 192 host and 96 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -852,7 +853,7 @@ A fresh official CLI 2026.10.0 regression passes all 120 commands against both
 servers. The generated SDK API shape is documented, but neither that source
 attribution nor the regression establishes an actual client account-deletion
 flow or CLI-route trace. Account recovery, successful
-protected-action OTP, organization/emergency-access/file-Sends lifecycle and complete
+protected-action OTP, organization/emergency-access and broader Send lifecycle variants, and complete
 cross-version failure semantics remain open. See the
 [parity notes](api-parity.md#personal-account-deletion-subset).
 
@@ -944,7 +945,38 @@ current disabled/deadline/count/deletion state.
 Local SQL tests separately cover mutation rollback, persisted signer/rows,
 account-deletion cleanup and vault-purge preservation. They do not establish
 identical upstream failure timing. The host signs Send JWTs with HS256 while
-upstream uses RS256. File Sends, email OTP, organization/configuration policies,
+upstream uses RS256. File Send support is described below; email OTP, organization/configuration policies,
 notifications, purge scheduling, rate/abuse controls and full transport/JWT
 equivalence remain open. No captured request trace or full endpoint status is
 claimed.
+
+## Personal file Sends
+
+Four more route patterns cover `POST /api/sends/file/v2`, multipart
+`POST /api/sends/{id}/file/{file_id}`, scoped
+`POST /api/sends/access/file/{file_id}` and capability-protected binary
+`GET /api/sends/{id}/{file_id}?t=…`. Existing owner CRUD, list/sync, recipient
+metadata and `send_access` now retain type-1 files. The static client upload-URL
+renewal GET is not a registered Vaultwarden handler and is not implemented.
+
+Both actual targets pass six selected Rust cases: 131 counted HTTP requests,
+10 Send-token grants, nine multipart requests, 13 download-URL requests,
+19 binary GETs and two password logins, excluding two registrations. They
+verify authenticated decryption of arbitrary and empty plaintext files, exact
+projections, immutable edits, upload failures/duplicate protection, current
+availability/count checks and fresh-URL behavior before/after deletion. Local
+unit tests separately prove scalar reservations, multipart first-field/root
+semantics, physical BLOB cleanup, rollback and persisted signing authority.
+
+The separate official CLI 2026.10.0 file selection passes all twenty commands on
+both targets: create/upload, sync/cache metadata, edit, password removal and two
+byte-exact anonymous receives. Fresh recipient stores and strict wrong-password
+and deleted-resource messages exclude unrelated failure categories. These are
+separate from text-Send20 and baseline120, with no captured request trace.
+
+Declared length allows 525 MiB; multipart transport caps at 525,000,000 bytes.
+The host's atomic SQLite cleanup is stronger than the upstream filesystem
+sequence. Scoped URLs remain readable after disable/date/count changes while
+bytes and token remain valid. No live TTL/maximum upload, configured quota,
+organization/email policy, object storage, notification/rate/cron, Range/full
+transport or RS256-equivalence claim is made. Full Send/API parity remains open.

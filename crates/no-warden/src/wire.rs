@@ -301,6 +301,33 @@ impl<P: ?Sized> core::fmt::Debug for TextSendRequest<'_, P> {
     }
 }
 
+/// File-Send semantic view after the adapter's complete JSON/date decoder.
+/// `common.text` is ignored. File metadata is required for reservation and immutable
+/// during update; file_length is consulted only by the reservation service.
+pub struct FileSendRequest<'a, P: ?Sized> {
+    pub common: TextSendRequest<'a, P>,
+    pub file: Option<&'a P>,
+    pub file_length: Option<crate::sends::SendNumber<'a>>,
+}
+
+/// A minimal borrowed encrypted file payload. The generic file-Send service also
+/// accepts richer caller-owned payloads; this is not the complete HTTP SendData decoder.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendFileData<'a> {
+    pub file_name: &'a str,
+}
+impl core::fmt::Debug for SendFileData<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SendFileData").finish_non_exhaustive()
+    }
+}
+impl<P: ?Sized> core::fmt::Debug for FileSendRequest<'_, P> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("FileSendRequest").finish_non_exhaustive()
+    }
+}
+
 /// Borrowed send_access form view. Missing/duplicate Option field semantics and complete
 /// form/root-name decoding belong to the HTTP adapter; opaque password input is not decoded.
 #[derive(Deserialize)]
@@ -320,6 +347,7 @@ impl core::fmt::Debug for SendAccessTokenRequest<'_> {
 
 pub struct SendOwnerResponse<'a, P: Serialize> {
     pub(crate) record: crate::sends::SendRecord<'a, P>,
+    pub(crate) kind: i32,
 }
 impl<P: Serialize> core::fmt::Debug for SendOwnerResponse<'_, P> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -333,11 +361,11 @@ impl<P: Serialize> Serialize for SendOwnerResponse<'_, P> {
         let mut value = serializer.serialize_struct("SendOwnerResponse", 18)?;
         value.serialize_field("id", r.id)?;
         value.serialize_field("accessId", r.access_id)?;
-        value.serialize_field("type", &0_i32)?;
+        value.serialize_field("type", &self.kind)?;
         value.serialize_field("name", r.name)?;
         value.serialize_field("notes", &r.notes)?;
-        value.serialize_field("text", &r.text)?;
-        value.serialize_field("file", &None::<()>)?;
+        value.serialize_field("text", &if self.kind == 0 { Some(&r.text) } else { None })?;
+        value.serialize_field("file", &if self.kind == 1 { Some(&r.text) } else { None })?;
         value.serialize_field("key", r.key)?;
         value.serialize_field("maxAccessCount", &r.max_access_count)?;
         value.serialize_field("accessCount", &r.access_count)?;
@@ -358,6 +386,7 @@ impl<P: Serialize> Serialize for SendOwnerResponse<'_, P> {
 
 pub struct SendRecipientResponse<'a, P: Serialize> {
     pub(crate) record: crate::sends::SendRecord<'a, P>,
+    pub(crate) kind: i32,
 }
 impl<P: Serialize> core::fmt::Debug for SendRecipientResponse<'_, P> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -371,10 +400,10 @@ impl<P: Serialize> Serialize for SendRecipientResponse<'_, P> {
         let r = &self.record;
         let mut value = serializer.serialize_struct("SendRecipientResponse", 8)?;
         value.serialize_field("id", r.access_id)?;
-        value.serialize_field("type", &0_i32)?;
+        value.serialize_field("type", &self.kind)?;
         value.serialize_field("name", r.name)?;
-        value.serialize_field("text", &r.text)?;
-        value.serialize_field("file", &None::<()>)?;
+        value.serialize_field("text", &if self.kind == 0 { Some(&r.text) } else { None })?;
+        value.serialize_field("file", &if self.kind == 1 { Some(&r.text) } else { None })?;
         value.serialize_field("expirationDate", &r.expiration_date)?;
         value.serialize_field(
             "creatorIdentifier",
@@ -413,7 +442,11 @@ impl<'a, L: crate::sends::SendListData<'a>> Serialize for SendListResponse<'a, L
                         .list
                         .get(index)
                         .ok_or_else(|| serde::ser::Error::custom("Invalid Send list view"))?;
-                    values.serialize_element(&SendOwnerResponse { record })?;
+                    let kind = self
+                        .list
+                        .kind(index)
+                        .ok_or_else(|| serde::ser::Error::custom("Invalid Send list type"))?;
+                    values.serialize_element(&SendOwnerResponse { record, kind })?;
                 }
                 values.end()
             }
@@ -428,6 +461,51 @@ impl<'a, L: crate::sends::SendListData<'a>> Serialize for SendListResponse<'a, L
         )?;
         value.serialize_field("object", "list")?;
         value.serialize_field("continuationToken", &None::<()>)?;
+        value.end()
+    }
+}
+
+/// Explicit owner upload transport response. Debug never exposes its URL or keys.
+pub struct SendFileUploadResponse<'a, P: Serialize, U: AsRef<str>> {
+    pub(crate) response: SendOwnerResponse<'a, P>,
+    pub(crate) url: U,
+}
+impl<P: Serialize, U: AsRef<str>> core::fmt::Debug for SendFileUploadResponse<'_, P, U> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SendFileUploadResponse")
+            .finish_non_exhaustive()
+    }
+}
+impl<P: Serialize, U: AsRef<str>> Serialize for SendFileUploadResponse<'_, P, U> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut value = serializer.serialize_struct("SendFileUploadResponse", 4)?;
+        value.serialize_field("fileUploadType", &0_i32)?;
+        value.serialize_field("object", "send-fileUpload")?;
+        value.serialize_field("url", self.url.as_ref())?;
+        value.serialize_field("sendResponse", &self.response)?;
+        value.end()
+    }
+}
+
+/// Capability URL returned only after a successful file access reservation.
+pub struct SendFileDownloadResponse<'a, U: AsRef<str>> {
+    pub(crate) file_id: &'a str,
+    pub(crate) url: U,
+}
+impl<U: AsRef<str>> core::fmt::Debug for SendFileDownloadResponse<'_, U> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SendFileDownloadResponse")
+            .finish_non_exhaustive()
+    }
+}
+impl<U: AsRef<str>> Serialize for SendFileDownloadResponse<'_, U> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut value = serializer.serialize_struct("SendFileDownloadResponse", 3)?;
+        value.serialize_field("object", "send-fileDownload")?;
+        value.serialize_field("id", self.file_id)?;
+        value.serialize_field("url", self.url.as_ref())?;
         value.end()
     }
 }

@@ -27,8 +27,9 @@ authority, exact responses and password/KDF/stamp revocation. Upstream refresh
 JWT encoding and complete identity policies remain open.
 Six matching HTTP cases cover personal text Sends, recipient capabilities,
 password replacement/removal and access limits. The separate twenty-command
-official-client text-Send comparison passes both servers; file Sends and full Send
-parity remain open.
+official-client text-Send comparison passes both servers. Six more matching HTTP
+cases and a separate twenty-command official CLI comparison verify personal file
+Sends, including byte-exact anonymous downloads. Full Send parity remains open.
 The remaining surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden
 replacement. Client-side vault encryption stays with the client.
@@ -95,7 +96,7 @@ bounded collections require no allocator. Opt-in `ImportStorage`,
 `DevicePushStorage`, `AuthRequestStorage`, `AuthRequestResponseStorage`,
 `AuthRequestLoginStorage`, `RegistrationStorage`, `AccountSecurityStorage`,
 `AccountKdfStorage`, `AccountPasswordStorage`, `VaultPurgeStorage`,
-`AccountDeletionStorage`, `CipherReadStorage`, `PasswordLoginStorage`, `RefreshStorage`, `SendStorage`, and
+`AccountDeletionStorage`, `CipherReadStorage`, `PasswordLoginStorage`, `RefreshStorage`, `SendStorage`, `FileSendStorage`, and
 `AttachmentStorage` providers add
 batch operations,
 credential and account-key services, profile metadata and equivalent-domain updates, device discovery,
@@ -105,7 +106,7 @@ modern account verification/finish, password verification, security-stamp renewa
 client KDF transitions, password changes and previous-stamp authorization,
 reauthenticated personal-vault purge and account deletion,
 authorization for ordinary/details/admin cipher reads, ordinary password-grant
-validation, reusable password-method refresh, personal text Sends and attachment transitions
+validation, reusable password-method refresh, personal text/file Sends and attachment transitions
 without adding an allocator. See [architecture](docs/architecture.md) and
 [CI and review](docs/ci.md).
 
@@ -118,7 +119,7 @@ no-warden = { git = "https://github.com/no-std-rs/no-warden" }
 
 Supported personal-vault operations include registration, PBKDF2/Argon2 KDF
 discovery, password and API-key authentication, personal API-key retrieval/rotation, password
-refresh renewal, personal text Sends, account-key retrieval/initialization/public lookup, profile
+refresh renewal, personal text/file Sends, account-key retrieval/initialization/public lookup, profile
 name/avatar updates, equivalent-domain settings and sync, public known-device
 checks, authenticated device list/lookup, auth-request creation/discovery, folders,
 encrypted ciphers, JSON/CSV import, bulk trash/restore/deletion, archive/unarchive, and personal attachments with

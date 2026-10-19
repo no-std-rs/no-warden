@@ -19,8 +19,10 @@ use no_warden::{
     registration::RegistrationEmail,
     route::{Method, classify},
     sends::{
-        SendContext, SendListData, SendLookup, SendNumber, SendPayload, SendPolicy, SendRecord,
-        SendState, SendStorage, ValidatedSendAccess, ValidatedTextSend,
+        AuthorizedSendFileDownload, FileSendStorage, SendContext, SendFileMetadata, SendFileQuota,
+        SendFileUpload, SendListData, SendLookup, SendNumber, SendPayload, SendPolicy, SendRecord,
+        SendState, SendStorage, ValidatedFileSend, ValidatedSendAccess, ValidatedSendFileUpload,
+        ValidatedTextSend,
     },
     service::{ImportData, ItemMetadata},
     wire::{
@@ -30,14 +32,15 @@ use no_warden::{
         AuthRequestResponse, AuthRequestUpdateRequest, AvatarUpdateRequest, CipherIdsRequest,
         CipherRequest, ClientCredentialsRequest, DeviceListResponse, DevicePushTokenRequest,
         DeviceResponse, DomainSettingsRequest, DomainSettingsResponse,
-        DomainSettingsUpdateResponse, FolderRequest, ImportRequest, InitializedAccountKeysResponse,
-        KnownDeviceRequest, KnownDeviceResponse, MasterPasswordPolicy,
-        MasterPasswordPolicyResponse, PasswordLoginRequest, PasswordOrOtpRequest, PreloginRequest,
-        PreloginResponse, ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest,
-        RegistrationAuthentication, RegistrationCredentials, RegistrationFinishRequest,
-        RegistrationFinishResponse, RegistrationUnlock, RegistrationVerificationRequest,
-        RegistrationVerificationToken, SecretVerificationRequest, SendAccessTokenRequest,
-        TextSendRequest, UserPublicKeyResponse, WebAuthnCredentialsResponse,
+        DomainSettingsUpdateResponse, FileSendRequest, FolderRequest, ImportRequest,
+        InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
+        MasterPasswordPolicy, MasterPasswordPolicyResponse, PasswordLoginRequest,
+        PasswordOrOtpRequest, PreloginRequest, PreloginResponse, ProfileUpdateRequest,
+        RefreshTokenRequest, RegisterRequest, RegistrationAuthentication, RegistrationCredentials,
+        RegistrationFinishRequest, RegistrationFinishResponse, RegistrationUnlock,
+        RegistrationVerificationRequest, RegistrationVerificationToken, SecretVerificationRequest,
+        SendAccessTokenRequest, SendFileData, TextSendRequest, UserPublicKeyResponse,
+        WebAuthnCredentialsResponse,
     },
 };
 
@@ -51,6 +54,8 @@ struct PurgeProbe {
     send_present: bool,
     send_count: i32,
     send_maximum: Option<i32>,
+    send_kind: i32,
+    file_uploaded: bool,
 }
 impl PurgeProbe {
     fn send_record(&self) -> SendRecord<'_, Option<&'static str>> {
@@ -82,6 +87,9 @@ impl<'a> SendListData<'a> for SendProbeRecords<'a> {
     }
     fn get(&self, index: usize) -> Option<SendRecord<'a, Self::Payload>> {
         (index == 0 && self.0.send_present).then(|| self.0.send_record())
+    }
+    fn kind(&self, index: usize) -> Option<i32> {
+        (index == 0 && self.0.send_present).then_some(self.0.send_kind)
     }
 }
 impl Storage for PurgeProbe {
@@ -135,7 +143,7 @@ impl SendStorage for PurgeProbe {
             (id == "embedded-send" && self.send_present).then_some(SendState {
                 id: "embedded-send",
                 owner_id: "embedded-owner",
-                kind: 0,
+                kind: self.send_kind,
                 disabled: false,
                 max_access_count: self.send_maximum,
                 access_count: self.send_count,
@@ -163,6 +171,7 @@ impl SendStorage for PurgeProbe {
         ));
         black_box((buffer, plan.password_change()));
         self.send_present = true;
+        self.send_kind = 0;
         self.send_count = 0;
         self.send_maximum = plan.max_access_count();
         Ok("embedded-send")
@@ -206,6 +215,81 @@ impl SendStorage for PurgeProbe {
         }
         self.send_count += 1;
         Ok(true)
+    }
+}
+impl FileSendStorage for PurgeProbe {
+    type Url = &'static str;
+    fn file_send_quota(&mut self, _: &str) -> Result<SendFileQuota, ()> {
+        Ok(SendFileQuota::default())
+    }
+    fn create_file_send<P: SendPayload + ?Sized>(
+        &mut self,
+        _: &str,
+        plan: &ValidatedFileSend<'_, '_, P>,
+    ) -> Result<Self::SendId, ()> {
+        let mut output = [0; 256];
+        let _ = black_box(serde_json_core::to_slice(
+            plan.request().file.unwrap(),
+            &mut output,
+        ));
+        black_box((plan.common(), plan.file_length(), plan.password_change()));
+        self.send_present = true;
+        self.send_kind = 1;
+        self.send_count = 0;
+        self.send_maximum = plan.max_access_count();
+        Ok("embedded-send")
+    }
+    fn update_file_send<P: SendPayload + ?Sized>(
+        &mut self,
+        _: &str,
+        _: &str,
+        plan: &ValidatedFileSend<'_, '_, P>,
+    ) -> Result<(), ()> {
+        black_box(plan);
+        Ok(())
+    }
+    fn send_file_metadata(&mut self, _: &str) -> SendLookup<SendFileMetadata<'_>, ()> {
+        Ok(Some(SendFileMetadata {
+            file_id: "embedded-file",
+            file_name: "opaque-file",
+            file_size: 4,
+        }))
+    }
+    fn commit_send_file_upload(
+        &mut self,
+        _: &str,
+        plan: &ValidatedSendFileUpload<'_>,
+    ) -> Result<bool, ()> {
+        black_box((plan.id(), plan.file_id(), plan.file_size()));
+        if self.file_uploaded {
+            return Ok(false);
+        }
+        self.file_uploaded = true;
+        self.revision += 1;
+        Ok(true)
+    }
+    fn touch_file_send_access(&mut self, _: &ValidatedSendAccess<'_>) -> Result<(), ()> {
+        self.revision += 1;
+        Ok(())
+    }
+    fn send_file_upload_url(&mut self, _: &str) -> Result<Self::Url, ()> {
+        Ok("/sends/embedded-send/file/embedded-file")
+    }
+    fn send_file_download_url(
+        &mut self,
+        grant: &AuthorizedSendFileDownload<'_>,
+    ) -> Result<Self::Url, ()> {
+        black_box((grant.id(), grant.file_id(), grant.expires_in()));
+        Ok("/api/sends/embedded-send/embedded-file?t=opaque")
+    }
+    fn verify_send_file_download(
+        &mut self,
+        _: &str,
+        _: &str,
+        proof: &Secret<'_>,
+    ) -> Result<bool, ()> {
+        black_box(proof);
+        Ok(self.verified)
     }
 }
 impl PasswordLoginStorage for PurgeProbe {
@@ -387,6 +471,8 @@ pub extern "C" fn _start() -> ! {
             send_present: black_box(false),
             send_count: black_box(0),
             send_maximum: None,
+            send_kind: 0,
+            file_uploaded: false,
         };
         let payload = black_box("opaque-text");
         let send = TextSendRequest {
@@ -429,6 +515,67 @@ pub extern "C" fn _start() -> ! {
         ));
         if let Ok(response) = service.list_sends("embedded-owner") {
             let _ = black_box(serde_json_core::to_slice(&response, &mut send_output));
+        }
+        let file = serde_json_core::from_slice::<SendFileData<'_>>(black_box(
+            br#"{"fileName":"opaque-file"}"#,
+        ));
+        if let Ok((file, _)) = file {
+            let request = FileSendRequest {
+                common: TextSendRequest {
+                    kind: 1,
+                    key: "opaque-key",
+                    password: None,
+                    max_access_count: Some(SendNumber::Integer(1)),
+                    expiration_ns: None,
+                    deletion_ns: 1000,
+                    disabled: false,
+                    hide_email: None,
+                    emails: None,
+                    name: "opaque-name",
+                    notes: None,
+                    text: None,
+                },
+                file: Some(&file),
+                file_length: Some(SendNumber::Integer(4)),
+            };
+            if let Ok(response) = service.reserve_file_send("embedded-owner", &request, &context) {
+                let _ = black_box(serde_json_core::to_slice(&response, &mut send_output));
+            }
+            let _ = black_box(service.upload_send_file(
+                "embedded-owner",
+                "embedded-send",
+                "embedded-file",
+                &SendFileUpload {
+                    file_name: Some("opaque-file"),
+                    file_size: 4,
+                    allow_legacy_filename_suffix: false,
+                },
+            ));
+            if let Ok(response) =
+                service.access_send(&Secret::new("external-recipient-proof"), &context)
+            {
+                let _ = black_box(serde_json_core::to_slice(&response, &mut send_output));
+            }
+            if let Ok(response) = service.access_send_file(
+                &Secret::new("external-recipient-proof"),
+                "embedded-file",
+                &context,
+            ) {
+                let _ = black_box(serde_json_core::to_slice(&response, &mut send_output));
+            }
+            let _ = black_box(service.authorize_send_file_download(
+                "embedded-send",
+                "embedded-file",
+                &Secret::new("external-file-proof"),
+            ));
+            if let Ok(response) =
+                service.update_file_send("embedded-owner", "embedded-send", &request, &context)
+            {
+                let _ = black_box(serde_json_core::to_slice(&response, &mut send_output));
+            }
+            if let Ok(response) = service.list_sends("embedded-owner") {
+                let _ = black_box(serde_json_core::to_slice(&response, &mut send_output));
+            }
         }
         black_box(send_output);
         let password_login = serde_json_core::from_slice::<PasswordLoginRequest<'_>>(black_box(
@@ -486,6 +633,19 @@ pub extern "C" fn _start() -> ! {
         ));
     }
     black_box(classify(Method::Post, black_box("/api/ciphers/purge")));
+    black_box(classify(Method::Post, black_box("/api/sends/file/v2")));
+    black_box(classify(
+        Method::Post,
+        black_box("/api/sends/send/file/file-id"),
+    ));
+    black_box(classify(
+        Method::Post,
+        black_box("/api/sends/access/file/file-id"),
+    ));
+    black_box(classify(
+        Method::Get,
+        black_box("/api/sends/send/file-id?t=opaque"),
+    ));
     black_box(classify(Method::Delete, black_box("/api/accounts")));
     black_box(classify(Method::Post, black_box("/api/accounts/delete")));
     black_box(classify(

@@ -169,6 +169,46 @@ pub(crate) fn decrypt(cipher_string: &str, key: &[u8; 64]) -> Result<Vec<u8>, &'
         .map_err(|_| "invalid padding")
 }
 
+/// Standard HKDF-SHA256 Send derivation from the 16-byte URL-fragment seed.
+pub(crate) fn send_key(seed: &[u8; 16]) -> [u8; 64] {
+    let prk = authenticate(b"bitwarden-send", &[seed]);
+    let first = authenticate(&prk, &[b"send", &[1]]);
+    let second = authenticate(&prk, &[&first, b"send", &[2]]);
+    let mut key = [0; 64];
+    key[..32].copy_from_slice(&first);
+    key[32..].copy_from_slice(&second);
+    key
+}
+
+/// EncArrayBuffer: type byte, IV, MAC, then CBC ciphertext. This differs from
+/// the textual EncString order; no file plaintext is returned before MAC checks.
+pub(crate) fn encrypt_file(plaintext: &[u8], key: &[u8; 64]) -> Result<Vec<u8>, FixtureError> {
+    let encoded = encrypt(plaintext, key)?;
+    let fields = encoded[2..].split('|').collect::<Vec<_>>();
+    let mut bytes = vec![2];
+    for index in [0, 2, 1] {
+        bytes.extend(
+            STANDARD
+                .decode(fields[index])
+                .map_err(|_| FixtureError(Failure::CredentialRewrap))?,
+        );
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn decrypt_file(bytes: &[u8], key: &[u8; 64]) -> Result<Vec<u8>, &'static str> {
+    if bytes.len() < 65 || bytes[0] != 2 || !(bytes.len() - 49).is_multiple_of(16) {
+        return Err("invalid encrypted file format");
+    }
+    let encoded = format!(
+        "2.{}|{}|{}",
+        STANDARD.encode(&bytes[1..17]),
+        STANDARD.encode(&bytes[49..]),
+        STANDARD.encode(&bytes[17..49])
+    );
+    decrypt(&encoded, key)
+}
+
 fn openssl(arguments: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>, FixtureError> {
     let mut child = Command::new("openssl")
         .args(arguments)

@@ -15,6 +15,9 @@ mod protocol;
 mod purge;
 mod refresh;
 mod registration;
+mod send_files;
+#[cfg(test)]
+mod send_files_tests;
 mod sends;
 mod store;
 
@@ -234,7 +237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let router = Router::new()
         .fallback(dispatch_http)
-        .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
+        .layer(axum::middleware::from_fn(request_body_limit))
         .with_state(app);
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     eprintln!("no-warden conformance server listening on {bind}; database {database}");
@@ -247,6 +250,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .await?;
     Ok(())
+}
+
+async fn request_body_limit(
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let is_file_upload = route::Method::parse(request.method().as_str())
+        .and_then(|method| route::classify(method, request.uri().path()))
+        .is_some_and(|route| matches!(route, Route::SendFileUpload(..)));
+    let maximum = if is_file_upload {
+        send_files::MAX_MULTIPART_BYTES
+    } else {
+        MAX_REQUEST_BYTES
+    };
+    DefaultBodyLimit::max(maximum).apply(&mut request);
+    next.run(request).await
 }
 
 async fn dispatch_http(
@@ -315,12 +334,33 @@ async fn dispatch_with_peer(
     } else {
         None
     };
+    let send_upload = if matches!(route, Route::SendFileUpload(..)) {
+        if !headers
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("multipart/form-data"))
+        {
+            return Err(missing());
+        }
+        // Parse before locking, but defer data-guard failures until ordinary
+        // account/device and path guards have run.
+        Some(send_files::parse_upload(&headers, body.clone()).await)
+    } else {
+        None
+    };
     let mut store = app
         .store
         .lock()
         .map_err(|_| Failure(StatusCode::INTERNAL_SERVER_ERROR, "Storage unavailable"))?;
     if let Route::AttachmentDownload(cipher_id, attachment_id) = route {
         return attachments::download(&mut store, cipher_id, attachment_id, uri.query());
+    }
+    if let Route::SendFileDownload(send_id, file_id) = route {
+        return send_files::download(&mut store, send_id, file_id, uri.query());
+    }
+    if let Route::SendFileAccess(file_id) = route {
+        return send_files::access_file(&mut store, &headers, file_id);
     }
     if let Route::DevicePushClear(segment) = route {
         let identifier = devices::path_identifier(segment)?;
@@ -533,6 +573,8 @@ async fn dispatch_with_peer(
             | Route::SendUpdate(_)
             | Route::SendDelete(_)
             | Route::SendRemovePassword(_)
+            | Route::SendFileCreate
+            | Route::SendFileUpload(..)
     ) {
         // Ordinary Send Headers require current device authority before UUID or JSON guards.
         devices::access_binding(&store.db, &digest(bearer), &owner)?.ok_or_else(unauthorized)?;
@@ -917,10 +959,51 @@ async fn dispatch_with_peer(
                     .into_response(),
             )
         }
+        Route::SendFileCreate => {
+            let input = sends::Input::parse(&body)?;
+            input.stage_dates(&mut store);
+            let request = input.file_request();
+            let mut service = VaultService::new(&mut *store);
+            Ok(
+                Json(service.reserve_file_send(&owner, &request, &sends::context())?)
+                    .into_response(),
+            )
+        }
+        Route::SendFileUpload(raw_id, raw_file_id) => {
+            let id = sends::path_id(raw_id)?;
+            let file_id = send_files::file_id(raw_file_id)?;
+            let upload = send_upload.ok_or_else(invalid)??;
+            let legacy_cli:bool=store.db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM session_devices s JOIN device_registry d ON d.owner=s.owner AND d.identifier=s.identifier WHERE s.access=?1 AND s.owner=?2 AND d.device_type IN(23,24,25))",
+                params![digest(bearer),owner],|row|row.get(0),
+            )?;
+            let facts = no_warden::sends::SendFileUpload {
+                file_name: upload.file_name.as_deref(),
+                file_size: upload.data.len() as u64,
+                allow_legacy_filename_suffix: legacy_cli,
+            };
+            store.pending_send_file_data = upload.data;
+            let result =
+                VaultService::new(&mut *store).upload_send_file(&owner, &id, &file_id, &facts);
+            store.pending_send_file_data = Vec::new();
+            result?;
+            Ok(StatusCode::OK.into_response())
+        }
         Route::SendUpdate(raw) => {
             let id = sends::path_id(raw)?;
             let input = sends::Input::parse(&body)?;
             input.stage_dates(&mut store);
+            if input.request().kind == 1 {
+                let request = input.file_request();
+                let mut service = VaultService::new(&mut *store);
+                return Ok(Json(service.update_file_send(
+                    &owner,
+                    &id,
+                    &request,
+                    &sends::context(),
+                )?)
+                .into_response());
+            }
             let request = input.request();
             let mut service = VaultService::new(&mut *store);
             Ok(

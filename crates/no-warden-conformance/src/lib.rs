@@ -18,6 +18,8 @@ pub mod cli;
 pub mod device_tokens;
 pub mod devices;
 pub mod domains;
+pub mod file_sends;
+pub mod file_sends_cli;
 pub mod fixture;
 pub mod folders;
 pub mod password_login;

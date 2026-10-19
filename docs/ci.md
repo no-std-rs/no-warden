@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 521 active Rust tests: 245 core, 184 host, and 92 conformance
+The workspace has 548 active Rust tests: 260 core, 192 host, and 96 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -370,5 +370,19 @@ fields, success responses and other exit codes without printing captured data.
 Sender and recipients use separate private caches. Its deletion check times the
 entire fresh receive/delete/recheck window before client capability expiry can
 explain rejection. The verified baseline remains 120 commands, not a combined
-140-command run. File/email/policy/configuration/notification/rate/cron behavior,
+140-command run. File Sends have their own selection below; email/policy/configuration/notification/rate/cron behavior,
 upstream RS256 equivalence and captured request traces remain outside this slice.
+
+The separate `--suite file-sends` selection passes all six cases against both
+actual targets: 131 counted HTTP requests, 10 Send grants, nine multipart requests,
+13 file-URL requests,19 binary GETs and two ordinary logins; two fixture
+registrations are excluded. `BW_FILE_SENDS_RECEIPT` stores only authored names,
+status and counters. The opt-in `--suite file-sends-cli` selection passes twenty
+official CLI 2026.10.0 commands on both, including two byte-identical receives;
+`BW_FILE_SENDS_CLI_RECEIPT` records its private receipt. Fresh recipient caches,
+strict published negative categories and whole fresh-capability windows prevent
+unrelated errors/expiry from satisfying deletion checks. This is separate from
+the text-Send and 120-command baseline suites. Host units additionally exercise multipart/query roots,
+create-only storage, deferred-commit rollback/retry, binary/signer reopen and
+owned FK cleanup. No maximum upload, live TTL, full transport or trace claim
+follows.

@@ -813,7 +813,7 @@ Restart, invalid credentials,
 refresh expiry, cross-account IDs, stale revisions, oversized input, and
 persistence without plaintext vault data remain ongoing regression requirements.
 
-Browser/mobile clients, organizations, attachments, Send, two-factor login,
+Browser/mobile clients, organizations, remaining attachment/Send variants, two-factor login,
 broader auth-request client/device-trust flows, SSO, passkey authentication, key rotation, push notifications,
 and recovery need separate implementation and actual-client evidence. A passing personal
 CLI test must not be described as complete Bitwarden or Vaultwarden parity.
@@ -1291,8 +1291,8 @@ and [release 1.37.4 handlers](https://github.com/dani-garcia/vaultwarden/blob/7c
 agree on the personal text subset. Owner routes are `GET`/`POST /api/sends`,
 `GET`/`PUT`/`DELETE /api/sends/{id}` and
 `PUT /api/sends/{id}/remove-password`. Recipient `POST /api/sends/access` uses
-separate Send-token authority. File upload/download routes remain outside this
-chunk. Owner UUID guards preserve decoded spelling and run after authentication:
+separate Send-token authority. File upload/download contracts are described
+below. Owner UUID guards preserve decoded spelling and run after authentication:
 malformed paths return 422, valid absent/foreign IDs return 400. Previous-stamp
 exceptions do not authorize these owner handlers.
 
@@ -1401,5 +1401,79 @@ read local state, so their successful decryption after sync is distinct from
 independent owner HTTP read evidence. Mutation implementations remain subject to
 the shipped SDK/legacy selector; the focused result does not identify every
 feature-flag branch or provide a captured request trace.
-File Sends, email verification, enterprise/configuration policies, notifications,
+Remaining file variants, email verification, enterprise/configuration policies, notifications,
 rate controls, scheduled purge and full transport/JWT/time parity remain open.
+
+## Personal file Sends
+
+The [pinned file handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/sends.rs#L218-L463)
+and [release 1.37.4 handlers](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/sends.rs#L218-L463)
+register four patterns: owner `POST /sends/file/v2`, owner multipart
+`POST /sends/{id}/file/{file_id}`, recipient
+`POST /sends/access/file/{file_id}`, and public
+`GET /sends/{id}/{file_id}?t=…`, mounted under `/api`.
+The client upload-renewal GET has no registered handler in either source.
+
+Reservation checks write policy, file type1, requested hidden-email policy,
+required integer-or-string `fileLength`, nonnegative length and configured quota
+before shared data/date/email/access-limit validation. The absolute declared
+ceiling is 550,502,400 bytes (525 MiB), distinct from Rocket's decimal
+525,000,000-byte multipart/file limits. Fresh IDs select persisted state; an
+object file payload receives authoritative `id`, numeric `size` and `sizeName`.
+Projection converts size to a string and applies shared key normalization;
+scalar/array payloads project null. The response has exactly `fileUploadType: 0`,
+`object: "send-fileUpload"`, relative `url: "/sends/{id}/file/{file_id}"` and
+`sendResponse`. Reservation advances Send/account revisions before bytes exist.
+
+Upload parses lenient multipart field `data`: unknown fields are ignored and the
+first matching case-sensitive Rocket root wins. Missing data is422. After
+owner/current-device and path/data guards, it checks policy, owned file type,
+strict raw `id`/`size: u64`/`fileName` metadata, filename, URL file ID and exact
+measured bytes, in that order. File IDs preserve case and permit only ASCII
+alphanumeric/hyphen path characters; malformed segments return422. Retained
+CLI device types23–25 allow `stored_filename.ends_with(received_filename)`;
+other devices require equality. Missing/foreign or mismatched uploads return400
+and retain the reservation. Default filesystem upload uses create-only writes;
+a duplicate returns ordinary400 with public message `OpenDAL`. Success is empty
+200, advances account revision, and preserves Send revision/metadata. Type-1
+PUT preserves the original raw file metadata and bytes.
+
+File recipient metadata does not consume access count, but touches account
+revision. File-URL issuance checks current availability/type/association before
+conditional count reservation, without checking byte existence. Its exact
+response is `object: "send-fileDownload"`, `id` and absolute `url`. Count and
+Send/account revision writes can precede a later URL-generation failure; a
+failed count CAS can still advance owner revision. The filesystem
+[capability claims](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth.rs#L556-L563)
+use issuer `origin|send`, exact subject `{id}/{file_id}`, 120-second lifetime and
+30-second validation leeway. Object-storage presigned URLs use a separate
+five-minute path that this adapter does not implement.
+
+Binary GET ignores ordinary bearers and current Send disabled/password/date/count
+state; it checks capability and existing bytes only, without incrementing count.
+Missing required `t` returns422; present empty/forged/misbound proof or missing
+bytes returns404. First `t` query-root matching includes dotted/bracketed names.
+Deletion removes stored bytes, invalidating still-fresh URLs. The extensionless
+filesystem response has a sized body without a filename-derived Content-Type or
+Content-Disposition. Full Range/transport/error behavior is not claimed.
+
+The shipped [direct upload service](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/platform/services/file-upload/bitwarden-file-upload.service.ts#L6-L32)
+sends `data` with encrypted filename and binary ciphertext. The file envelope
+is byte type2, sixteen-byte IV, thirty-two-byte MAC, then AES-CBC ciphertext;
+HMAC authenticates IV and ciphertext before decryption. Name and file encryption
+use the client-derived Send key; seed and plaintext stay off the server.
+[CLI receive](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/tools/send/commands/receive.command.ts#L540-L577)
+obtains metadata and a file URL, downloads/decrypts bytes, then writes the selected
+output file. `--obj` returns metadata before binary transfer. Owner get/list
+use synced cache rather than proving independent HTTP reads.
+
+All six selected HTTP cases pass on both actual targets with131 requests,
+10 Send grants, nine multipart requests, 13 URL requests and19 binary GETs;
+two password logins are included and two registrations excluded. A separate
+twenty-command official CLI2026.10.0 file run passes both with byte-exact
+reception and exact wrong-password/deleted-resource categories. These results
+are separate from text20/baseline120 and provide no captured route trace.
+Local units separately prove rollback, reopen, first-field parsing and physical
+account-FK cleanup. Configured quota/organization/email policy, notifications,
+rate controls, purge cron, live maximum-size/TTL and full JWT/transport behavior
+remain open; the host persists HS256 authority instead of upstream RS256.

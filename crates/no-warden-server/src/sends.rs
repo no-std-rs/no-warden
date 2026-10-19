@@ -1,4 +1,4 @@
-//! Personal text Sends. Ciphertext stays opaque; storage, clocks and proof
+//! Personal Sends. Ciphertext stays opaque; storage, clocks and proof
 //! cryptography implement the reusable allocation-free Send provider contract.
 
 use crate::{Failure, store::Store};
@@ -14,9 +14,10 @@ use no_warden::{
     identity::Secret,
     sends::{
         SendAccessError, SendContext, SendListData, SendNumber, SendPasswordChange, SendPolicy,
-        SendRecord, SendState, SendStorage, ValidatedSendAccess, ValidatedTextSend,
+        SendRecord, SendState, SendStorage, ValidatedFileSend, ValidatedSendAccess,
+        ValidatedTextSend,
     },
-    wire::{SendAccessTokenRequest, TextSendRequest},
+    wire::{FileSendRequest, SendAccessTokenRequest, TextSendRequest},
 };
 use rand::{RngCore, rngs::OsRng};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -41,6 +42,15 @@ CREATE INDEX IF NOT EXISTS personal_sends_owner ON personal_sends(owner);
 CREATE TABLE IF NOT EXISTS send_signing_key(
  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
  secret BLOB NOT NULL CHECK(length(secret)=32)
+);
+CREATE TABLE IF NOT EXISTS send_files(
+ send_id TEXT PRIMARY KEY REFERENCES personal_sends(id) ON DELETE CASCADE,
+ file_id TEXT NOT NULL,
+ data BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS send_file_reservations(
+ send_id TEXT PRIMARY KEY REFERENCES personal_sends(id) ON DELETE CASCADE,
+ file_id TEXT NOT NULL
 );";
 
 #[derive(Deserialize)]
@@ -115,9 +125,9 @@ pub struct Input {
     notes: Option<String>,
     text: Option<Value>,
     #[serde(rename = "file")]
-    _file: Option<Value>,
+    file: Option<Value>,
     #[serde(rename = "fileLength")]
-    _file_length: Option<Number>,
+    file_length: Option<Number>,
     #[serde(rename = "id")]
     _id: Option<String>,
 }
@@ -139,6 +149,13 @@ impl Input {
             name: &self.name,
             notes: self.notes.as_deref(),
             text: self.text.as_ref(),
+        }
+    }
+    pub fn file_request(&self) -> FileSendRequest<'_, Value> {
+        FileSendRequest {
+            common: self.request(),
+            file: self.file.as_ref(),
+            file_length: self.file_length.as_ref().map(Number::view),
         }
     }
     pub fn stage_dates(&self, store: &mut Store) {
@@ -287,19 +304,19 @@ pub fn signing_key(db: &Connection) -> rusqlite::Result<[u8; 32]> {
     )?;
     signing_key(db)
 }
-fn issuer(base: &str) -> rusqlite::Result<String> {
+pub(crate) fn issuer(base: &str) -> rusqlite::Result<String> {
     let url = url::Url::parse(base).map_err(|_| rusqlite::Error::InvalidQuery)?;
     Ok(format!("{}|send", url.origin().ascii_serialization()))
 }
 
 #[derive(Serialize, Deserialize)]
-struct Claims {
-    nbf: i64,
-    exp: i64,
-    iss: String,
-    sub: String,
+pub(crate) struct Claims {
+    pub nbf: i64,
+    pub exp: i64,
+    pub iss: String,
+    pub sub: String,
 }
-fn token(key: &[u8; 32], claims: &Claims) -> rusqlite::Result<String> {
+pub(crate) fn token(key: &[u8; 32], claims: &Claims) -> rusqlite::Result<String> {
     let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
     let payload = URL_SAFE_NO_PAD
         .encode(serde_json::to_vec(claims).map_err(|_| rusqlite::Error::InvalidQuery)?);
@@ -311,7 +328,12 @@ fn token(key: &[u8; 32], claims: &Claims) -> rusqlite::Result<String> {
         URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
     ))
 }
-fn verify_token(key: &[u8; 32], issuer: &str, proof: &Secret<'_>, now: i64) -> Option<String> {
+pub(crate) fn verify_token(
+    key: &[u8; 32],
+    issuer: &str,
+    proof: &Secret<'_>,
+    now: i64,
+) -> Option<String> {
     #[derive(Deserialize)]
     struct Header {
         alg: String,
@@ -396,6 +418,9 @@ impl<'a> SendListData<'a> for List<'a> {
     fn get(&self, index: usize) -> Option<SendRecord<'a, Self::Payload>> {
         self.0.get(index).map(Record::view)
     }
+    fn kind(&self, index: usize) -> Option<i32> {
+        self.0.get(index).map(|record| record.kind)
+    }
 }
 
 fn save<P: Serialize + ?Sized>(
@@ -408,6 +433,81 @@ fn save<P: Serialize + ?Sized>(
 ) -> rusqlite::Result<()> {
     let request = plan.request();
     let data = stored_text(request.text.ok_or(rusqlite::Error::InvalidQuery)?)?;
+    save_document(
+        db,
+        owner,
+        id,
+        Write {
+            request,
+            data,
+            maximum: plan.max_access_count(),
+            password_change: plan.password_change(),
+            creating,
+            file_id: None,
+        },
+        staged_dates,
+    )
+}
+
+pub(crate) fn save_file<P: Serialize + ?Sized>(
+    store: &mut Store,
+    owner: &str,
+    id: &str,
+    plan: &ValidatedFileSend<'_, '_, P>,
+    data: Option<(String, String)>,
+) -> rusqlite::Result<()> {
+    let creating = data.is_some();
+    let (data, file_id) = match data {
+        Some((data, file_id)) => (data, Some(file_id)),
+        None => (
+            store.db.query_row(
+                "SELECT data FROM personal_sends WHERE id=?1 AND owner=?2",
+                params![id, owner],
+                |row| row.get(0),
+            )?,
+            None,
+        ),
+    };
+    save_document(
+        &mut store.db,
+        owner,
+        id,
+        Write {
+            request: plan.common(),
+            data,
+            maximum: plan.max_access_count(),
+            password_change: plan.password_change(),
+            creating,
+            file_id,
+        },
+        store.send_dates.take(),
+    )
+}
+
+struct Write<'r, 'a, P: ?Sized> {
+    request: &'r TextSendRequest<'a, P>,
+    data: String,
+    maximum: Option<i32>,
+    password_change: SendPasswordChange<'r, 'a>,
+    creating: bool,
+    file_id: Option<String>,
+}
+
+fn save_document<P: ?Sized>(
+    db: &mut Connection,
+    owner: &str,
+    id: &str,
+    write: Write<'_, '_, P>,
+    staged_dates: Option<Dates>,
+) -> rusqlite::Result<()> {
+    let Write {
+        request,
+        data,
+        maximum,
+        password_change,
+        creating,
+        file_id,
+    } = write;
     let (deletion, expiration) = match staged_dates.filter(|dates| {
         dates.deletion_ns == request.deletion_ns && dates.expiration_ns == request.expiration_ns
     }) {
@@ -417,12 +517,12 @@ fn save<P: Serialize + ?Sized>(
             request.expiration_ns.map(date).transpose()?,
         ),
     };
-    let changed_password = match plan.password_change() {
+    let changed_password = match password_change {
         SendPasswordChange::Set(proof) => Some(password(proof)),
         _ => None,
     };
     let tx = db.savepoint()?;
-    let (hash, salt): StoredVerifier = match plan.password_change() {
+    let (hash, salt): StoredVerifier = match password_change {
         SendPasswordChange::Set(_) => {
             let (hash, salt) = changed_password.ok_or(rusqlite::Error::InvalidQuery)?;
             (Some(hash.to_vec()), Some(salt.to_vec()))
@@ -439,9 +539,9 @@ fn save<P: Serialize + ?Sized>(
     let changed = if creating {
         tx.execute("INSERT INTO personal_sends(id,owner,kind,name,notes,key,data,password_hash,password_salt,
             max_access_count,access_count,disabled,hide_email,created,revision,expiration,deletion)
-            VALUES(?1,?2,0,?3,?4,?5,?6,?7,?8,?9,0,?10,?11,?12,?12,?13,?14)",
-            params![id,owner,request.name,request.notes,request.key,data,hash,salt,plan.max_access_count(),
-                request.disabled,request.hide_email,send_revision,expiration,deletion])?
+            VALUES(?1,?2,?15,?3,?4,?5,?6,?7,?8,?9,0,?10,?11,?12,?12,?13,?14)",
+            params![id,owner,request.name,request.notes,request.key,data,hash,salt,maximum,
+                request.disabled,request.hide_email,send_revision,expiration,deletion,request.kind])?
     } else {
         tx.execute(
             "UPDATE personal_sends SET name=?3,notes=?4,key=?5,data=?6,password_hash=?7,
@@ -456,7 +556,7 @@ fn save<P: Serialize + ?Sized>(
                 data,
                 hash,
                 salt,
-                plan.max_access_count(),
+                maximum,
                 request.disabled,
                 request.hide_email,
                 send_revision,
@@ -467,6 +567,12 @@ fn save<P: Serialize + ?Sized>(
     };
     if changed != 1 {
         return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    if let Some(file_id) = file_id {
+        tx.execute(
+            "INSERT INTO send_file_reservations(send_id,file_id) VALUES(?1,?2)",
+            params![id, file_id],
+        )?;
     }
     crate::store::bump(&tx, owner, &revision)?;
     tx.commit()
@@ -704,7 +810,7 @@ pub fn access(store: &mut Store, headers: &axum::http::HeaderMap) -> Result<Resp
         .and_then(|value| value.rsplit("Bearer ").next())
         .ok_or_else(crate::unauthorized)?;
     let mut service = VaultService::new(store);
-    let response = service.access_text_send(&Secret::new(proof), &context())?;
+    let response = service.access_send(&Secret::new(proof), &context())?;
     Ok(axum::Json(response).into_response())
 }
 pub fn sync(store: &mut Store, owner: &str) -> Result<Value, Failure> {
@@ -719,11 +825,18 @@ pub fn is_send_error(message: &str) -> bool {
     message.starts_with("Send ")
         || message.starts_with("Sends ")
         || message.starts_with("File sends ")
+        || message.starts_with("File uploads ")
         || message.starts_with("You cannot have a Send ")
         || message.starts_with("Due to an Enterprise Policy, ")
         || matches!(
             message,
-            "Number does not fit in i32" | "Can't convert to number"
+            "Number does not fit in i32"
+                | "Can't convert to number"
+                | "Invalid send length"
+                | "An internal error has occurred."
+                | "OpenDAL"
+                | "Unable to decode send data as json."
+                | "Invalid Send type"
         )
 }
 
