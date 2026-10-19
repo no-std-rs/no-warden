@@ -46,6 +46,10 @@ pub struct Store {
     pub(crate) send_dates: Option<crate::sends::Dates>,
     pub(crate) send_file_metadata_cache: Option<crate::send_files::Metadata>,
     pub(crate) pending_send_file_data: Vec<u8>,
+    pub(crate) organization_cache: Option<crate::organizations::Record>,
+    pub(crate) organization_membership_cache: Option<crate::organizations::Membership>,
+    pub(crate) organization_collections_cache: crate::organizations::Collections,
+    pub(crate) organization_profiles_cache: crate::organizations::Profiles,
     owner: String,
     key_id: Option<String>,
     api_key_secret: Option<String>,
@@ -215,6 +219,7 @@ impl Store {
         db.execute_batch(crate::account_security::SCHEMA)?;
         db.execute_batch(crate::account_password::SCHEMA)?;
         db.execute_batch(crate::sends::SCHEMA)?;
+        db.execute_batch(crate::organizations::SCHEMA)?;
         crate::sends::signing_key(&db)?;
         crate::prelogin::initialize(&db)?;
         // SQLite inherits the private database mode for new sidecars. Also
@@ -234,6 +239,10 @@ impl Store {
             send_dates: None,
             send_file_metadata_cache: None,
             pending_send_file_data: Vec::new(),
+            organization_cache: None,
+            organization_membership_cache: None,
+            organization_collections_cache: crate::organizations::Collections::default(),
+            organization_profiles_cache: crate::organizations::Profiles::default(),
             owner: String::new(),
             key_id: None,
             api_key_secret: None,
@@ -803,6 +812,10 @@ impl AccountKdfStorage for Store {
 impl CipherReadStorage for Store {}
 
 impl AccountDeletionStorage for Store {
+    fn account_deletion_blocked_by_last_owner(&mut self, owner: &str) -> rusqlite::Result<bool> {
+        crate::organizations::last_owner(&self.db, owner)
+    }
+
     fn verify_account_deletion_proof(
         &mut self,
         owner: &str,

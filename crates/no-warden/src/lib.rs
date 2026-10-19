@@ -28,6 +28,7 @@ pub mod domains;
 pub mod error;
 pub mod identity;
 pub mod import;
+pub mod organizations;
 pub mod password_login;
 pub mod prelogin;
 pub mod purge;

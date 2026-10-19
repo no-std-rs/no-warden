@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 587 active Rust tests: 277 core, 206 host, and 104 conformance
+The workspace has 610 active Rust tests: 290 core, 214 host, and 106 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -417,3 +417,20 @@ forwarding; host tests cover schema, normalization, independent keyed selection,
 private SQLite reopen, provider errors and public alias dispatch. The bare-metal
 consumer links real discovery calls and complete response serialization without
 an allocator; firmware execution is unverified.
+
+The client job also selects `--suite organization-owner` and
+`--suite organization-owner-cli`, separately from the default 104-case group and
+the baseline CLI runner. Both actual targets pass the six HTTP cases with 133
+counted requests, two password logins, two refreshes and two organization creates,
+excluding two modern fixtures. They cover creation, owner guards, exact
+public/profile/collection projections, last-owner deletion rejection and
+preserved personal/foreign authority. The separate official CLI `2026.10.0`
+selection passes nineteen commands on both servers, observing synced membership
+and decrypted initial collections after login, unlock and fresh-cache login.
+Its thirteen direct HTTP requests include one password login, with two further
+CLI login commands and one excluded registration fixture. It leaves client
+internals uncounted and makes no CLI creation or direct discovery-trace claim.
+Private `BW_ORGANIZATION_OWNER_RECEIPT` and
+`BW_ORGANIZATION_OWNER_CLI_RECEIPT` record names/status/counters, not credentials
+or request traces. Source references keep these checks distinct from broader
+organization administration and sharing.

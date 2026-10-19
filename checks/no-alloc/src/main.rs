@@ -14,6 +14,12 @@ use no_warden::{
     devices::{DeviceRecord, PendingDeviceAuthRequest},
     domains::{DomainProjection, DomainSettingsView, GlobalDomain},
     identity::Secret,
+    organizations::{
+        CollectionRecord, OrganizationCreationPolicy, OrganizationFeatures, OrganizationMembership,
+        OrganizationProfileListData, OrganizationProfileRecord, OrganizationRecord,
+        OrganizationStorage, UserCollectionListData, UserCollectionRecord,
+        ValidatedOrganizationCreate,
+    },
     password_login::{PasswordLoginAccount, PasswordLoginDevice, PasswordLoginStorage},
     prelogin::{PreloginLookup, PreloginStorage, UnknownKdfIndex},
     purge::VaultPurgeStorage,
@@ -36,13 +42,14 @@ use no_warden::{
         DeviceResponse, DomainSettingsRequest, DomainSettingsResponse,
         DomainSettingsUpdateResponse, FileSendRequest, FolderRequest, ImportRequest,
         InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
-        MasterPasswordPolicy, MasterPasswordPolicyResponse, PasswordLoginRequest,
-        PasswordOrOtpRequest, PreloginKdfSettings, PreloginRequest, PreloginResponse,
-        ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest, RegistrationAuthentication,
-        RegistrationCredentials, RegistrationFinishRequest, RegistrationFinishResponse,
-        RegistrationUnlock, RegistrationVerificationRequest, RegistrationVerificationToken,
-        SecretVerificationRequest, SendAccessTokenRequest, SendFileData, TextSendRequest,
-        UserKeyIdRequest, UserPublicKeyResponse, WebAuthnCredentialsResponse,
+        MasterPasswordPolicy, MasterPasswordPolicyResponse, OrganizationCreateRequest,
+        OrganizationPlanType, PasswordLoginRequest, PasswordOrOtpRequest, PreloginKdfSettings,
+        PreloginRequest, PreloginResponse, ProfileUpdateRequest, RefreshTokenRequest,
+        RegisterRequest, RegistrationAuthentication, RegistrationCredentials,
+        RegistrationFinishRequest, RegistrationFinishResponse, RegistrationUnlock,
+        RegistrationVerificationRequest, RegistrationVerificationToken, SecretVerificationRequest,
+        SendAccessTokenRequest, SendFileData, TextSendRequest, UserKeyIdRequest,
+        UserPublicKeyResponse, WebAuthnCredentialsResponse,
     },
 };
 
@@ -60,8 +67,34 @@ struct PurgeProbe {
     file_uploaded: bool,
     user_key_id: [u8; 32],
     user_key_id_len: Option<usize>,
+    organization_present: bool,
+    organization_name: [u8; 64],
+    organization_name_len: usize,
+    organization_key: [u8; 32],
+    organization_key_len: usize,
+    collection_name: [u8; 64],
+    collection_name_len: usize,
+    organization_keys: bool,
 }
 impl PurgeProbe {
+    fn organization_record(&self) -> OrganizationRecord<'_> {
+        OrganizationRecord {
+            id: "embedded-org",
+            name: core::str::from_utf8(&self.organization_name[..self.organization_name_len])
+                .unwrap_or_default(),
+            billing_email: "owner@example.com",
+            has_public_and_private_keys: self.organization_keys,
+            features: OrganizationFeatures::default(),
+        }
+    }
+    fn membership(&self) -> OrganizationMembership<'static> {
+        OrganizationMembership {
+            user_id: "embedded-owner",
+            organization_id: "embedded-org",
+            role: 0,
+            status: 2,
+        }
+    }
     fn send_record(&self) -> SendRecord<'_, Option<&'static str>> {
         SendRecord {
             id: "embedded-send",
@@ -140,6 +173,109 @@ impl Storage for PurgeProbe {
     }
 }
 impl CipherReadStorage for PurgeProbe {}
+struct OrganizationProbeProfiles<'a>(&'a PurgeProbe);
+impl OrganizationProfileListData for OrganizationProbeProfiles<'_> {
+    fn len(&self) -> usize {
+        usize::from(self.0.organization_present)
+    }
+    fn get(&self, index: usize) -> Option<OrganizationProfileRecord<'_>> {
+        (index == 0 && self.0.organization_present).then(|| OrganizationProfileRecord {
+            organization: self.0.organization_record(),
+            membership: self.0.membership(),
+            membership_id: "embedded-member",
+            key: core::str::from_utf8(&self.0.organization_key[..self.0.organization_key_len])
+                .unwrap_or_default(),
+            access_all: true,
+            reset_password_enrolled: false,
+        })
+    }
+}
+struct OrganizationProbeCollections<'a>(&'a PurgeProbe);
+impl UserCollectionListData for OrganizationProbeCollections<'_> {
+    fn len(&self) -> usize {
+        usize::from(self.0.organization_present)
+    }
+    fn get(&self, index: usize) -> Option<UserCollectionRecord<'_>> {
+        (index == 0 && self.0.organization_present).then(|| UserCollectionRecord {
+            collection: CollectionRecord {
+                id: "embedded-collection",
+                organization_id: "embedded-org",
+                name: core::str::from_utf8(&self.0.collection_name[..self.0.collection_name_len])
+                    .unwrap_or_default(),
+                external_id: None,
+            },
+            membership: self.0.membership(),
+            readable: true,
+            read_only: false,
+            hide_passwords: false,
+            manage: true,
+        })
+    }
+}
+impl OrganizationStorage for PurgeProbe {
+    type Collections<'a> = OrganizationProbeCollections<'a>;
+    type Profiles<'a> = OrganizationProbeProfiles<'a>;
+    fn creation_policy(&mut self, _: &str, email: &str) -> Result<OrganizationCreationPolicy, ()> {
+        Ok(OrganizationCreationPolicy {
+            allowed: self.account_present,
+            single_org_blocked: false,
+            billing_email_valid: email == "owner@example.com",
+        })
+    }
+    fn create_organization(
+        &mut self,
+        owner: &str,
+        plan: &ValidatedOrganizationCreate<'_, '_>,
+    ) -> Result<OrganizationRecord<'_>, ()> {
+        let request = plan.request();
+        let key = request.key.expose_secret().as_bytes();
+        if owner != "embedded-owner"
+            || request.name.len() > self.organization_name.len()
+            || request.collection_name.len() > self.collection_name.len()
+            || key.len() > self.organization_key.len()
+        {
+            return Err(());
+        }
+        self.organization_name[..request.name.len()].copy_from_slice(request.name.as_bytes());
+        self.organization_name_len = request.name.len();
+        self.collection_name[..request.collection_name.len()]
+            .copy_from_slice(request.collection_name.as_bytes());
+        self.collection_name_len = request.collection_name.len();
+        self.organization_key[..key.len()].copy_from_slice(key);
+        self.organization_key_len = key.len();
+        self.organization_keys = request.keys.is_some();
+        self.organization_present = true;
+        self.revision += 1;
+        black_box((
+            plan.membership_role(),
+            plan.membership_status(),
+            plan.access_all(),
+        ));
+        Ok(self.organization_record())
+    }
+    fn organization_membership(
+        &mut self,
+        owner: &str,
+        organization: &str,
+    ) -> Result<Option<OrganizationMembership<'_>>, ()> {
+        Ok((self.organization_present
+            && owner == "embedded-owner"
+            && organization == "embedded-org")
+            .then(|| self.membership()))
+    }
+    fn organization(&mut self, organization: &str) -> Result<Option<OrganizationRecord<'_>>, ()> {
+        Ok(
+            (self.organization_present && organization == "embedded-org")
+                .then(|| self.organization_record()),
+        )
+    }
+    fn user_collections(&mut self, _: &str) -> Result<Self::Collections<'_>, ()> {
+        Ok(OrganizationProbeCollections(self))
+    }
+    fn profile_organizations(&mut self, _: &str) -> Result<Self::Profiles<'_>, ()> {
+        Ok(OrganizationProbeProfiles(self))
+    }
+}
 impl PreloginStorage for PurgeProbe {
     fn prelogin(&mut self, raw_email: &str) -> Result<PreloginLookup, ()> {
         if raw_email == "bare-metal@example.com" {
@@ -413,6 +549,9 @@ impl VaultPurgeStorage for PurgeProbe {
 }
 
 impl AccountDeletionStorage for PurgeProbe {
+    fn account_deletion_blocked_by_last_owner(&mut self, _: &str) -> Result<bool, ()> {
+        Ok(self.organization_present)
+    }
     fn verify_account_deletion_proof(
         &mut self,
         owner: &str,
@@ -526,7 +665,62 @@ pub extern "C" fn _start() -> ! {
             file_uploaded: false,
             user_key_id: [0; 32],
             user_key_id_len: None,
+            organization_present: false,
+            organization_name: [0; 64],
+            organization_name_len: 0,
+            organization_key: [0; 32],
+            organization_key_len: 0,
+            collection_name: [0; 64],
+            collection_name_len: 0,
+            organization_keys: false,
         };
+        let organization = OrganizationCreateRequest {
+            billing_email: "owner@example.com",
+            collection_name: "opaque collection",
+            key: Secret::new("opaque org key"),
+            name: "opaque org",
+            keys: None,
+            plan_type: OrganizationPlanType::String("ignored"),
+        };
+        let mut organization_output = [0; 8192];
+        let mut organization_service = VaultService::new(&mut provider);
+        if let Ok(response) =
+            organization_service.create_organization("embedded-owner", &organization)
+        {
+            let _ = black_box(serde_json_core::to_slice(
+                &response,
+                &mut organization_output,
+            ));
+        }
+        if let Ok(response) =
+            organization_service.get_organization("embedded-owner", "embedded-org")
+        {
+            let _ = black_box(serde_json_core::to_slice(
+                &response,
+                &mut organization_output,
+            ));
+        }
+        if let Ok(response) = organization_service.list_user_collections("embedded-owner") {
+            let _ = black_box(serde_json_core::to_slice(
+                &response,
+                &mut organization_output,
+            ));
+            let _ = black_box(serde_json_core::to_slice(
+                &response.details(),
+                &mut organization_output,
+            ));
+        }
+        if let Ok(response) = organization_service.profile_organizations("embedded-owner") {
+            let _ = black_box(serde_json_core::to_slice(
+                &response.confirmed(),
+                &mut organization_output,
+            ));
+            let _ = black_box(serde_json_core::to_slice(
+                &response.accepted_and_confirmed(),
+                &mut organization_output,
+            ));
+        }
+        black_box(organization_output);
         for email in black_box(["bare-metal@example.com", ""]) {
             let mut discovery = VaultService::new(&mut provider);
             if let Ok(response) = discovery.prelogin(&PreloginRequest { email }) {

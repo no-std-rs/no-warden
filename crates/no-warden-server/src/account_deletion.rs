@@ -1,11 +1,16 @@
 //! Account deletion for the adapter's personal accounts.
 //! Upstream deletes sequentially; this adapter commits all local cleanup together.
-//! Organization membership/last-owner policy belongs to a future organization adapter.
+//! Confirmed last-owner policy is checked before cleanup and inside this transaction.
 
 use rusqlite::Connection;
 
 pub(crate) fn delete(db: &mut Connection, owner: &str) -> rusqlite::Result<()> {
     let tx = db.savepoint()?;
+    // Recheck under SQLite's transaction as well as the service proof/policy guard.
+    // A competing connection cannot cause us to orphan a confirmed organization.
+    if crate::organizations::last_owner(&tx, owner)? {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
     // These legacy foreign keys restrict account deletion rather than cascading.
     // Delete all item kinds: unlike a vault purge, no account-owned row survives.
     // Item FKs cascade through attachments, capabilities and archive annotations.

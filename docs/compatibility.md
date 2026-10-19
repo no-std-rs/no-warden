@@ -45,6 +45,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | `POST /identity/connect/token` | Reusable ordinary password grant and password-method refresh; valid refresh proofs can be reused with current device authority | CLI baseline, six matching ordinary-password Rust cases and eight matching refresh cases. Refresh JWT encoding and complete identity policy remain open |
 | Personal text Sends, recipient `send_access` grant and sync | Encrypted owner lifecycle, scoped recipient access, password management and atomic access limits | Six matching Rust HTTP cases and twenty matching official CLI commands on both servers. File Sends are verified separately below; full policy/transport parity remains open |
 | Personal file Sends: reservation, multipart upload, file-URL issuance and binary GET | Immutable encrypted metadata, exact bytes, scoped capabilities and create-only storage | Six matching HTTP cases and a separate twenty-command official CLI comparison on both servers; configured policies and full transport remain open |
+| Organization-owner creation/discovery and initial collection | Confirmed Owner membership, exact public/profile/collection projections and last-owner deletion protection | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
 | `GET /api/accounts/keys`, `POST /api/accounts/keys`, `GET /api/users/<id>/public-key` | Owner-only private retrieval, initialization of an absent pair, authenticated cross-user public lookup | Borrowed core/provider contracts; Rust HTTP comparison group and SQLite rollback/reopen tests |
 | `POST /api/accounts/api-key`, `POST /api/accounts/rotate-api-key` | Password-reauthenticated personal key retrieval, lazy creation, rotation | Core, HTTP comparison with upstream, rollback and restart tests; keys used by real CLI |
@@ -79,7 +80,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Provider conflict errors | `Storage::map_error` can preserve an HTTP 409 conflict | Core provider tests |
 
 The allocation-free core's models include login, secure note, card, identity,
-and SSH-key items, plus optional opaque blob data. Its 190 unit tests cover the
+and SSH-key items, plus optional opaque blob data. Its unit tests cover the
 typed fields, bounded collections and import decoding, validation, ownership,
 lifecycle rules, folder mapping, the atomic import and bulk provider contracts,
 API-key proof selection and authorization, and attachment lifecycle and provider
@@ -105,7 +106,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 587 active workspace unit tests pass: 277 core, 206 host and 104 support,
+All 610 active workspace unit tests pass: 290 core, 214 host and 106 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -1023,3 +1024,34 @@ from RSA PEM bytes. It returns backend errors rather than unknown-account
 fallback and does not implement the reference public limiter. The 16-MiB versus
 decimal 20,000,000-byte JSON limit and complete identity/configuration policies
 remain open.
+
+## Organization owner creation and discovery
+
+The bounded slice adds `POST /api/organizations`, owner
+`GET /api/organizations/{id}` and authenticated `GET /api/collections`, plus
+membership/profile and initial sync-collection projections. The pinned and
+release 1.37.4 handlers and model projections agree. Organization private keys
+are not returned by public discovery; the authenticated membership retains its
+opaque wrapped organization key. Current device/stamp and confirmed-owner
+checks remain authoritative, and account deletion must refuse a last confirmed
+owner before cleanup.
+
+The local provider makes creation, membership, initial collection and revision
+atomic, strengthening upstream's sequential saves. It supports the default
+creation policy, not configuration management, arbitrary member roles,
+invitations, organization/collection administration or shared ciphers. Event,
+group and SMTP-dependent flags describe source configuration; they are not
+evidence that those features work here. JSON/body-limit, cross-cutting errors,
+notifications and complete failure/transport behavior remain partial. All six
+HTTP cases pass both actual targets: 133 counted requests, two password logins,
+two refreshes and two organization creates, excluding two modern fixtures. Both
+account-deletion aliases reject a last confirmed owner without changing complete
+sync/revision state; existing access and refresh authority remain usable. The
+separate official CLI `2026.10.0` comparison also passes nineteen commands on
+both servers, including decrypted collections after login, unlock and fresh-cache
+login and retained personal-note decryption. It records two CLI logins, one
+direct setup login and thirteen direct HTTP requests, excluding one fixture;
+client internals are not counted or traced. Organization creation uses direct
+HTTP, and CLI list operations consume synced cache. This does not verify the
+different organization-scoped collection administration endpoints. No route
+trace or full-parity status is claimed.

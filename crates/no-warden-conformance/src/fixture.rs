@@ -1,9 +1,10 @@
 //! Password-account fixtures using the same key derivation and encrypted-key
 //! formats as an ordinary Bitwarden registration.
 //!
-//! OpenSSL supplies RSA key generation only. Password hashing, HKDF expansion,
-//! and authenticated encryption are implemented here in Rust. Keys and server
-//! response bodies are never included in errors or written to temporary files.
+//! OpenSSL supplies RSA key generation and public-key wrapping. Password hashing, HKDF expansion,
+//! and authenticated encryption are implemented here in Rust. Private keys,
+//! symmetric keys and server bodies never enter diagnostics or temporary files.
+//! RSA wrapping uses a private temporary file containing only public SPKI bytes.
 
 use std::{
     fmt,
@@ -292,6 +293,61 @@ fn rsa_key_pair() -> Result<(Vec<u8>, Vec<u8>), FixtureError> {
         Some(&private_key),
     )?;
     Ok((public_key, private_key))
+}
+
+/// Standard RSA-OAEP-SHA1/MGF1-SHA1 encapsulation of a legacy 64-byte org key.
+/// Only public SPKI bytes use a 0600 file within a 0700 disposable directory.
+/// Symmetric plaintext goes through stdin; encrypted output remains in memory.
+pub(crate) fn organization_key_for_account(
+    account: &Value,
+    key: &[u8; 64],
+) -> Result<String, FixtureError> {
+    let fail = || FixtureError(Failure::Rsa);
+    let public = account["keys"]["publicKey"].as_str().ok_or_else(fail)?;
+    let public = STANDARD.decode(public).map_err(|_| fail())?;
+    let directory = tempfile::Builder::new()
+        .prefix("no-warden-public-spki-")
+        .tempdir()
+        .map_err(|_| fail())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+            .map_err(|_| fail())?;
+    }
+    let path = directory.path().join("public.der");
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path).map_err(|_| fail())?;
+    file.write_all(&public).map_err(|_| fail())?;
+    drop(file);
+    let output = openssl(
+        &[
+            "pkeyutl",
+            "-encrypt",
+            "-pubin",
+            "-keyform",
+            "DER",
+            "-inkey",
+            path.to_str().ok_or_else(fail)?,
+            "-pkeyopt",
+            "rsa_padding_mode:oaep",
+            "-pkeyopt",
+            "rsa_oaep_md:sha1",
+            "-pkeyopt",
+            "rsa_mgf1_md:sha1",
+        ],
+        Some(key),
+    )?;
+    if output.len() != 256 {
+        return Err(fail());
+    }
+    Ok(format!("4.{}", STANDARD.encode(output)))
 }
 
 /// Generate a password-account registration with a random user key and RSA
@@ -616,6 +672,65 @@ pub fn seed_account_without_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn organization_rsa_oaep_wrapping_roundtrips_the_full_key_without_private_key_files() {
+        let password = "synthetic-organization-password";
+        let account = registration("organization-fixture@example.test", password, 1000).unwrap();
+        let key = [0x62; 64];
+        let wrapped = organization_key_for_account(&account, &key).unwrap();
+        assert!(wrapped.starts_with("4."));
+        let ciphertext = STANDARD.decode(&wrapped[2..]).unwrap();
+        assert!(ciphertext.len() == 256);
+        let user_key = pbkdf2_fixture_user_key(&account, password).unwrap();
+        let private_key = decrypt(
+            account["keys"]["encryptedPrivateKey"].as_str().unwrap(),
+            &user_key,
+        )
+        .unwrap();
+        // The test-only second input file contains ciphertext, never key material.
+        let mut encrypted_file = tempfile::NamedTempFile::new().unwrap();
+        encrypted_file.write_all(&ciphertext).unwrap();
+        let plaintext = openssl(
+            &[
+                "pkeyutl",
+                "-decrypt",
+                "-keyform",
+                "DER",
+                "-inkey",
+                "/dev/stdin",
+                "-in",
+                encrypted_file.path().to_str().unwrap(),
+                "-pkeyopt",
+                "rsa_padding_mode:oaep",
+                "-pkeyopt",
+                "rsa_oaep_md:sha1",
+                "-pkeyopt",
+                "rsa_mgf1_md:sha1",
+            ],
+            Some(&private_key),
+        )
+        .unwrap();
+        assert!(plaintext == key);
+    }
+
+    #[test]
+    fn organization_rsa_wrapping_rejects_bad_public_input_without_secret_diagnostics() {
+        for public in [
+            "invalid-base64".to_owned(),
+            STANDARD.encode(b"synthetic-private-marker"),
+        ] {
+            let account = json!({"keys":{"publicKey":public,"encryptedPrivateKey":"private-value-must-not-be-used"}});
+            let error = organization_key_for_account(&account, &[0x17; 64])
+                .err()
+                .unwrap();
+            let output = format!("{error} {error:?}");
+            assert!(
+                !output.contains("synthetic-private-marker")
+                    && !output.contains("private-value-must-not-be-used")
+            );
+        }
+    }
 
     #[test]
     fn argon2_fixture_matches_public_client_proof_vector_and_normalized_salt() {
