@@ -636,13 +636,38 @@ and `object: "keys"`. Upstream returns 404 when the account has no key pair.
 `POST /api/accounts/keys` accepts `publicKey` and `encryptedPrivateKey` to
 initialize a missing pair; it must not overwrite an existing pair.
 
-Current clients can backfill a legacy user-key identifier after login using
-authenticated `POST /api/accounts/key-management/user-key-id` with
-`{"userKeyId":"<client-generated key identifier>"}`. Persist the supplied ID
-and return an empty success response. Upstream rejects a second assignment with
-422. Subsequent synchronization must return it in `userDecryption.userKeyId`;
-the local adapter also includes `UserDecryptionOptions.UserKeyId` in token
-responses. This identifies existing key material and does not rotate the key.
+Current clients backfill a legacy user-key identifier through authenticated
+`POST /api/accounts/key-management/user-key-id`. The required canonical
+`userKeyId` is an opaque string: empty, long, Unicode and escaped NUL values are
+accepted, with no core UUID/hex/size policy. A one-string positional array is
+also accepted. Unknown fields cannot select another account. Current device and
+security-stamp authorization precede JSON decoding. Missing/null/wrong-type or
+duplicate known fields return 422; syntax, surplus positional data and raw
+invalid UTF-8 anywhere in the body return 400. This route does not require a
+JSON Content-Type. Successful initialization returns empty **200**, advances
+account revision, and preserves keys, sessions, devices and cipher revisions.
+Any existing ID, including empty, rejects every repeat with **422** and the
+nine-field API error message `Unexpected data`.
+
+The authoritative observation is `sync.userDecryption.userKeyId`. Upstream
+profile and password/API-key token options omit it; the adapter's inherited
+extra `UserDecryptionOptions.UserKeyId` is not a full-projection parity claim.
+The core `AccountKeyIdStorage` provider and SQLite transaction compare-and-set
+an absent ID with its revision atomically, a stronger guarantee than upstream's
+separate check/save. This identifies existing key material without rotating it.
+The existing 16-MiB adapter body cap differs from upstream's 20-MiB JSON limit.
+
+The [pinned handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L1067-L1081)
+and [release 1.37.4 handler](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/accounts.rs#L1052-L1066)
+agree. Its [KeyId model](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/user.rs#L555-L573)
+wraps a String; the SDK's stricter 32-hex ID representation is a client contract.
+CLI [login](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/auth/commands/login.command.ts#L402-L424)
+and [unlock](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/key-management/commands/unlock.command.ts#L96)
+invoke the unflagged backfill migration. The
+[SDK](https://github.com/bitwarden/sdk-internal/blob/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6/crates/bitwarden-user-crypto-management/src/key_id_backfill.rs#L40-L90)
+records the local ID only after API acceptance. The client migration syncs and
+rechecks server state before posting;
+API failures trigger a client cooldown. No captured request trace is claimed.
 
 `GET /api/accounts/revision-date` returns a JSON integer timestamp in
 **milliseconds**. Successful account or vault mutations advance this revision.
@@ -1470,7 +1495,7 @@ use synced cache rather than proving independent HTTP reads.
 All six selected HTTP cases pass on both actual targets with131 requests,
 10 Send grants, nine multipart requests, 13 URL requests and19 binary GETs;
 two password logins are included and two registrations excluded. A separate
-twenty-command official CLI2026.10.0 file run passes both with byte-exact
+twenty-command official CLI 2026.10.0 file run passes both with byte-exact
 reception and exact wrong-password/deleted-resource categories. These results
 are separate from text20/baseline120 and provide no captured route trace.
 Local units separately prove rollback, reopen, first-field parsing and physical

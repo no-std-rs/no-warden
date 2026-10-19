@@ -39,7 +39,7 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 99 routed patterns, 53 with typed requests, 88 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 99 routed patterns, 53 with typed requests, 89 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
@@ -50,14 +50,14 @@ variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
 
-42 local patterns have some typed response representation, including
+44 local patterns have some typed response representation, including
 the domain settings projections and empty mutation response, explicit API-key
 responses, and attachment responses. Bulk cipher lists use the generic `ListResponse`
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
 The ledger records positive or restart HTTP evidence for 91 patterns, negative
-HTTP evidence for 90, 215 named HTTP cases, and 44 CLI command patterns. These are
+HTTP evidence for 90, 221 named HTTP cases, and 44 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -1169,7 +1169,7 @@ recipient metadata, `send_access` and sync; they do not implement the static
 client upload-renewal GET or complete the Send family. The ledger retains all
 294 handler variants: 96 partial, 198 unimplemented, zero full and zero traces.
 It records 99 routed patterns, 53 with typed requests, 44 with any typed response
-and 88 with reusable core services. Measured multipart facts are not counted as
+and 89 with reusable core services after the later backfill deepening. Measured multipart facts are not counted as
 a wire request DTO; `FileSendRequest<P>` is a semantic view, and the explicit
 reservation/download responses are typed serializers.
 
@@ -1188,10 +1188,30 @@ checks authentication before decryption for arbitrary and empty plaintext.
 Fresh URL checks separate current policy/limit behavior from physical deletion.
 Eight host tests additionally cover rollback/retry, signer/byte reopen,
 create-only upload, scalar projection, query/multipart parsing and direct account
-FK cleanup. The separate official CLI2026.10.0 file run passes all twenty
+FK cleanup. The separate official CLI 2026.10.0 file run passes all twenty
 commands on both targets with exact output bytes and strict negative categories;
 owner get/list still use synced cache. Text20 and baseline120 remain separate.
 No captured trace, live maximum upload/TTL, full transport/Range, email OTP,
 enterprise configuration, notification/rate/cron or JWT-algorithm equivalence
 claim is introduced. Independent MIT/Apache implementation retains the full
 upstream API delivery goal.
+
+## User-key-ID backfill contract
+
+This deepens one existing partial route without adding a route or wire model.
+`UserKeyIdRequest` now reaches reusable `VaultService::set_user_key_id` through
+`AccountKeyIdStorage` and a sealed plan. The ledger therefore has 99 routed
+patterns, 53 typed requests, 44 with any typed response and 89 reusable core
+services; 96 upstream handlers remain partial and 198 unimplemented. All full
+parity and captured-trace flags remain false. The HTTP catalog has 221 names.
+
+Six matching actual cases pass both servers with 168 counted requests per
+target. The separate fifteen-command official CLI 2026.10.0 migration proof also
+passes both targets, observing absent sync metadata become a stable SDK-generated
+ID and decrypting a retained note after login, unlock and fresh-cache login. Supported
+backfill preserves opaque strings and current-device authority, returns empty
+200 or exact repeated-assignment 422, and changes only ID/account revision.
+The local provider's atomic compare-and-set is stronger than upstream's check
+then save. Source/client references and remaining projection/transport limits
+are recorded in [the protocol](protocol.md#profile-account-keys-and-synchronization);
+key rotation and all remaining account/Send contracts stay on the full roadmap.

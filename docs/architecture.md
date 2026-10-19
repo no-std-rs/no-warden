@@ -928,3 +928,21 @@ official CLI run passes both and compares received arbitrary bytes exactly.
 Object storage, configured quota/policy matrices, email OTP, notifications,
 rate controls, purge scheduling, Range/full transport and RS256 equivalence
 remain outside this personal subset. No full API or captured-trace claim follows.
+
+## One-time user-key-ID backfill
+
+`AccountKeyIdStorage` adds an opt-in atomic operation, and
+`VaultService::set_user_key_id` creates a sealed `ValidatedUserKeyId` plan from
+the authenticated owner and borrowed `UserKeyIdRequest`. Empty is a present ID;
+no format, normalization or fixed core capacity is imposed. Repeated assignment
+returns typed 422 `Unexpected data`. `Storage::user_key_id` remains the lookup
+hook used by cipher validation.
+
+The host decodes an owned String after current-device authentication and whole
+body UTF-8 validation, then borrows it into the core. An immediate SQLite
+transaction conditionally updates only an absent ID and advances its account
+revision. Provider tests cover commit/revision rollback, retry, reopen and two
+concurrent connections; atomic one-time persistence is stronger than upstream's
+separate check/save. No key, session, device or vault payload is rewritten.
+Sync exposes the stored value in `userDecryption.userKeyId`; complete profile,
+identity-response and transport parity remain open.

@@ -7,6 +7,7 @@ use core::{hint::black_box, panic::PanicInfo};
 use no_warden::{
     Storage, VaultService,
     account_deletion::AccountDeletionStorage,
+    account_key_id::{AccountKeyIdStorage, ValidatedUserKeyId},
     auth_login::{AuthRequestLoginContext, AuthRequestLoginDevice, AuthRequestLoginRecord},
     auth_requests::{AuthRequestContext, AuthRequestRecord},
     cipher_reads::CipherReadStorage,
@@ -39,8 +40,8 @@ use no_warden::{
         RefreshTokenRequest, RegisterRequest, RegistrationAuthentication, RegistrationCredentials,
         RegistrationFinishRequest, RegistrationFinishResponse, RegistrationUnlock,
         RegistrationVerificationRequest, RegistrationVerificationToken, SecretVerificationRequest,
-        SendAccessTokenRequest, SendFileData, TextSendRequest, UserPublicKeyResponse,
-        WebAuthnCredentialsResponse,
+        SendAccessTokenRequest, SendFileData, TextSendRequest, UserKeyIdRequest,
+        UserPublicKeyResponse, WebAuthnCredentialsResponse,
     },
 };
 
@@ -56,6 +57,8 @@ struct PurgeProbe {
     send_maximum: Option<i32>,
     send_kind: i32,
     file_uploaded: bool,
+    user_key_id: [u8; 32],
+    user_key_id_len: Option<usize>,
 }
 impl PurgeProbe {
     fn send_record(&self) -> SendRecord<'_, Option<&'static str>> {
@@ -94,6 +97,14 @@ impl<'a> SendListData<'a> for SendProbeRecords<'a> {
 }
 impl Storage for PurgeProbe {
     type Error = ();
+    fn user_key_id(&mut self, owner: &str) -> Result<Option<&str>, ()> {
+        if owner != "embedded-owner" {
+            return Err(());
+        }
+        self.user_key_id_len
+            .map(|length| core::str::from_utf8(&self.user_key_id[..length]).map_err(|_| ()))
+            .transpose()
+    }
     fn account_exists(&mut self, _: &str) -> Result<bool, ()> {
         unreachable!()
     }
@@ -128,6 +139,28 @@ impl Storage for PurgeProbe {
     }
 }
 impl CipherReadStorage for PurgeProbe {}
+impl AccountKeyIdStorage for PurgeProbe {
+    fn set_user_key_id_if_absent(
+        &mut self,
+        owner: &str,
+        update: &ValidatedUserKeyId<'_>,
+    ) -> Result<bool, ()> {
+        if owner != "embedded-owner" || !self.account_present {
+            return Err(());
+        }
+        if self.user_key_id_len.is_some() {
+            return Ok(false);
+        }
+        let bytes = update.user_key_id().as_bytes();
+        if bytes.len() > self.user_key_id.len() {
+            return Err(());
+        }
+        self.user_key_id[..bytes.len()].copy_from_slice(bytes);
+        self.user_key_id_len = Some(bytes.len());
+        self.revision += 1;
+        Ok(true)
+    }
+}
 impl SendStorage for PurgeProbe {
     type SendId = &'static str;
     type Payload<'a> = Option<&'static str>;
@@ -473,7 +506,21 @@ pub extern "C" fn _start() -> ! {
             send_maximum: None,
             send_kind: 0,
             file_uploaded: false,
+            user_key_id: [0; 32],
+            user_key_id_len: None,
         };
+        let user_key_id = serde_json_core::from_slice::<UserKeyIdRequest<'_>>(black_box(
+            br#"{"userKeyId":"opaque-id"}"#,
+        ));
+        if let Ok((request, _)) = user_key_id {
+            let mut output = [0; 64];
+            black_box(serde_json_core::to_slice(&request, &mut output)).ok();
+            black_box(output);
+            let mut migration = VaultService::new(&mut provider);
+            black_box(migration.set_user_key_id("embedded-owner", &request)).ok();
+            let _ = black_box(migration.storage_mut().user_key_id("embedded-owner"));
+            let _ = black_box(migration.set_user_key_id("embedded-owner", &request));
+        }
         let payload = black_box("opaque-text");
         let send = TextSendRequest {
             kind: 0,

@@ -784,7 +784,7 @@ physical deletion while foreign data remains. `BW_FILE_SENDS_RECEIPT` writes
 private authored names/status/counters only. Use a fresh reference process under
 unchanged default limits; these counters are not limiter telemetry.
 
-`--suite file-sends-cli` separately passes twenty official CLI2026.10.0 commands
+`--suite file-sends-cli` separately passes twenty official CLI 2026.10.0 commands
 on both targets: create/upload, sync/cache get/list, protected receive, edit,
 password removal, fresh-recipient public receive and delete. Both output files
 must match the original bytes. Wrong password and deleted Send require exact
@@ -799,3 +799,21 @@ filename plaintext, fragment seed, token, password or private URL enters logs.
 Configured quotas/policies, object storage, email OTP, notifications/rate/cron,
 full Range/transport, live maximum upload/TTL and upstream RS256 equivalence
 remain open.
+
+## User-key-ID comparisons
+
+Run `--suite user-key-id` for six focused Rust HTTP cases against a disposable
+target. Both actual targets pass 168 counted requests: three password logins and
+three refreshes, excluding three fixture registrations. Cases initialize empty,
+long Unicode/NUL and positional IDs, check guards and exact repeated errors,
+and compare keys, vault bytes, revision and refresh authority.
+`BW_USER_KEY_ID_RECEIPT` writes private status/names/counters.
+
+`--suite user-key-id-cli` is a separate fifteen-command official CLI 2026.10.0
+migration proof that passes both actual targets. It starts with absent sync
+metadata, checks an SDK-generated ID after login, unlock and fresh-cache login,
+and decrypts a preexisting note three times. Its sixteen direct HTTP requests
+include one fixture login; two additional logins are real CLI commands.
+`BW_USER_KEY_ID_CLI_RECEIPT` separates these counters. No CLI-internal request
+count, captured route trace, new command form or combined baseline total is
+claimed. Use a fresh reference process under unchanged default limits.

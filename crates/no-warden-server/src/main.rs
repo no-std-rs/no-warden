@@ -3,6 +3,7 @@
 
 mod account_deletion;
 mod account_kdf;
+mod account_key_id;
 mod account_password;
 mod account_security;
 mod attachments;
@@ -88,6 +89,7 @@ impl IntoResponse for Failure {
         if password_login::is_password_error(self.1)
             || self.1 == "refresh_token cannot be blank"
             || sends::is_send_error(self.1)
+            || self.1 == "Unexpected data"
         {
             return password_login::error_response(self.0, self.1);
         }
@@ -924,31 +926,11 @@ async fn dispatch_with_peer(
             Ok(StatusCode::OK.into_response())
         }
         Route::UserKeyId => {
-            let request: no_warden::wire::UserKeyIdRequest<'_> =
-                serde_json::from_slice(&body).map_err(|_| invalid())?;
-            if request.user_key_id.is_empty() || request.user_key_id.len() > 512 {
-                return Err(invalid());
-            }
-            if account
-                .get("userKeyId")
-                .is_some_and(|value| !value.is_null())
-            {
-                return Err(Failure(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "User key identifier is already set",
-                ));
-            }
-            let tx = store.db.transaction()?;
-            let revision = store::next_revision(&tx, &owner)?;
-            let mut document = account;
-            document["userKeyId"] = json!(request.user_key_id);
-            tx.execute(
-                "UPDATE accounts SET document=?1 WHERE id=?2",
-                params![document.to_string(), owner],
-            )?;
-            store::bump(&tx, &owner, &revision)?;
-            tx.commit()?;
-            Ok(StatusCode::NO_CONTENT.into_response())
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let input = account_key_id::Input::parse(&body)?;
+            VaultService::new(&mut *store).set_user_key_id(&owner, &input.request())?;
+            Ok(StatusCode::OK.into_response())
         }
         Route::Profile => Ok(json_response(profile_document(&store, &account)?)),
         Route::RevisionDate => {

@@ -30,6 +30,11 @@ password replacement/removal and access limits. The separate twenty-command
 official-client text-Send comparison passes both servers. Six more matching HTTP
 cases and a separate twenty-command official CLI comparison verify personal file
 Sends, including byte-exact anonymous downloads. Full Send parity remains open.
+Six matching HTTP cases also verify opaque user-key-ID backfill, current-device
+guards and preserved vault/session authority. A separate fifteen-command actual
+CLI comparison verifies SDK backfill and stable IDs across unlock and fresh-cache
+login with retained-note decryption. The reusable provider atomically
+assigns an absent ID once; this strengthens upstream's separate check and save.
 The remaining surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden
 replacement. Client-side vault encryption stays with the client.
@@ -96,7 +101,7 @@ bounded collections require no allocator. Opt-in `ImportStorage`,
 `DevicePushStorage`, `AuthRequestStorage`, `AuthRequestResponseStorage`,
 `AuthRequestLoginStorage`, `RegistrationStorage`, `AccountSecurityStorage`,
 `AccountKdfStorage`, `AccountPasswordStorage`, `VaultPurgeStorage`,
-`AccountDeletionStorage`, `CipherReadStorage`, `PasswordLoginStorage`, `RefreshStorage`, `SendStorage`, `FileSendStorage`, and
+`AccountDeletionStorage`, `AccountKeyIdStorage`, `CipherReadStorage`, `PasswordLoginStorage`, `RefreshStorage`, `SendStorage`, `FileSendStorage`, and
 `AttachmentStorage` providers add
 batch operations,
 credential and account-key services, profile metadata and equivalent-domain updates, device discovery,
@@ -104,7 +109,7 @@ registration after verified login, push-token ordering, pending auth-request
 creation/discovery, approval/code-protected polling, one-use access-code login,
 modern account verification/finish, password verification, security-stamp renewal,
 client KDF transitions, password changes and previous-stamp authorization,
-reauthenticated personal-vault purge and account deletion,
+reauthenticated personal-vault purge, account deletion and one-time user-key-ID backfill,
 authorization for ordinary/details/admin cipher reads, ordinary password-grant
 validation, reusable password-method refresh, personal text/file Sends and attachment transitions
 without adding an allocator. See [architecture](docs/architecture.md) and

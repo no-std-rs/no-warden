@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 550 active Rust tests: 260 core, 194 host, and 96 conformance
+The workspace has 567 active Rust tests: 269 core, 200 host, and 98 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -386,3 +386,18 @@ the text-Send and 120-command baseline suites. Host units additionally exercise 
 create-only storage, deferred-commit rollback/retry, binary/signer reopen and
 owned FK cleanup. No maximum upload, live TTL, full transport or trace claim
 follows.
+
+The required client job also runs `--suite user-key-id` and
+`--suite user-key-id-cli` explicitly. The six HTTP cases pass both actual targets
+with 168 counted requests, three password logins and three refreshes each;
+three registration fixtures are excluded. `BW_USER_KEY_ID_RECEIPT` records only
+private status/names/counters. The separate fifteen-command official
+CLI 2026.10.0 migration comparison also
+passes both targets; `BW_USER_KEY_ID_CLI_RECEIPT` distinguishes sixteen direct
+HTTP requests (one fixture login) from two CLI login commands and other
+client-internal requests, which are not traced or counted.
+Six host tests cover decoding, current-device ordering, opaque persistence,
+rollback/retry, reopen and concurrent one-time assignment. The core's eight
+provider/model tests and typed-422 regression also pass, and the bare-metal
+consumer links a reachable backfill service call without an allocator; firmware
+execution remains unverified.

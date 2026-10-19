@@ -9,6 +9,7 @@ pub enum ErrorKind {
     Forbidden,
     NotFound,
     Conflict,
+    UnprocessableEntity,
     Storage,
 }
 
@@ -43,6 +44,7 @@ impl ApiError {
             ErrorKind::Forbidden => 403,
             ErrorKind::NotFound => 404,
             ErrorKind::Conflict => 409,
+            ErrorKind::UnprocessableEntity => 422,
             ErrorKind::Storage => 500,
         }
     }
@@ -68,4 +70,18 @@ impl core::error::Error for ApiError {}
 pub struct ErrorResponse {
     pub object: &'static str,
     pub message: &'static str,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unprocessable_entity_keeps_its_typed_status_and_public_message() {
+        let error = ApiError::new(ErrorKind::UnprocessableEntity, "Unexpected data");
+        assert_eq!(error.status_code(), 422);
+        assert_eq!(error.response().message, "Unexpected data");
+        assert_eq!(error.response().object, "error");
+        assert_eq!(error.field, None);
+    }
 }
