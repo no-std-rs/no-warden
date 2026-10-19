@@ -216,6 +216,7 @@ impl Store {
         db.execute_batch(crate::account_password::SCHEMA)?;
         db.execute_batch(crate::sends::SCHEMA)?;
         crate::sends::signing_key(&db)?;
+        crate::prelogin::initialize(&db)?;
         // SQLite inherits the private database mode for new sidecars. Also
         // narrow sidecars left behind by an earlier permissive installation.
         #[cfg(unix)]
@@ -3196,7 +3197,14 @@ mod tests {
             &crate::account_security::stamp(&store.db, id).unwrap(),
         );
         assert!(profile["emailVerified"] == true && profile["name"] == "NUL\0claim 雪");
-        let projected = crate::protocol::prelogin(&account, false);
+        let projected = serde_json::to_value(
+            VaultService::new(&mut store)
+                .prelogin(&no_warden::wire::PreloginRequest {
+                    email: account["email"].as_str().unwrap(),
+                })
+                .unwrap(),
+        )
+        .unwrap();
         assert!(projected["kdf"] == -7 && projected["kdfIterations"] == -8);
     }
     #[test]

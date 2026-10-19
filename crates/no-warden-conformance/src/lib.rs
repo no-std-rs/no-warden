@@ -23,6 +23,8 @@ pub mod file_sends_cli;
 pub mod fixture;
 pub mod folders;
 pub mod password_login;
+pub mod prelogin;
+pub mod prelogin_cli;
 pub mod purge;
 pub mod refresh_grants;
 pub mod registration;

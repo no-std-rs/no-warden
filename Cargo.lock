@@ -918,6 +918,7 @@ name = "no-warden-conformance"
 version = "0.1.0"
 dependencies = [
  "aes",
+ "argon2",
  "axum",
  "axum-server",
  "base64 0.22.1",

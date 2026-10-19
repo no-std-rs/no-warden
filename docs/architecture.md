@@ -515,9 +515,9 @@ encrypted-string validation; this is separate from the legacy strict policy.
 
 PBKDF2 requires at least 100,000 iterations with no added maximum. Argon2 requires
 at least one iteration, memory 15–1024 and parallelism 1–16. Other signed KDF IDs
-remain opaque; non-Argon2 memory/parallelism normalize to null. The host's shared
-KDF response builder preserves signed values through prelogin and decryption
-metadata instead of silently projecting them as defaults. Before commit, core
+remain opaque; non-Argon2 memory/parallelism normalize to null. The host preserves signed values through the complete prelogin core response
+and its separate decryption-metadata builder instead of silently projecting
+them as defaults. Before commit, core
 state also requires a host-supplied email-validity result. The host uses the
 upstream `email_address` 0.2.9 mailbox parser and URL domain/path/query checks on
 the storage email, with no extra ASCII-only policy. Invalid addresses return
@@ -946,3 +946,22 @@ concurrent connections; atomic one-time persistence is stronger than upstream's
 separate check/save. No key, session, device or vault payload is rewritten.
 Sync exposes the stored value in `userDecryption.userKeyId`; complete profile,
 identity-response and transport parity remain open.
+
+## Prelogin discovery
+
+`PreloginStorage` accepts the exact borrowed `PreloginRequest` email and returns
+`PreloginLookup::Known` signed settings or a bounded `UnknownKdfIndex`.
+`VaultService::prelogin` maps the ordered six-slot catalog and produces sealed
+`CompletePreloginResponse`: four legacy fields, the same nested settings, and
+null salt. The existing unsigned `PreloginResponse` API remains unchanged.
+Normalization, rate/configuration policy, cryptography and persisted secrets
+remain providers; no allocator, clock or new core dependency is introduced.
+
+The host validates whole-body UTF-8 before owned Serde decoding, normalizes once
+for lookup and HMAC selection, and initializes a private installation key during
+startup. Discovery does not initialize secrets or mutate account state.
+Independent HMAC vectors and SQLite reopen tests cover local stability. This
+random key is independent of upstream's RSA-derived key. Backend errors, absent
+rate controls and the 16-MiB versus 20,000,000-byte body limit remain explicit
+adapter differences. The two identity aliases are upstream; the `/api` alias is
+an additional local contract.
