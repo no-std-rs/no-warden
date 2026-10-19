@@ -18,6 +18,10 @@ use no_warden::{
     refresh::{RefreshIdentity, RefreshMethod, RefreshStorage},
     registration::RegistrationEmail,
     route::{Method, classify},
+    sends::{
+        SendContext, SendListData, SendLookup, SendNumber, SendPayload, SendPolicy, SendRecord,
+        SendState, SendStorage, ValidatedSendAccess, ValidatedTextSend,
+    },
     service::{ImportData, ItemMetadata},
     wire::{
         AccountKdfRequest, AccountKeys, AccountKeysResponse, AccountPasswordRequest,
@@ -32,8 +36,8 @@ use no_warden::{
         PreloginResponse, ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest,
         RegistrationAuthentication, RegistrationCredentials, RegistrationFinishRequest,
         RegistrationFinishResponse, RegistrationUnlock, RegistrationVerificationRequest,
-        RegistrationVerificationToken, SecretVerificationRequest, UserPublicKeyResponse,
-        WebAuthnCredentialsResponse,
+        RegistrationVerificationToken, SecretVerificationRequest, SendAccessTokenRequest,
+        TextSendRequest, UserPublicKeyResponse, WebAuthnCredentialsResponse,
     },
 };
 
@@ -44,6 +48,41 @@ struct PurgeProbe {
     account_present: bool,
     personal_items: [bool; 2],
     revision: u64,
+    send_present: bool,
+    send_count: i32,
+    send_maximum: Option<i32>,
+}
+impl PurgeProbe {
+    fn send_record(&self) -> SendRecord<'_, Option<&'static str>> {
+        SendRecord {
+            id: "embedded-send",
+            owner_id: "embedded-owner",
+            access_id: "embedded-access",
+            name: "opaque-name",
+            notes: None,
+            text: None,
+            key: "opaque-key",
+            max_access_count: self.send_maximum,
+            access_count: self.send_count,
+            password_hash: None,
+            disabled: false,
+            hide_email: None,
+            revision_date: "1970-01-01T00:00:00.000Z",
+            expiration_date: None,
+            deletion_date: "1970-01-01T00:00:00.000001Z",
+            creator_identifier: Some("bare-metal@example.com"),
+        }
+    }
+}
+struct SendProbeRecords<'a>(&'a PurgeProbe);
+impl<'a> SendListData<'a> for SendProbeRecords<'a> {
+    type Payload = Option<&'static str>;
+    fn len(&self) -> usize {
+        usize::from(self.0.send_present)
+    }
+    fn get(&self, index: usize) -> Option<SendRecord<'a, Self::Payload>> {
+        (index == 0 && self.0.send_present).then(|| self.0.send_record())
+    }
 }
 impl Storage for PurgeProbe {
     type Error = ();
@@ -81,6 +120,94 @@ impl Storage for PurgeProbe {
     }
 }
 impl CipherReadStorage for PurgeProbe {}
+impl SendStorage for PurgeProbe {
+    type SendId = &'static str;
+    type Payload<'a> = Option<&'static str>;
+    type Sends<'a> = SendProbeRecords<'a>;
+    fn send_policy(&mut self, _: &str) -> Result<SendPolicy, ()> {
+        Ok(SendPolicy {
+            can_modify: self.account_present,
+            can_hide_email: true,
+        })
+    }
+    fn send_state(&mut self, id: &str) -> SendLookup<SendState<'_>, ()> {
+        Ok(
+            (id == "embedded-send" && self.send_present).then_some(SendState {
+                id: "embedded-send",
+                owner_id: "embedded-owner",
+                kind: 0,
+                disabled: false,
+                max_access_count: self.send_maximum,
+                access_count: self.send_count,
+                expiration_ns: None,
+                deletion_ns: 1000,
+                password_protected: false,
+            }),
+        )
+    }
+    fn send(&mut self, id: &str) -> SendLookup<SendRecord<'_, Self::Payload<'_>>, ()> {
+        Ok((id == "embedded-send" && self.send_present).then(|| self.send_record()))
+    }
+    fn sends(&mut self, _: &str) -> Result<Self::Sends<'_>, ()> {
+        Ok(SendProbeRecords(self))
+    }
+    fn create_text_send<P: SendPayload + ?Sized>(
+        &mut self,
+        _: &str,
+        plan: &ValidatedTextSend<'_, '_, P>,
+    ) -> Result<Self::SendId, ()> {
+        let mut buffer = [0; 256];
+        let _ = black_box(serde_json_core::to_slice(
+            plan.request().text.unwrap(),
+            &mut buffer,
+        ));
+        black_box((buffer, plan.password_change()));
+        self.send_present = true;
+        self.send_count = 0;
+        self.send_maximum = plan.max_access_count();
+        Ok("embedded-send")
+    }
+    fn update_text_send<P: SendPayload + ?Sized>(
+        &mut self,
+        _: &str,
+        _: &str,
+        plan: &ValidatedTextSend<'_, '_, P>,
+    ) -> Result<(), ()> {
+        black_box(plan);
+        self.send_maximum = plan.max_access_count();
+        Ok(())
+    }
+    fn delete_send(&mut self, _: &str, _: &str) -> Result<(), ()> {
+        self.send_present = false;
+        Ok(())
+    }
+    fn remove_send_password(&mut self, _: &str, _: &str) -> Result<(), ()> {
+        Ok(())
+    }
+    fn resolve_send_access_id(&mut self, id: &str) -> Result<Option<Self::SendId>, ()> {
+        Ok((id == "embedded-access").then_some("embedded-send"))
+    }
+    fn verify_send_password(&mut self, _: &str, password: &Secret<'_>) -> Result<bool, ()> {
+        black_box(password);
+        Ok(self.verified)
+    }
+    fn verify_send_access_token(&mut self, token: &Secret<'_>) -> Result<Option<Self::SendId>, ()> {
+        black_box(token);
+        Ok(self.verified.then_some("embedded-send"))
+    }
+    fn register_send_access(&mut self, plan: &ValidatedSendAccess<'_>) -> Result<bool, ()> {
+        black_box((plan.id(), plan.now_unix_nanos()));
+        self.revision += 1;
+        if self
+            .send_maximum
+            .is_some_and(|maximum| self.send_count >= maximum)
+        {
+            return Ok(false);
+        }
+        self.send_count += 1;
+        Ok(true)
+    }
+}
 impl PasswordLoginStorage for PurgeProbe {
     type OwnerId = &'static str;
 
@@ -257,7 +384,53 @@ pub extern "C" fn _start() -> ! {
             account_present: black_box(true),
             personal_items: black_box([true, true]),
             revision: black_box(0),
+            send_present: black_box(false),
+            send_count: black_box(0),
+            send_maximum: None,
         };
+        let payload = black_box("opaque-text");
+        let send = TextSendRequest {
+            kind: 0,
+            key: "opaque-key",
+            password: None,
+            max_access_count: Some(SendNumber::String("1")),
+            expiration_ns: None,
+            deletion_ns: 1000,
+            disabled: false,
+            hide_email: None,
+            emails: None,
+            name: "opaque-name",
+            notes: None,
+            text: Some(&payload),
+        };
+        let context = SendContext {
+            now_unix_nanos: black_box(0),
+        };
+        let mut send_output = [0; 2048];
+        let mut service = VaultService::new(&mut provider);
+        if let Ok(response) = service.create_text_send("embedded-owner", &send, &context) {
+            let _ = black_box(serde_json_core::to_slice(&response, &mut send_output));
+        }
+        let access = serde_json_core::from_slice::<SendAccessTokenRequest<'_>>(black_box(
+            br#"{"grant_type":"send_access","client_id":"","send_id":"embedded-access"}"#,
+        ));
+        if let Ok((access, _)) = access {
+            let _ = black_box(service.authenticate_send_access(&access, &context));
+        }
+        if let Ok(response) = service.access_text_send(
+            &Secret::new(black_box("external-recipient-proof")),
+            &context,
+        ) {
+            let _ = black_box(serde_json_core::to_slice(&response, &mut send_output));
+        }
+        let _ = black_box(service.access_text_send(
+            &Secret::new(black_box("external-recipient-proof")),
+            &context,
+        ));
+        if let Ok(response) = service.list_sends("embedded-owner") {
+            let _ = black_box(serde_json_core::to_slice(&response, &mut send_output));
+        }
+        black_box(send_output);
         let password_login = serde_json_core::from_slice::<PasswordLoginRequest<'_>>(black_box(
             br#"{"grant_type":"password","client_id":"cli","password":"test-only-proof","scope":"api offline_access","username":" bare-metal@example.com ","deviceIdentifier":"","deviceName":"","deviceType":""}"#,
         ));

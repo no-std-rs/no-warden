@@ -1283,3 +1283,123 @@ current client/device authority, old access, owner isolation and
 password/KDF/stamp revocation/recovery pass with final retained-cipher decryption.
 Long expiry, refresh JWT/`nbf`, disabled-account and mobile behavior are not live
 runtime claims; applicable provider/clock contracts use separate unit evidence.
+
+## Personal text Sends
+
+The [pinned handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/sends.rs#L69-L215)
+and [release 1.37.4 handlers](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/sends.rs#L63-L199)
+agree on the personal text subset. Owner routes are `GET`/`POST /api/sends`,
+`GET`/`PUT`/`DELETE /api/sends/{id}` and
+`PUT /api/sends/{id}/remove-password`. Recipient `POST /api/sends/access` uses
+separate Send-token authority. File upload/download routes remain outside this
+chunk. Owner UUID guards preserve decoded spelling and run after authentication:
+malformed paths return 422, valid absent/foreign IDs return 400. Previous-stamp
+exceptions do not authorize these owner handlers.
+
+The JSON model declares fifteen fields in this order: `type`, `key`, `password`,
+`maxAccessCount`, `expirationDate`, `deletionDate`, `disabled`, `hideEmail`,
+`emails`, `name`, `notes`, `text`, `file`, `fileLength`, `id`. Type, key,
+deletion date, disabled and name are required. Optional values accept null;
+names/keys/notes/passwords are opaque strings, including empty. Only camelCase
+field names are declared; unknown outer fields, including `authType`, owner and
+access-count claims, do not select persisted state. A supplied body ID is ignored
+for ordinary creation/update. The full owned JSON/date decoder remains outside
+the core's generic `TextSendRequest<P>` semantic view.
+
+Text type is 0. Owner POST rejects file type 1 and unsupported types with 400.
+A non-null `text` value is required. It can contain arbitrary JSON; projection
+is not a raw-JSON identity transform. The adapter removes only an exact root
+`response` key before storing. [Owner/access projection](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/send.rs#L147-L200)
+uses the recursive first-character-lowercase/SSN normalization in
+[LowerCase](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/util.rs#L595-L663),
+converts a top-level numeric `size` to a string, and projects accepted scalar or
+array roots as null when the flattened wrapper cannot decode them. Nested
+`response` fields survive. A root `Response` survives removal and then normalizes.
+
+Creation checks disable-Send policy, requested hidden-email policy, type/data,
+deletion ceiling, unsupported email verification and late access-limit conversion.
+Update checks policy and ownership before email/type/date/data/number checks.
+`maxAccessCount` accepts signed `i64` JSON integers or strings that convert to
+`i32`; negative values are not rejected. No trimming occurs during conversion.
+Deletion dates strictly greater than now plus thirty-one days fail with 400;
+past deletion/expiration dates are accepted for owner storage. Date parsing uses
+Chrono's Serde grammar; the response formatter emits UTC with six fractional
+digits ([formatter](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/util.rs#L472-L476)).
+Complete timestamp grammar and clock equivalence require more than selected
+portable examples. Omitted/null update password preserves the verifier;
+`remove-password` explicitly clears it, even when already absent. Omitted/null
+notes, access limit, expiration and hidden-email state replace prior values.
+
+The typed owner envelope has exactly eighteen fields: `id`, `accessId`, `type`,
+`name`, `notes`, `text`, `file`, `key`, `maxAccessCount`, `accessCount`, `password`,
+`authType`, `disabled`, `hideEmail`, `revisionDate`, `expirationDate`,
+`deletionDate`, `object: "send"`. `accessId` is unpadded base64url of UUID bytes;
+owner `id` remains its UUID string. `file` is null for text. `password` contains
+the server verifier's unpadded base64url marker; `authType` is 1 when protected,
+otherwise 2. The list has only `data`, `object: "list"`, `continuationToken: null`.
+Sync includes the same owner responses, without filtering disabled/expired/maxed
+records until separate purge cleanup. Organizations, collections and policy
+placeholders remain separate unimplemented contracts.
+
+Recipient token issuance uses the existing identity form with
+`grant_type=send_access`, required `client_id` and `send_id`, and optional
+`password_hash_b64`. The latter two names are case-sensitive underscore names;
+they have no compact/uncased aliases. Declared grant/client aliases remain
+uncased, Rocket root matching applies, and repeated optional fields become
+absent. Scope and an ordinary user bearer do not select recipient authority.
+The [dispatcher](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L100-L113)
+calls its public limiter before required-field checks. The standalone adapter
+does not implement matching abuse controls.
+
+[Send-token issuance](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth/send.rs#L16-L109)
+decodes the access ID, checks current count/availability, then verifies an exact
+opaque password proof when protection exists. Missing proof returns 400 with
+`invalid_request`/`password_hash_b64_required`; wrong proof returns 404 with
+`invalid_grant`/`password_hash_b64_invalid`; invalid/missing/inaccessible Send
+returns 404 with `invalid_grant`/`send_id_invalid`. These errors contain exactly
+`kind: "expected_server"`, `error`, `send_access_error_type`. Required form-field
+errors instead use the default API envelope. No count is consumed during minting.
+
+Success has four fields: `access_token`, `expires_in`, `token_type: "Bearer"`,
+`scope: "api.send.access"`. Upstream signs RS256 with canonical origin plus
+`|send`, UUID subject, `nbf` and a 120-second deadline. Decoding strips all Unicode
+whitespace and allows thirty-second time leeway. The local persisted signer uses
+HS256, so algorithm/key-distribution equivalence and cross-server tokens are not
+claimed. The server hashes the raw UTF-8 client proof again with PBKDF2-SHA256,
+100000 iterations and a random 64-byte salt. The user's plaintext password and
+fragment seed stay client-side.
+
+Recipient access ignores body/query resource claims. It rechecks current
+disabled/deletion/expiration state and atomically reserves an access below the
+limit. Equality with a deadline is inaccessible. It does not recheck password:
+issued capabilities survive password replacement/removal. A failed count
+reservation may advance owner revision before 404; no universal denial rollback
+is implied. Recipient responses have exactly `id` (access ID), `type`, `name`,
+`text`, `file`, `expirationDate`, `creatorIdentifier`, `object: "send-access"`.
+Owner key, notes, password, count and deletion date are excluded; hidden creator
+email is null. Owner mutations and successful access advance Send/account
+revision; read and token-mint operations do not.
+
+All six expanded Rust HTTP cases pass against both actual servers with
+129 counted requests, 23 Send-token grants, 15 recipient requests and two ordinary
+logins, excluding two fixture registrations. Selected relaxed Chrono timestamp
+and leap-second owner create/delete examples also pass. The separate twenty-command
+official CLI 2026.10.0 run also passes both actual servers.
+The wrong-password and deleted-Send receives require exit 1 and exact public CLI
+JSON messages `Invalid password` and `Not found.` respectively; generic failure
+output is rejected. These are client-visible checks, separate from raw server
+error-envelope parity.
+The shipped [create command](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/tools/send/commands/create.command.ts#L168-L179)
+delegates encryption and persistence to its selected Send service. Recipient
+[receive](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/tools/send/commands/receive.command.ts#L535-L550)
+uses a Send token and decrypts the returned encrypted fields. The configured
+[SDK token client](https://github.com/bitwarden/sdk-internal/blob/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6/crates/bitwarden-auth/src/send_access/client.rs#L29-L60)
+posts the recipient identity form. Owner
+[get](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/tools/send/commands/get.command.ts#L80-L90)
+and [list](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/tools/send/commands/list.command.ts#L20-L24)
+read local state, so their successful decryption after sync is distinct from
+independent owner HTTP read evidence. Mutation implementations remain subject to
+the shipped SDK/legacy selector; the focused result does not identify every
+feature-flag branch or provide a captured request trace.
+File Sends, email verification, enterprise/configuration policies, notifications,
+rate controls, scheduled purge and full transport/JWT/time parity remain open.

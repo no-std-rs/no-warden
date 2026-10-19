@@ -52,6 +52,13 @@ pub enum Route<'a> {
     AuthRequestUpdate(&'a str),
     AuthRequestResponse(&'a str),
     Sync,
+    SendList,
+    SendGet(&'a str),
+    SendCreate,
+    SendUpdate(&'a str),
+    SendDelete(&'a str),
+    SendRemovePassword(&'a str),
+    SendAccess,
     KnownDevice,
     Devices,
     DeviceGet(&'a str),
@@ -104,6 +111,7 @@ impl Route<'_> {
                 | Self::RegistrationVerification
                 | Self::RegistrationFinish
                 | Self::Token
+                | Self::SendAccess
                 | Self::AuthRequestCreate
                 | Self::AuthRequestResponse(_)
                 | Self::KnownDevice
@@ -170,6 +178,9 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (Post, "/api/auth-requests") => Some(AuthRequestCreate),
         (Get, "/api/auth-requests" | "/api/auth-requests/pending") => Some(AuthRequests),
         (Get, "/api/sync") => Some(Sync),
+        (Get, "/api/sends") => Some(SendList),
+        (Post, "/api/sends") => Some(SendCreate),
+        (Post, "/api/sends/access") => Some(SendAccess),
         (Get, "/api/devices/knowndevice") => Some(KnownDevice),
         (Get, "/api/devices") => Some(Devices),
         (Get, "/api/settings/domains") => Some(DomainsGet),
@@ -201,6 +212,22 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
             | "/api/ciphers/unarchive",
         ) => None,
         _ => {
+            if let Some(tail) = path.strip_prefix("/api/sends/") {
+                if let Some((id, action)) = tail.split_once('/') {
+                    return (method == Put && !id.is_empty() && action == "remove-password")
+                        .then_some(SendRemovePassword(id));
+                }
+                if tail.is_empty() {
+                    return None;
+                }
+                // The adapter applies the source UUID guard after authentication.
+                return match method {
+                    Get => Some(SendGet(tail)),
+                    Put => Some(SendUpdate(tail)),
+                    Delete => Some(SendDelete(tail)),
+                    _ => None,
+                };
+            }
             if let Some(id) = path.strip_prefix("/api/auth-requests/") {
                 // UUID/query guards belong to the adapter, with route-specific authentication.
                 if let Some((id, action)) = id.split_once('/') {
@@ -333,6 +360,47 @@ fn valid_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_send_routes_preserve_source_methods_and_separate_recipient_authority() {
+        for (method, path, route) in [
+            (Method::Get, "/api/sends", Route::SendList),
+            (Method::Post, "/api/sends", Route::SendCreate),
+            (Method::Get, "/api/sends/%41raw", Route::SendGet("%41raw")),
+            (Method::Put, "/api/sends/raw", Route::SendUpdate("raw")),
+            (Method::Delete, "/api/sends/raw", Route::SendDelete("raw")),
+            (
+                Method::Put,
+                "/api/sends/raw/remove-password",
+                Route::SendRemovePassword("raw"),
+            ),
+            (Method::Post, "/api/sends/access", Route::SendAccess),
+        ] {
+            assert_eq!(classify(method, path), Some(route));
+            assert_eq!(
+                classify(method, &std::format!("{path}/?ignored=true")),
+                Some(route)
+            );
+            assert_eq!(route.requires_authentication(), route != Route::SendAccess);
+        }
+        // These match source dynamic UUID routes; the adapter returns the guard status.
+        assert_eq!(
+            classify(Method::Get, "/api/sends/access"),
+            Some(Route::SendGet("access"))
+        );
+        for (method, path) in [
+            (Method::Post, "/api/sends/raw"),
+            (Method::Post, "/api/sends/raw/remove-password"),
+            (Method::Delete, "/api/sends"),
+            (Method::Get, "/api/sends/raw/remove-password"),
+            (Method::Put, "/api/sends/raw/Remove-Password"),
+            (Method::Post, "/api/sends/file/v2"),
+            (Method::Get, "/api/sends//remove-password"),
+            (Method::Get, "/api/sends/raw/extra"),
+        ] {
+            assert!(classify(method, path).is_none());
+        }
+    }
 
     #[test]
     fn cipher_read_aliases_require_authentication_and_preserve_raw_uuid_guard_inputs() {

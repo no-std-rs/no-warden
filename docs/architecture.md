@@ -719,7 +719,7 @@ fails; the host supports password proofs and rejects unsupported OTPs.
 Unlike personal vault purge, account deletion leaves no supported owner state or
 revision. The adapter commits session/API-secret/item removal and account-FK
 cascades together, including ciphertext, attachment BLOBs/grants, devices/push
-metadata, auth requests, domain settings, private stamps/history/exceptions and
+metadata, auth requests, domain settings, personal text Sends, private stamps/history/exceptions and
 registration metadata. It preserves unrelated accounts and the instance's
 registration signer. Physical deletion, rollback and durable reopen require local
 SQL evidence; portable HTTP demonstrates public authority and capability effects.
@@ -833,3 +833,60 @@ The cases prove original-proof reuse, exact selected responses, owner/device
 isolation, revocation/recovery and retained ciphertext decryption. Clock/provider
 tests separately cover hidden deadline/leeway policy. No complete identity or
 refresh-JWT parity follows from these comparisons.
+
+## Personal text Sends
+
+`SendStorage` is an opt-in provider for six owner operations and separate
+recipient access. `TextSendRequest<P>` is a borrowed semantic view after an
+adapter has decoded the full request, dates and signed number-or-string fields;
+it is not a complete Serde JSON decoder. Generic caller-owned serializable text
+and stable indexed `SendListData` views avoid fixed payload/count capacities and
+any core allocator. Typed serializers emit the exact eighteen-field owner,
+eight-field recipient and three-field list envelopes. Recipient serialization
+itself suppresses `creatorIdentifier` when `hideEmail` is true.
+
+The core orders trusted Send/hidden-email policy checks, ownership, type,
+thirty-one-day deletion ceiling and signed `i32` access-limit conversion before
+provider writes. Dates use a caller-supplied nanosecond clock. Opaque name, key,
+notes, password proof and text receive no invented encrypted-envelope or size
+policy. Creation sets fresh IDs/count zero; update keeps identity/count. Omitted
+or null update password preserves protection; explicit password removal clears
+it. Delete bypasses the disable-Send write policy. Providers own complete local
+mutation atomicity, clocks, normalization, cryptography and notifications.
+
+Recipient token issuance validates a decoded access ID, current availability,
+count and optional password proof without incrementing access. Its private grant
+has 120-second authority and no refresh. An owner bearer cannot satisfy recipient
+access. Each actual access rechecks disabled/deadline state and asks the provider
+for an atomic count increment below the current limit. Already-issued recipient
+capabilities survive password replacement/removal. An exhausted count can advance
+the owner revision before returning 404, as upstream does; rejection does not
+imply universal rollback. Successful access changes count and Send/owner revision.
+
+The SQLite adapter stores encrypted text and metadata in owner-FK rows, hashes
+the exact client-derived proof with PBKDF2-SHA256/100000 and a random 64-byte
+salt, and uses a persistent purpose-separated signer for short-lived Send JWTs.
+Its HS256 algorithm differs from upstream RS256. Issuer, subject and
+`nbf`/`exp` checks use the Send purpose and thirty-second leeway; clock tests do
+not establish cross-server JWT acceptance or live long-expiry behavior.
+Owner/list/sync projection follows upstream's recursive first-character key
+normalization, exact root `response` removal and top-level numeric-size string
+conversion. Accepted scalar/array text projects as null. This is not universal
+raw-JSON projection preservation.
+
+Local savepoints protect Send rows, password material and revision writes.
+Notification or later response construction is a separate boundary. SQL tests
+cover rollback, durable reopen, signing authority, account-deletion FK cleanup
+and preservation of Sends during personal vault purge. Account deletion removes
+Send rows; vault purge continues to remove personal ciphers/folders/attachments
+while retaining Sends. Sync now includes real owner Send responses; organization,
+collection and policy placeholders do not acquire implementation by that change.
+
+All six selected HTTP cases pass against the adapter and actual Vaultwarden
+1.37.4: 129 counted requests each, including two password logins, 23 Send-token
+grant requests and 15 recipient access requests. Two fixture registrations are
+excluded. Authenticated ciphertext decryption, exact projections, ownership,
+password lifecycle, access limits and preserved unrelated state are compared.
+The separate official CLI 2026.10.0 run passes all twenty commands on both servers. File Sends, email verification,
+enterprise/configuration policy, notification delivery, rate controls and
+scheduled purge remain outside this supported subset; full API parity stays open.

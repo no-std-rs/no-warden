@@ -32,6 +32,7 @@ pub mod purge;
 pub mod refresh;
 pub mod registration;
 pub mod route;
+pub mod sends;
 pub mod service;
 pub mod validation;
 pub mod wire;

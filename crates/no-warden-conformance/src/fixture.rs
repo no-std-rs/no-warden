@@ -138,7 +138,7 @@ fn encrypt_with_iv(plaintext: &[u8], key: &[u8; 64], iv: &[u8; 16]) -> String {
     )
 }
 
-fn encrypt(plaintext: &[u8], key: &[u8; 64]) -> Result<String, FixtureError> {
+pub(crate) fn encrypt(plaintext: &[u8], key: &[u8; 64]) -> Result<String, FixtureError> {
     let mut iv = [0; 16];
     OsRng
         .try_fill_bytes(&mut iv)
@@ -146,7 +146,7 @@ fn encrypt(plaintext: &[u8], key: &[u8; 64]) -> Result<String, FixtureError> {
     Ok(encrypt_with_iv(plaintext, key, &iv))
 }
 
-fn decrypt(cipher_string: &str, key: &[u8; 64]) -> Result<Vec<u8>, &'static str> {
+pub(crate) fn decrypt(cipher_string: &str, key: &[u8; 64]) -> Result<Vec<u8>, &'static str> {
     let encoded = cipher_string
         .strip_prefix("2.")
         .ok_or("wrong encryption type")?;
@@ -262,7 +262,10 @@ pub fn registration(email: &str, password: &str, iterations: u32) -> Result<Valu
     }))
 }
 
-fn pbkdf2_fixture_user_key(fixture: &Value, password: &str) -> Result<[u8; 64], FixtureError> {
+pub(crate) fn pbkdf2_fixture_user_key(
+    fixture: &Value,
+    password: &str,
+) -> Result<[u8; 64], FixtureError> {
     let invalid = || FixtureError(Failure::CredentialRewrap);
     if fixture["kdf"].as_i64() != Some(0) {
         return Err(invalid());

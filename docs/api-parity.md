@@ -39,23 +39,24 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 88 routed patterns, 50 with typed requests, 77 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 95 routed patterns, 52 with typed requests, 84 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
+| Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 85 partial and 209 unimplemented. Query/rank/configuration
+status: 92 partial and 202 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
 
-36 local patterns have some typed response representation, including
+42 local patterns have some typed response representation, including
 the domain settings projections and empty mutation response, explicit API-key
 responses, and attachment responses. Bulk cipher lists use the generic `ListResponse`
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 80 patterns, negative
-HTTP evidence for 79, 203 named HTTP cases, and 31 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 87 patterns, negative
+HTTP evidence for 86, 209 named HTTP cases, and 41 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -1038,8 +1039,8 @@ contracts remain open; all full-parity and captured-trace flags remain false.
 ## Ordinary password-grant core
 
 This chunk deepens the existing partial `POST /identity/connect/token` contract;
-it adds no route or newly covered upstream handler. The 294-handler inventory and
-209 unimplemented handlers remain unchanged. `PasswordLoginRequest`,
+it added no route or newly covered upstream handler. The inventory still has
+294 handlers; subsequent text-Send coverage is tracked separately below. `PasswordLoginRequest`,
 `PasswordLoginStorage` and `VaultService::authenticate_password` add a reusable
 allocation-free ordinary password path beside API-key and auth-request login.
 OAuth token response projection remains adapter-owned; refresh now has its own
@@ -1109,3 +1110,51 @@ Source-authored refresh counters are separate from password-login attempts and
 are not server-side limiter telemetry. Deadline/leeway/mobile policy uses
 separate host clock tests, not long-expiry or mobile runtime proof.
 No full-parity or captured request-trace claim is introduced.
+
+## Personal text-Send lifecycle
+
+Seven newly implemented patterns map to seven distinct handlers in the fixed
+294-handler inventory: owner `GET`/`POST /api/sends`, owner `GET`/`PUT`/`DELETE
+`/api/sends/{id}`, `PUT /api/sends/{id}/remove-password` and recipient
+`POST /api/sends/access`. The existing token route adds `grant_type=send_access`;
+sync now includes actual owner Send projections. File upload/download, email
+verification and broader enterprise/configuration variants remain unimplemented
+or partial. Every full-parity flag remains false.
+
+`SendStorage` supplies trusted policy, stable indexed views, persistence,
+password verification and recipient capability verification. `TextSendRequest<P>`
+is an allocation-free semantic view, not a full Serde request decoder.
+`SendOwnerResponse<P>`, `SendRecipientResponse<P>` and `SendListResponse<L>`
+serialize eighteen, eight and three fields without allocating. The HTTP adapter
+owns dates, raw JSON, root normalization, cryptography and token signing. No
+complete typed sync or file-Send model is counted.
+
+The [pin/release protocol](protocol.md#personal-text-sends) preserves policy and
+ownership ordering, the strict thirty-one-day ceiling, opaque metadata and
+late signed-number conversion. Update preserves omitted/null passwords; explicit
+remove-password clears them. Token minting does not increment count. Issued
+recipient capabilities survive password replacement, but every access checks
+current availability and conditionally increments below the limit. A failed
+count reservation can advance owner revision. Local transactions provide stronger
+row/revision rollback than upstream's sequential writes; that does not promise
+universal rollback across notifications or response construction.
+
+All six selected Rust HTTP cases pass against both actual servers: 129 counted
+requests, two password logins, 23 Send-token grants and 15 recipient accesses per
+target, excluding two fixture registrations. Real authenticated decryption and
+account-key seed unwrap accompany projection, ownership, password/count/deadline
+and foreign/vault-preservation assertions. Source/unit evidence separately
+establishes arbitrary scalar/array projection, exact clock boundaries, rollback,
+reopen, account-deletion FK cleanup and preservation during personal vault purge.
+The focused twenty-command official CLI 2026.10.0 run passes both actual servers.
+Its wrong-password and post-deletion checks require exit 1 plus the exact public
+CLI messages `Invalid password` and `Not found.`; an unrelated nonzero exit is
+insufficient. New unit fixtures reject generic server/rate/transport errors and
+malformed response categories without exposing captured output.
+Static client calls and the independently passing CLI120 baseline are not new
+Send-route traces.
+
+The host uses a private persisted HS256 Send signer rather than upstream RS256.
+File Sends, email OTP, enterprise policies, configuration matrices, notifications,
+rate controls, purge cron and full JWT/transport/failure parity remain open. The
+delivery goal remains all upstream APIs, beyond the verified personal subset.

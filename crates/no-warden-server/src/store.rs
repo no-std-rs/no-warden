@@ -41,6 +41,9 @@ pub struct Store {
     pub(crate) registration_issuer: String,
     pub(crate) registration_policy: crate::registration::Policy,
     pub(crate) attachment_metadata_cache: Option<crate::attachments::Record>,
+    pub(crate) send_record_cache: Option<crate::sends::Record>,
+    pub(crate) send_records_cache: Vec<crate::sends::Record>,
+    pub(crate) send_dates: Option<crate::sends::Dates>,
     owner: String,
     key_id: Option<String>,
     api_key_secret: Option<String>,
@@ -209,6 +212,8 @@ impl Store {
         db.execute_batch(crate::registration::SCHEMA)?;
         db.execute_batch(crate::account_security::SCHEMA)?;
         db.execute_batch(crate::account_password::SCHEMA)?;
+        db.execute_batch(crate::sends::SCHEMA)?;
+        crate::sends::signing_key(&db)?;
         // SQLite inherits the private database mode for new sidecars. Also
         // narrow sidecars left behind by an earlier permissive installation.
         #[cfg(unix)]
@@ -221,6 +226,9 @@ impl Store {
             registration_issuer: String::new(),
             registration_policy: crate::registration::Policy::default(),
             attachment_metadata_cache: None,
+            send_record_cache: None,
+            send_records_cache: Vec::new(),
+            send_dates: None,
             owner: String::new(),
             key_id: None,
             api_key_secret: None,

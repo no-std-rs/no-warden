@@ -25,6 +25,8 @@ enum Suite {
     CipherReads,
     PasswordGrants,
     RefreshGrants,
+    TextSends,
+    TextSendsCli,
 }
 
 impl Suite {
@@ -53,6 +55,8 @@ impl Suite {
             "cipher-reads" => Self::CipherReads,
             "password-grants" => Self::PasswordGrants,
             "refresh-grants" => Self::RefreshGrants,
+            "text-sends" => Self::TextSends,
+            "text-sends-cli" => Self::TextSendsCli,
             _ => return None,
         })
     }
@@ -77,7 +81,7 @@ fn check<E: Display>(result: Result<(), E>) {
 
 fn usage() {
     eprintln!(
-        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials|personal-vault-purge|account-deletion|cipher-reads|password-grants|refresh-grants]"
+        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials|personal-vault-purge|account-deletion|cipher-reads|password-grants|refresh-grants|text-sends|text-sends-cli]"
     );
 }
 
@@ -161,5 +165,11 @@ fn main() {
     }
     if suite == Suite::RefreshGrants {
         check(no_warden_conformance::refresh_grants::run());
+    }
+    if suite == Suite::TextSends {
+        check(no_warden_conformance::text_sends::run());
+    }
+    if suite == Suite::TextSendsCli {
+        check(no_warden_conformance::text_sends_cli::run());
     }
 }
