@@ -28,8 +28,7 @@
           { "context": "msrv", "integration_id": 15368 },
           { "context": "bitwarden-cli", "integration_id": 15368 },
           { "context": "embedded", "integration_id": 15368 },
-          { "context": "codex/review-gate", "integration_id": 4602759 },
-          { "context": "Runnerless / Codex review", "integration_id": 4602759 }
+          { "context": "codex/review-gate", "integration_id": 4602759 }
         ]
       }
     },

@@ -98,26 +98,27 @@ Its four tests exercise the real service lifecycle, bounded profile metadata,
 capacity failures, and rejection of payloads the example cannot preserve.
 
 `.runnerless-ci.ts` is a Runnerless v1 program. It evaluates current-head Codex
-review evidence and reports `Runnerless / Codex review`. PRs execute the trusted
-base revision, so the configuration starts on `main`. Repository enrollment and
+review evidence. Runnerless deduplicates this policy against its native
+`codex/review-gate` when both enforce the same review outcome, so only the
+canonical native context is required. PRs execute the trusted base revision, so
+the configuration starts on `main`. Repository enrollment and
 GitHub App access must also be verified; committing this file alone is not
 evidence of a live check.
 
-This repository is enrolled in Runnerless. On 2026-10-18, `main` requires these
+This repository is enrolled in Runnerless. The policy requires these
 actual check contexts, pinned to the reporting GitHub App:
 
 | Required context | App ID |
 | --- | --- |
 | `codex/review-gate` | Runnerless **4602759** |
-| `Runnerless / Codex review` | Runnerless **4602759** |
 | `rust` | GitHub Actions **15368** |
 | `msrv` | GitHub Actions **15368** |
 | `bitwarden-cli` | GitHub Actions **15368** |
 | `embedded` | GitHub Actions **15368** |
 
-The native review gate and the configured Runnerless check must both succeed
-for the current PR head. The native gate has been observed rejecting unresolved
-Codex findings, and the core PR passed both review checks before merging.
+The canonical native review gate must succeed for the current PR head. It
+rejects unresolved Codex findings; requiring an equivalent configured check
+would leave PRs waiting for a duplicate context that Runnerless suppresses.
 Strict branch freshness, administrator enforcement, and resolved conversations
 are required too. The `bitwarden-cli` context runs the client, HTTP, and host
 persistence checks. The `embedded` context protects owned allocation-free
@@ -130,7 +131,7 @@ required context or substitute a green build for a completed review.
 
 The active [`main: reviewed squash merges` ruleset](https://github.com/no-std-rs/no-warden/rules/25333958) is versioned in
 [`.github/main.ruleset.json`](../.github/main.ruleset.json). It requires a PR,
-squash merging, resolved review threads, current branches, and all six checks
+squash merging, resolved review threads, current branches, and all five checks
 above. Its bypass-actor list is empty, so administrators follow the same rules.
 Deletion, force pushes, and merge commits are forbidden. Repository settings also
 disable merge and rebase merges. The existing classic protection remains layered
