@@ -438,3 +438,190 @@ async fn file_send_download_query_uses_first_exact_root_and_distinguishes_missin
             .is_ok_and(|valid| !valid)
     );
 }
+
+struct UploadHeaderServer {
+    address: std::net::SocketAddr,
+    task: tokio::task::JoinHandle<()>,
+}
+impl Drop for UploadHeaderServer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+async fn upload_header_server(app: crate::App) -> UploadHeaderServer {
+    let router = axum::Router::new()
+        .fallback(crate::dispatch_http)
+        .layer(axum::middleware::from_fn_with_state(
+            app.clone(),
+            crate::request_body_limit,
+        ))
+        .with_state(app);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Upload guard listener failed");
+    let address = listener.local_addr().expect("Upload guard address failed");
+    let task = tokio::spawn(async move {
+        let _ = axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await;
+    });
+    UploadHeaderServer { address, task }
+}
+async fn upload_header_status(
+    server: &UploadHeaderServer,
+    path: &str,
+    bearer: Option<&str>,
+) -> [u8; 13] {
+    use std::io::{Read, Write};
+    let authorization = bearer
+        .map(|value| format!("Authorization: Bearer {value}\r\n"))
+        .unwrap_or_default();
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: local.test\r\nContent-Type: multipart/form-data; boundary=upload-guard\r\nContent-Length: 525000000\r\nExpect: 100-continue\r\n{authorization}Connection: close\r\n\r\n"
+    );
+    let address = server.address;
+    tokio::task::spawn_blocking(move || {
+        let timeout = std::time::Duration::from_secs(2);
+        let mut socket = std::net::TcpStream::connect_timeout(&address, timeout)
+            .expect("Upload guard connection failed");
+        socket.set_read_timeout(Some(timeout)).unwrap();
+        socket.set_write_timeout(Some(timeout)).unwrap();
+        socket
+            .write_all(request.as_bytes())
+            .expect("Upload guard header write failed");
+        // No body is sent. A 100 response proves collection started; a final
+        // rejection must be delivered using these headers alone.
+        let mut prefix = [0_u8; 13];
+        socket
+            .read_exact(&mut prefix)
+            .expect("Upload guard did not respond before reading body");
+        prefix
+    })
+    .await
+    .expect("Upload guard client task failed")
+}
+fn upload_header_fixture() -> (crate::App, String) {
+    let mut store = fixture(":memory:");
+    let (id, file) = reservation(&mut store, "alice");
+    let now = chrono::Utc::now().timestamp();
+    store.db.execute("INSERT INTO device_registry VALUES('alice','upload-device','fixture',8,'2000-01-01','2000-01-01')",[]).unwrap();
+    for (bearer, expiry, bound) in [
+        ("expired-upload-access", now - 1, true),
+        ("unbound-upload-access", now + 600, false),
+        ("current-upload-access", now + 600, true),
+    ] {
+        let access = crate::digest(bearer);
+        store
+            .db
+            .execute(
+                "INSERT INTO sessions VALUES(?1,?2,'alice',?3,0)",
+                params![access, format!("unused-{bearer}"), expiry],
+            )
+            .unwrap();
+        if bound {
+            store
+                .db
+                .execute(
+                    "INSERT INTO session_devices VALUES(?1,'alice','upload-device')",
+                    [access],
+                )
+                .unwrap();
+        }
+    }
+    let app = crate::App {
+        store: std::sync::Arc::new(std::sync::Mutex::new(store)),
+        base: "http://127.0.0.1".into(),
+        signing_key: [19; 32],
+    };
+    (app, format!("/api/sends/{id}/file/{file}"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_send_large_body_limit_rejects_untrusted_headers_before_continue() {
+    let (app, path) = upload_header_fixture();
+    let before = snapshot(&app.store.lock().unwrap());
+    let server = upload_header_server(app.clone()).await;
+    for bearer in [
+        None,
+        Some("invalid-upload-access"),
+        Some("expired-upload-access"),
+        Some("unbound-upload-access"),
+    ] {
+        let first = upload_header_status(&server, &path, bearer).await;
+        assert!(
+            first == *b"HTTP/1.1 401 ",
+            "Upload read body before rejecting credentials"
+        );
+    }
+    let first = upload_header_status(&server, &path, Some("current-upload-access")).await;
+    assert!(
+        first == *b"HTTP/1.1 100 ",
+        "Current bound upload was not allowed to send its body"
+    );
+    assert!(snapshot(&app.store.lock().unwrap()) == before);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_send_large_body_limit_preserves_expired_password_exception_cleanup() {
+    let (app, path) = upload_header_fixture();
+    let before;
+    let foreign;
+    {
+        let store = app.store.lock().unwrap();
+        let now = chrono::Utc::now().timestamp();
+        store.db.execute("INSERT INTO account_password_access VALUES(?1,'alice','upload-device','prior-stamp',?2)",params![crate::digest("previous-upload-access"),now+600]).unwrap();
+        store.db.execute("INSERT INTO account_password_exceptions VALUES('alice','prior-stamp','fixture-generation',?1)",[now-60]).unwrap();
+        store.db.execute_batch("CREATE TABLE upload_revision_audit(owner TEXT NOT NULL); CREATE TRIGGER upload_revision_count AFTER UPDATE OF revision ON accounts WHEN NEW.id='alice' BEGIN INSERT INTO upload_revision_audit VALUES(NEW.id); END;").unwrap();
+        before = store.account("id", "alice").unwrap();
+        foreign = store.account("id", "bob").unwrap();
+    }
+    let server = upload_header_server(app.clone()).await;
+    let first = upload_header_status(&server, &path, Some("previous-upload-access")).await;
+    assert!(
+        first == *b"HTTP/1.1 401 ",
+        "Previous stamp upload read a body before rejection"
+    );
+    let after;
+    {
+        let store = app.store.lock().unwrap();
+        assert!(
+            store
+                .db
+                .query_row(
+                    "SELECT count(*) FROM account_password_exceptions",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap()
+                == 0
+        );
+        assert!(
+            store
+                .db
+                .query_row("SELECT count(*) FROM upload_revision_audit", [], |row| row
+                    .get::<_, i64>(
+                    0
+                ))
+                .unwrap()
+                == 1
+        );
+        after = store.account("id", "alice").unwrap();
+        assert!(after != before && store.account("id", "bob").unwrap() == foreign);
+    }
+    let first = upload_header_status(&server, &path, Some("previous-upload-access")).await;
+    assert!(first == *b"HTTP/1.1 401 ");
+    let store = app.store.lock().unwrap();
+    assert!(
+        store
+            .db
+            .query_row("SELECT count(*) FROM upload_revision_audit", [], |row| row
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap()
+            == 1
+    );
+    assert!(store.account("id", "alice").unwrap() == after);
+}

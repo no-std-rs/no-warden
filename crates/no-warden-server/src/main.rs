@@ -237,7 +237,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let router = Router::new()
         .fallback(dispatch_http)
-        .layer(axum::middleware::from_fn(request_body_limit))
+        .layer(axum::middleware::from_fn_with_state(
+            app.clone(),
+            request_body_limit,
+        ))
         .with_state(app);
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     eprintln!("no-warden conformance server listening on {bind}; database {database}");
@@ -253,6 +256,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn request_body_limit(
+    State(app): State<App>,
     mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
@@ -260,12 +264,57 @@ async fn request_body_limit(
         .and_then(|method| route::classify(method, request.uri().path()))
         .is_some_and(|route| matches!(route, Route::SendFileUpload(..)));
     let maximum = if is_file_upload {
+        if !request
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("multipart/form-data"))
+        {
+            return missing().into_response();
+        }
+        // The Bytes extractor collects the body before dispatch runs. Require
+        // current account/device authority before granting its larger limit.
+        if let Err(error) = authorize_send_upload(&app, request.headers()) {
+            return error.into_response();
+        }
         send_files::MAX_MULTIPART_BYTES
     } else {
         MAX_REQUEST_BYTES
     };
     DefaultBodyLimit::max(maximum).apply(&mut request);
     next.run(request).await
+}
+
+fn authorize_send_upload(app: &App, headers: &HeaderMap) -> Result<(), Failure> {
+    let bearer = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .ok_or_else(unauthorized)?;
+    let access = digest(bearer);
+    let mut store = app
+        .store
+        .lock()
+        .map_err(|_| Failure(StatusCode::INTERNAL_SERVER_ERROR, "Storage unavailable"))?;
+    let now = chrono::Utc::now().timestamp();
+    let owner: Option<String> = store
+        .db
+        .query_row(
+            "SELECT owner FROM sessions WHERE access=?1 AND access_expires>?2",
+            params![access, now],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(owner) = owner else {
+        // Preserve ordinary auth's expired password-exception cleanup, while
+        // previous-stamp sessions remain ineligible for this upload route.
+        account_password::previous_owner(&mut store.db, &access, "", now)?;
+        return Err(unauthorized());
+    };
+    store.account("id", &owner)?.ok_or_else(unauthorized)?;
+    devices::access_binding(&store.db, &access, &owner)?.ok_or_else(unauthorized)?;
+    Ok(())
 }
 
 async fn dispatch_http(
