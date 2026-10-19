@@ -56,6 +56,8 @@ pub enum Route<'a> {
     OrganizationGet(&'a str),
     OrganizationCollections(&'a str),
     OrganizationCollectionCreate(&'a str),
+    OrganizationCollectionUpdate(&'a str, &'a str),
+    OrganizationCollectionDelete(&'a str, &'a str),
     OrganizationCollectionDetails(&'a str, &'a str),
     Collections,
     SendList,
@@ -235,6 +237,17 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                     return match (method, action) {
                         (Get, "collections") => Some(OrganizationCollections(organization)),
                         (Post, "collections") => Some(OrganizationCollectionCreate(organization)),
+                        (Put | Delete, action) => {
+                            let collection = action.strip_prefix("collections/")?;
+                            if collection.is_empty() || collection.contains('/') {
+                                return None;
+                            }
+                            Some(if method == Put {
+                                OrganizationCollectionUpdate(organization, collection)
+                            } else {
+                                OrganizationCollectionDelete(organization, collection)
+                            })
+                        }
                         (Get, action) => {
                             let rest = action.strip_prefix("collections/")?;
                             let collection = rest.strip_suffix("/details")?;
@@ -472,6 +485,39 @@ mod tests {
             (Method::Get, "/api/organizations//"),
         ] {
             assert_eq!(classify(method, path), None);
+        }
+    }
+
+    #[test]
+    fn organization_collection_mutation_routes_preserve_raw_ids_and_have_no_post_alias() {
+        for org in ["org", "bad.id", "%300000000-0000-0000-0000-000000000001"] {
+            for col in ["collection", "bad.id", "malformed%"] {
+                let path = std::format!(
+                    "/api/organizations/{org}/collections/{col}/?organizationId=owned&collectionId=owned"
+                );
+                for (method, route) in [
+                    (Method::Put, Route::OrganizationCollectionUpdate(org, col)),
+                    (
+                        Method::Delete,
+                        Route::OrganizationCollectionDelete(org, col),
+                    ),
+                ] {
+                    assert_eq!(classify(method, &path), Some(route));
+                    assert!(route.requires_authentication());
+                }
+                assert_eq!(classify(Method::Post, &path), None);
+                assert_eq!(classify(Method::Get, &path), None);
+            }
+        }
+        for path in [
+            "/api/organizations//collections/col",
+            "/api/organizations/org/collections/",
+            "/api/organizations/org/collections/col/details",
+            "/api/organizations/org/collections/col/extra",
+        ] {
+            for method in [Method::Put, Method::Delete] {
+                assert_eq!(classify(method, path), None);
+            }
         }
     }
 

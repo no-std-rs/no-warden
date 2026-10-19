@@ -20,7 +20,11 @@ CREATE TABLE IF NOT EXISTS organization_collection_users(
  collection_id TEXT NOT NULL REFERENCES organization_collections(id) ON DELETE CASCADE,
  user_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
  read_only INTEGER NOT NULL, hide_passwords INTEGER NOT NULL, manage INTEGER NOT NULL,
- PRIMARY KEY(collection_id,user_id));";
+ PRIMARY KEY(collection_id,user_id));
+CREATE TABLE IF NOT EXISTS organization_collection_ciphers(
+ collection_id TEXT NOT NULL REFERENCES organization_collections(id) ON DELETE CASCADE,
+ cipher_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+ PRIMARY KEY(collection_id,cipher_id));";
 
 // Preserve declaration order for positional JSON and duplicate-field checking.
 #[derive(Deserialize)]
@@ -81,6 +85,7 @@ pub struct Cache {
     membership: Option<Member>,
     collections: Rows,
     detail: Option<Detail>,
+    mutation_record: Option<Record>,
 }
 struct Member {
     user: String,
@@ -214,7 +219,7 @@ fn detail(db: &Connection, owner: &str, id: &str) -> rusqlite::Result<Option<Det
     let own:Option<(bool,bool,bool)> = db.query_row("SELECT read_only,hide_passwords,manage FROM organization_collection_users WHERE collection_id=?1 AND user_id=?2",params![id,owner], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
     let assigned = member.status == 2 && (member.full() || own.is_some());
     let full = member.full();
-    let (read_only, hide, stored_manage) = own.unwrap_or((true, true, false));
+    let (read_only, hide, stored_manage) = own.unwrap_or((true, false, false));
     let manage = full || stored_manage || (member.role == 3 && !read_only && !hide);
     let mut statement=db.prepare("SELECT m.organization_id,m.id,g.read_only,g.hide_passwords,g.manage,m.role FROM organization_collection_users g JOIN organization_memberships m ON m.user_id=g.user_id WHERE g.collection_id=?1 AND m.organization_id=?2 ORDER BY g.rowid")?;
     let users = statement
@@ -336,7 +341,7 @@ impl OrganizationCollectionStorage for Store {
         Ok(&self.organization_collection_cache.collections)
     }
     fn can_manage_collection(&mut self, owner: &str, col: &str) -> rusqlite::Result<bool> {
-        self.db.query_row("SELECT EXISTS(SELECT 1 FROM organization_collections c JOIN organization_memberships m ON m.organization_id=c.organization_id LEFT JOIN organization_collection_users g ON g.collection_id=c.id AND g.user_id=m.user_id WHERE c.id=?1 AND m.user_id=?2 AND m.status=2 AND (m.access_all=1 OR m.role IN (0,1) OR g.manage=1))",params![col,owner],|r|r.get(0))
+        manageable(&self.db, owner, col)
     }
     fn collection_access_details(
         &mut self,
@@ -411,6 +416,12 @@ impl OrganizationCollectionStorage for Store {
 
 #[cfg(test)]
 mod tests;
+
+mod mutations;
+
+fn manageable(db: &Connection, owner: &str, col: &str) -> rusqlite::Result<bool> {
+    db.query_row("SELECT EXISTS(SELECT 1 FROM organization_collections c JOIN organization_memberships m ON m.organization_id=c.organization_id LEFT JOIN organization_collection_users g ON g.collection_id=c.id AND g.user_id=m.user_id WHERE c.id=?1 AND m.user_id=?2 AND m.status=2 AND (m.access_all=1 OR m.role IN (0,1) OR g.manage=1))",params![col,owner],|r|r.get(0))
+}
 
 pub fn is_collection_error(message: &str) -> bool {
     matches!(

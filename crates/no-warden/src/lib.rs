@@ -28,6 +28,7 @@ pub mod domains;
 pub mod error;
 pub mod identity;
 pub mod import;
+pub mod organization_collection_mutations;
 pub mod organization_collections;
 pub mod organizations;
 pub mod password_login;

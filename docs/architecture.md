@@ -1016,3 +1016,26 @@ portable scope is created owners, not an implemented member-administration
 lifecycle. The adapter has no group rows or administration and rejects unknown
 groups rather than discarding requested grants. Generic providers remain
 responsible for group storage, configured policy and effective permissions.
+
+## Organization collection mutations
+
+`OrganizationCollectionMutationStorage` is an opt-in extension of the existing
+collection provider. `VaultService::update_org_collection` validates confirmed
+manager authority, all group/member references and exact scoped existence before
+issuing `ValidatedCollectionUpdate`. `delete_org_collection` issues a sealed
+`ValidatedCollectionDelete`. Mutation lookup is independent of the actor's
+readable collection view: an admitted update can remove the actor's own grant.
+The update reuses `CollectionCreateData` and the ten-field details serializer;
+DELETE models an empty HTTP response rather than inventing a response DTO.
+
+The SQLite provider rechecks mutable authority and references in an immediate
+transaction. Update preserves identity, replaces all supported direct grants,
+and advances the union of old and new revision recipients. It stages the
+resulting response before commit, even when the actor has lost access. Deletion
+cascades selected ACL and collection/cipher-link rows while preserving cipher
+records, revisions and attachment bytes. The internal link table supports
+provider cleanup tests; there is no shared-cipher write API. Revision rules use
+stored `access_all`/direct links and grant recipients without a status or role
+shortcut. This atomic failure boundary is stronger than upstream sequential
+saves. Imported roles and seeded links are local provider tests, separate from
+the public Owner/full-access lifecycle and actual client evidence.

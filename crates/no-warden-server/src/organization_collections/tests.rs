@@ -12,7 +12,7 @@ use rusqlite::types::Value as SqlValue;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
-fn fixture(path: &str) -> Store {
+pub(super) fn fixture(path: &str) -> Store {
     let mut store = Store::open(path).unwrap();
     for owner in ["alice", "bob"] {
         let doc = json!({"id":owner,"email":format!("{owner}@example.test"),"key":"opaque-key","securityStamp":"stamp","revisionDate":"2000-01-01T00:00:00.000Z"});
@@ -41,7 +41,7 @@ fn fixture(path: &str) -> Store {
     create_org(&mut store, "alice");
     store
 }
-fn create_org(store: &mut Store, owner: &str) -> String {
+pub(super) fn create_org(store: &mut Store, owner: &str) -> String {
     let request = OrganizationCreateRequest {
         billing_email: "a@example.test",
         collection_name: "opaque-initial",
@@ -60,7 +60,7 @@ fn create_org(store: &mut Store, owner: &str) -> String {
         .unwrap()
         .to_owned()
 }
-fn org(store: &Store) -> String {
+pub(super) fn org(store: &Store) -> String {
     store
         .db
         .query_row(
@@ -70,11 +70,11 @@ fn org(store: &Store) -> String {
         )
         .unwrap()
 }
-fn input() -> Input {
+pub(super) fn input() -> Input {
     Input::parse(br#"{"name":"opaque\u0000\u96ea","groups":[],"users":[],"externalId":" "}"#)
         .unwrap_or_else(|_| panic!("Collection input"))
 }
-fn create(store: &mut Store, org: &str) -> Value {
+pub(super) fn create(store: &mut Store, org: &str) -> Value {
     serde_json::to_value(
         VaultService::new(store)
             .create_org_collection("alice", org, &input())
@@ -82,10 +82,12 @@ fn create(store: &mut Store, org: &str) -> Value {
     )
     .unwrap()
 }
-fn snapshot(store: &Store) -> Vec<Vec<SqlValue>> {
+pub(super) fn snapshot(store: &Store) -> Vec<Vec<SqlValue>> {
     let mut data = Vec::new();
     for table in [
         "accounts",
+        "items",
+        "attachments",
         "sessions",
         "device_registry",
         "session_devices",
@@ -93,6 +95,7 @@ fn snapshot(store: &Store) -> Vec<Vec<SqlValue>> {
         "organization_memberships",
         "organization_collections",
         "organization_collection_users",
+        "organization_collection_ciphers",
     ] {
         let mut statement = store
             .db
@@ -205,10 +208,10 @@ fn collection_creation_preserves_opaque_payloads_and_foreign_state() {
         );
     }
 }
-fn add_bob(store: &Store, org: &str, all: bool) {
+pub(super) fn add_bob(store: &Store, org: &str, all: bool) {
     store.db.execute("INSERT INTO organization_memberships VALUES('bob-membership',?1,'bob','opaque-bob-key',2,2,?2)",params![org,all]).unwrap();
 }
-fn grant_input(store: &Store, org: &str) -> Input {
+pub(super) fn grant_input(store: &Store, org: &str) -> Input {
     let owner_id: String = store
         .db
         .query_row(

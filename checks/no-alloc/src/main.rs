@@ -14,6 +14,9 @@ use no_warden::{
     devices::{DeviceRecord, PendingDeviceAuthRequest},
     domains::{DomainProjection, DomainSettingsView, GlobalDomain},
     identity::Secret,
+    organization_collection_mutations::{
+        OrganizationCollectionMutationStorage, ValidatedCollectionDelete, ValidatedCollectionUpdate,
+    },
     organization_collections::{
         CollectionAccessData, CollectionAccessEntry, CollectionCreateData, CollectionListData,
         OrganizationCollectionMembership, OrganizationCollectionStorage, ValidatedCollectionCreate,
@@ -432,6 +435,62 @@ impl OrganizationCollectionStorage for PurgeProbe {
         self.added_collection = true;
         self.revision += 1;
         Ok(self.added_collection_row())
+    }
+}
+impl OrganizationCollectionMutationStorage for PurgeProbe {
+    fn mutation_collection(
+        &mut self,
+        org: &str,
+        col: &str,
+    ) -> Result<Option<CollectionRecord<'_>>, ()> {
+        Ok(if org != "embedded-org" {
+            None
+        } else if col == "embedded-added-collection" && self.added_collection {
+            Some(self.added_collection_record())
+        } else if col == "embedded-collection" && self.organization_present {
+            Some(self.initial_collection_row().collection)
+        } else {
+            None
+        })
+    }
+    fn update_collection<D: CollectionCreateData + ?Sized>(
+        &mut self,
+        owner: &str,
+        org: &str,
+        col: &str,
+        plan: &ValidatedCollectionUpdate<'_, D>,
+    ) -> Result<UserCollectionRecord<'_>, ()> {
+        let name = plan.request().name().as_bytes();
+        let external = plan.external_id().map(str::as_bytes);
+        if owner != "embedded-owner"
+            || org != "embedded-org"
+            || col != "embedded-added-collection"
+            || !self.added_collection
+            || name.len() > self.added_collection_name.len()
+            || external.is_some_and(|value| value.len() > self.added_external.len())
+        {
+            return Err(());
+        }
+        self.added_collection_name[..name.len()].copy_from_slice(name);
+        self.added_collection_name_len = name.len();
+        self.added_external_len = external.map(|value| {
+            self.added_external[..value.len()].copy_from_slice(value);
+            value.len()
+        });
+        self.revision += 1;
+        Ok(self.added_collection_row())
+    }
+    fn delete_collection(&mut self, plan: &ValidatedCollectionDelete<'_>) -> Result<(), ()> {
+        if plan.owner() != "embedded-owner"
+            || plan.organization() != "embedded-org"
+            || plan.collection() != "embedded-added-collection"
+            || !self.added_collection
+        {
+            return Err(());
+        }
+        self.added_collection = false;
+        self.revision += 1;
+        Ok(())
     }
 }
 impl PreloginStorage for PurgeProbe {
@@ -894,6 +953,29 @@ pub extern "C" fn _start() -> ! {
             if let Ok(response) = organization_service.get_org_collection_details("embedded-owner", "embedded-org", "embedded-added-collection") {
                 let _ = black_box(serde_json_core::to_slice(&response, &mut organization_output));
             }
+        }
+        if let Ok((mut update, _)) =
+            serde_json_core::from_slice::<OrganizationCollectionCreateRequest<'_, 1, 1>>(black_box(
+                br#"["renamed opaque collection",[],[],null]"#,
+            ))
+        {
+            update.external_id = Some("\u{2003}\u{a0} ");
+            if let Ok(response) = organization_service.update_org_collection(
+                "embedded-owner",
+                "embedded-org",
+                "embedded-added-collection",
+                &update,
+            ) {
+                let _ = black_box(serde_json_core::to_slice(
+                    &response,
+                    &mut organization_output,
+                ));
+            }
+            let _ = black_box(organization_service.delete_org_collection(
+                "embedded-owner",
+                "embedded-org",
+                "embedded-added-collection",
+            ));
         }
         black_box(organization_output);
         for email in black_box(["bare-metal@example.com", ""]) {

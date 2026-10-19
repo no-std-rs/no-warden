@@ -1,5 +1,23 @@
 # Real-client compatibility checks
 
+The explicit Rust `--suite organization-collection-mutations` comparison passes
+six cases on both actual servers: 229 counted requests, two password logins, two
+refreshes, three setup organizations and one sibling collection, excluding four
+modern-registration requests. It performs eight updates and one deletion and
+checks the distinct whitespace-only external-ID rule, exact projections, guard
+ordering, empty 200 deletion and preserved membership/foreign/sibling state.
+`--suite organization-collection-mutations-cli` passes twenty official CLI
+`2026.10.0` commands per server, including encrypted edit, fresh-cache name
+decryption and deletion verified in live and synchronized lists. Its fifteen
+direct requests include one password login; two further logins are CLI commands,
+and one registration/two requests is excluded. Private receipts use
+`BW_ORGANIZATION_COLLECTION_MUTATIONS_RECEIPT` and
+`BW_ORGANIZATION_COLLECTION_MUTATIONS_CLI_RECEIPT`. These runs stay separate from
+the default 104 HTTP cases, baseline 120 CLI commands and other focused groups;
+client internals are uncounted and no route trace is captured. Manager
+self-removal and seeded cipher-link cleanup have local provider tests; general
+member/group administration and sharing remain open.
+
 The explicit Rust `--suite organization-collections` comparison passes six cases
 against both actual servers: 194 counted requests, two password logins, two
 refreshes, three setup organizations and five new collections, plus four modern
@@ -13,7 +31,7 @@ CLI requests; two CLI logins and one direct setup login keep the combined
 focused HTTP/CLI password-attempt total at five. These suites are separate from
 the default 104 HTTP cases and baseline 120 CLI commands, and capture no route
 trace. Private receipts use `BW_ORGANIZATION_COLLECTIONS_RECEIPT` and
-`BW_ORGANIZATION_COLLECTIONS_CLI_RECEIPT`. General collection updates/deletes,
+`BW_ORGANIZATION_COLLECTIONS_CLI_RECEIPT`. Bulk collection mutations,
 sharing and group/member administration remain open.
 
 The explicit Rust `--suite organization-owner` comparison passes six HTTP cases
