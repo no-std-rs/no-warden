@@ -498,7 +498,6 @@ async fn organization_raw_path_segments_reach_authentication_before_uuid_errors(
             true,
             422,
         ),
-        (format!("/api/organizations/{id}/collections"), true, 404),
     ] {
         let mut headers = HeaderMap::new();
         if authorized {

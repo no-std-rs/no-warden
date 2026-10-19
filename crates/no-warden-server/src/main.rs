@@ -11,6 +11,7 @@ mod auth_requests;
 mod cipher_reads;
 mod devices;
 mod domains;
+mod organization_collections;
 mod organizations;
 mod password_login;
 mod prelogin;
@@ -96,6 +97,7 @@ impl IntoResponse for Failure {
             || self.1 == "Can't find organization details"
             || self.1 == "Organization not found"
             || self.1 == "User not allowed to create organizations"
+            || organization_collections::is_collection_error(self.1)
         {
             return password_login::error_response(self.0, self.1);
         }
@@ -632,6 +634,9 @@ async fn dispatch_with_peer(
             | Route::OrganizationCreate
             | Route::OrganizationGet(_)
             | Route::Collections
+            | Route::OrganizationCollections(_)
+            | Route::OrganizationCollectionCreate(_)
+            | Route::OrganizationCollectionDetails(..)
     ) {
         // Send and organization Headers require current device authority before UUID or JSON guards.
         devices::access_binding(&store.db, &digest(bearer), &owner)?.ok_or_else(unauthorized)?;
@@ -644,6 +649,40 @@ async fn dispatch_with_peer(
         ));
     }
     match route {
+        Route::OrganizationCollections(raw) => {
+            let (org, _) =
+                organization_collections::paths(&mut store, &owner, raw, None, uri.query())?;
+            Ok(
+                Json(VaultService::new(&mut *store).list_org_collections(&owner, &org)?)
+                    .into_response(),
+            )
+        }
+        Route::OrganizationCollectionCreate(raw) => {
+            let (org, _) =
+                organization_collections::paths(&mut store, &owner, raw, None, uri.query())?;
+            let input = organization_collections::Input::parse(&body)?;
+            Ok(
+                Json(VaultService::new(&mut *store).create_org_collection(&owner, &org, &input)?)
+                    .into_response(),
+            )
+        }
+        Route::OrganizationCollectionDetails(raw_org, raw_col) => {
+            let (org, col) = organization_collections::paths(
+                &mut store,
+                &owner,
+                raw_org,
+                Some(raw_col),
+                uri.query(),
+            )?;
+            Ok(
+                Json(VaultService::new(&mut *store).get_org_collection_details(
+                    &owner,
+                    &org,
+                    col.as_deref().expect("Collection path"),
+                )?)
+                .into_response(),
+            )
+        }
         Route::OrganizationCreate => {
             let input = organizations::Input::parse(&body)?;
             let mut service = VaultService::new(&mut *store);

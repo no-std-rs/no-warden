@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 612 active Rust tests: 291 core, 215 host, and 106 conformance
+The workspace has 636 active Rust tests: 304 core, 225 host, and 107 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -436,3 +436,22 @@ or request traces. Source references keep these checks distinct from broader
 organization administration and sharing.
 The expanded raw-path regression passes dotted-ID 401/422 and percent-encoded
 valid-ID lookup checks.
+
+The organization collection selections are `--suite organization-collections`
+and `--suite organization-collections-cli`, separate from the unchanged default
+104-case HTTP group and 120-command baseline. Optional private receipts use
+`BW_ORGANIZATION_COLLECTIONS_RECEIPT` and
+`BW_ORGANIZATION_COLLECTIONS_CLI_RECEIPT`. Authored HTTP cases cover guards,
+schema/reference ordering, exact projections, opaque creation and preservation;
+the focused CLI flow exercises production list/create/get organization-collection
+commands. Both actual targets pass six HTTP cases/194 counted requests/two
+password logins/two refreshes, excluding two modern fixtures/four requests.
+They compare complete membership and foreign/other-owned collection baselines.
+The separate official CLI `2026.10.0` selection passes nineteen commands on both,
+including collection decryption after fresh-cache login. It records fourteen
+direct HTTP requests, two CLI logins and one direct login, excluding one
+registration/two requests; client internals are not counted or traced.
+Twelve new core/provider tests plus the route regression pass, and the RISC-V
+consumer links real create/list/single-detail operations and serializers without
+an allocator. Local SQL tests cover atomic rollback, direct ACLs, effective
+imported-role permissions, revision recipients and private reopen separately.

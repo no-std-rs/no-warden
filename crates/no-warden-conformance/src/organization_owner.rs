@@ -210,7 +210,7 @@ pub(crate) struct Account {
     pub(crate) fixture: Value,
     pub(crate) password: String,
     pub(crate) token: String,
-    refresh: String,
+    pub(crate) refresh: String,
     pub(crate) user_id: String,
     pub(crate) cipher_id: String,
     user_key: [u8; 64],

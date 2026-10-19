@@ -50,6 +50,7 @@ pub struct Store {
     pub(crate) organization_membership_cache: Option<crate::organizations::Membership>,
     pub(crate) organization_collections_cache: crate::organizations::Collections,
     pub(crate) organization_profiles_cache: crate::organizations::Profiles,
+    pub(crate) organization_collection_cache: crate::organization_collections::Cache,
     owner: String,
     key_id: Option<String>,
     api_key_secret: Option<String>,
@@ -220,6 +221,7 @@ impl Store {
         db.execute_batch(crate::account_password::SCHEMA)?;
         db.execute_batch(crate::sends::SCHEMA)?;
         db.execute_batch(crate::organizations::SCHEMA)?;
+        db.execute_batch(crate::organization_collections::SCHEMA)?;
         crate::sends::signing_key(&db)?;
         crate::prelogin::initialize(&db)?;
         // SQLite inherits the private database mode for new sidecars. Also
@@ -243,6 +245,7 @@ impl Store {
             organization_membership_cache: None,
             organization_collections_cache: crate::organizations::Collections::default(),
             organization_profiles_cache: crate::organizations::Profiles::default(),
+            organization_collection_cache: crate::organization_collections::Cache::default(),
             owner: String::new(),
             key_id: None,
             api_key_secret: None,

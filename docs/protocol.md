@@ -1629,3 +1629,63 @@ is excluded. Client internals are not counted or traced. Neither result implies
 general organization or captured request-trace parity. A route-classifier
 regression verifies dotted-ID authentication/fallback and percent-encoded valid-ID
 checks in those same six cases.
+
+## Organization-scoped collection list, create and single details
+
+The [pinned handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L357-L525)
+and [release 1.37.4](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/organizations.rs#L355-L523)
+agree on `GET`/`POST /api/organizations/{orgId}/collections`; the registered
+[single read](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L736-L799)
+is `GET /api/organizations/{orgId}/collections/{collectionId}/details`.
+There is no plain single-collection GET. Aggregate `/collections/details`,
+bulk access, users, update and deletion handlers remain separate contracts.
+
+`ManagerHeadersLoose` requires a confirmed Owner, Admin or Manager. List also
+requires `access_all` or Owner/Admin role; otherwise it returns 404
+`Resource not found.`. Single read uses strict `ManagerHeaders`: after current
+device/membership checks it selects the raw collection path, or `collectionId`
+query only when path UUID parsing fails, then checks global manageability before
+the route's UUID guards. Missing/foreign collections yield 401. A collection
+in another organization managed by the same user passes that guard and reaches
+400 `Collection is not owned by organization`. An owned query fallback can
+reach 422 for a malformed path. Preserve raw dotted/percent-encoded segments
+until these guards; URL decoding is not UUID spelling normalization.
+
+The [creation schema](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L120-L164)
+requires `name`, `groups` and `users`; `externalId` is optional/null. Positional
+order is `[name, groups, users, externalId]`. Each selection requires
+`[hidePasswords, id, readOnly, manage]` with three bools and a raw string ID.
+User IDs mean organization membership IDs, not account IDs. Unknown fields are
+ignored. Names and external IDs are opaque; only exact empty external ID becomes
+null at creation, while whitespace remains unchanged. Group validation precedes
+membership validation (`Invalid group`, then `Invalid member`, both 400), then
+a Manager without `access_all` is denied creation. Valid full-access member
+selections are checked but their direct assignment writes are skipped.
+
+Group validation/storage is not disabled by the group feature flag; disabled
+projection returns `groups: []`. Effective selection `manage` also derives from
+role or unrestricted read/write access, rather than always echoing stored flags.
+The selected responses are basic seven-field list entries, ten-field create
+`collectionDetails`, and thirteen-field single `collectionAccessDetails` with
+assigned/users/groups. Single details do not synthesize full-access owners into
+users or include `unmanaged`; aggregate details does both differently. Successful
+owner details use readOnly/hidePasswords false and manage/assigned true.
+
+Collection/group/user saves propagate affected account revisions sequentially;
+Owner/Admin role alone does not add revision recipients without `access_all`
+or a direct grant. Creation has no collection revisionDate field. The local
+atomic collection/grant/revision boundary is stronger; event logging,
+notifications, general membership/group management and policy matrices remain
+outside the selected adapter scope. The shipped CLI has production
+[list](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/commands/list.command.ts#L194-L243),
+[create](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/vault/create.command.ts#L215-L284)
+and [get](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/commands/get.command.ts#L484-L535)
+organization-collection calls. All six selected Rust HTTP cases pass both actual
+targets with 194 counted requests, two password logins and two refreshes,
+excluding two modern fixtures/four registration requests. Five new collections,
+exact projections/guards and full membership/foreign/other-owned collection
+baselines are checked. The separate official CLI `2026.10.0` comparison passes
+nineteen commands on both, exercising production list/create/get and fresh-cache
+name decryption. Fourteen direct HTTP requests include one password login; two
+further logins are CLI commands, and one registration/two requests is excluded.
+Client internals remain uncounted; no captured trace or full-parity claim follows.

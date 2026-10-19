@@ -1,5 +1,21 @@
 # Real-client compatibility checks
 
+The explicit Rust `--suite organization-collections` comparison passes six cases
+against both actual servers: 194 counted requests, two password logins, two
+refreshes, three setup organizations and five new collections, plus four modern
+registration requests. It checks request/guard ordering, exact 7/10/13-field
+projections, encrypted-name authentication and unchanged membership/other-org
+collection snapshots. `--suite organization-collections-cli` passes nineteen
+official CLI `2026.10.0` commands on each server, including create/list/get,
+fresh-cache decryption and preserved personal-note decryption. Its fourteen
+direct HTTP requests and two registration requests are separate from internal
+CLI requests; two CLI logins and one direct setup login keep the combined
+focused HTTP/CLI password-attempt total at five. These suites are separate from
+the default 104 HTTP cases and baseline 120 CLI commands, and capture no route
+trace. Private receipts use `BW_ORGANIZATION_COLLECTIONS_RECEIPT` and
+`BW_ORGANIZATION_COLLECTIONS_CLI_RECEIPT`. General collection updates/deletes,
+sharing and group/member administration remain open.
+
 The explicit Rust `--suite organization-owner` comparison passes six HTTP cases
 against both actual servers: 137 counted requests, two password logins, two
 refreshes and two organization creates, excluding two modern fixtures. It is

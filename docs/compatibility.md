@@ -46,6 +46,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Personal text Sends, recipient `send_access` grant and sync | Encrypted owner lifecycle, scoped recipient access, password management and atomic access limits | Six matching Rust HTTP cases and twenty matching official CLI commands on both servers. File Sends are verified separately below; full policy/transport parity remains open |
 | Personal file Sends: reservation, multipart upload, file-URL issuance and binary GET | Immutable encrypted metadata, exact bytes, scoped capabilities and create-only storage | Six matching HTTP cases and a separate twenty-command official CLI comparison on both servers; configured policies and full transport remain open |
 | Organization-owner creation/discovery and initial collection | Confirmed Owner membership, exact public/profile/collection projections and last-owner deletion protection | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers |
+| Organization-scoped collection list/create/single access-details | Confirmed manager authorization, exact projections, opaque names/external IDs and reference validation | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers; atomic local provider tests |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
 | `GET /api/accounts/keys`, `POST /api/accounts/keys`, `GET /api/users/<id>/public-key` | Owner-only private retrieval, initialization of an absent pair, authenticated cross-user public lookup | Borrowed core/provider contracts; Rust HTTP comparison group and SQLite rollback/reopen tests |
 | `POST /api/accounts/api-key`, `POST /api/accounts/rotate-api-key` | Password-reauthenticated personal key retrieval, lazy creation, rotation | Core, HTTP comparison with upstream, rollback and restart tests; keys used by real CLI |
@@ -106,7 +107,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 612 active workspace unit tests pass: 291 core, 215 host and 106 support,
+All 636 active workspace unit tests pass: 304 core, 225 host and 107 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -1052,8 +1053,38 @@ both servers, including decrypted collections after login, unlock and fresh-cach
 login and retained personal-note decryption. It records two CLI logins, one
 direct setup login and thirteen direct HTTP requests, excluding one fixture;
 client internals are not counted or traced. Organization creation uses direct
-HTTP, and CLI list operations consume synced cache. This does not verify the
-different organization-scoped collection administration endpoints. No route
+HTTP, and CLI list operations consume synced cache. That owner-discovery runner
+does not exercise the organization-scoped endpoints covered separately below. No route
 trace or full-parity status is claimed. A route correction now preserves raw
 segments before authentication/UUID guards; dotted/percent-path probes pass in
 the expanded 137-request comparison.
+
+## Organization-scoped collections
+
+The selected routes are `GET`/`POST /api/organizations/{id}/collections` and
+`GET /api/organizations/{id}/collections/{collectionId}/details`. Their confirmed
+manager guards preserve raw IDs, query fallback and current device authority;
+the single read checks actual collection manageability before handler association.
+Creation accepts opaque names and external IDs, validates all group IDs before
+membership IDs, and returns ten fields. Empty external IDs become null while
+whitespace remains exact. Organization lists use seven-field records; single
+access-details uses thirteen, including assigned/users/groups without the
+aggregate endpoint's `unmanaged` field.
+
+The host persists supported direct ACLs and affected revisions atomically, a
+stronger failure boundary than upstream sequential saves. Its public fixture
+scope is owner/full-access membership; imported role/grant behavior uses local
+provider tests. There is no group/member lifecycle, general collection CRUD,
+sharing, notifications or full configured policy support. All six HTTP cases
+pass both actual servers: 194 counted requests, two password logins and two
+refreshes, excluding two modern fixtures/four registration requests. They create
+five collections and preserve full membership arrays and foreign/other-owned
+organization collection baselines alongside personal vault/session checks.
+
+The separate official CLI `2026.10.0` comparison passes nineteen commands on both,
+including production organization-collection list/create/get, decrypted names
+and fresh-cache recovery. It counts fourteen direct HTTP requests, two CLI logins
+and one direct setup login, excluding one registration/two requests. Client
+internals are uncounted and no trace is captured. Imported role/ACL behavior
+remains separately tested provider evidence; these results do not imply a full
+membership lifecycle, general sharing or complete organization parity.
