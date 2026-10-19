@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 636 active Rust tests: 304 core, 225 host, and 107 conformance
+The workspace has 656 active Rust tests: 315 core, 233 host, and 108 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -455,3 +455,25 @@ Twelve new core/provider tests plus the route regression pass, and the RISC-V
 consumer links real create/list/single-detail operations and serializers without
 an allocator. Local SQL tests cover atomic rollback, direct ACLs, effective
 imported-role permissions, revision recipients and private reopen separately.
+
+The collection mutation selections are `--suite organization-collection-mutations`
+and `--suite organization-collection-mutations-cli`, separate from the default
+104-case HTTP group and 120-command baseline. Optional private receipts use
+`BW_ORGANIZATION_COLLECTION_MUTATIONS_RECEIPT` and
+`BW_ORGANIZATION_COLLECTION_MUTATIONS_CLI_RECEIPT`. Six authored HTTP cases cover
+strict auth/path/schema/reference ordering, encrypted and opaque replacements,
+empty deletion responses, all collection read views, membership/foreign/sibling
+snapshots and retained vault/session authority. Both actual targets pass six
+cases with 229 counted HTTP requests, two password logins and two refreshes,
+excluding two modern fixtures/four registration requests. Eight updates and one
+deletion are verified per run. The separate official CLI `2026.10.0` selection
+passes twenty commands on both actual targets, with fifteen direct HTTP requests,
+two CLI logins and one direct setup login, excluding one registration/two
+requests. It independently authenticates renamed ciphertext, reads after a
+fresh-cache login and verifies live/synced absence after deletion. Client-internal
+HTTP is uncounted and no route trace is captured.
+
+Local provider tests cover imported Manager self-removal and seeded cipher-link
+cleanup with rollback; real-client tests do not imply those membership/sharing
+lifecycles. The allocator-free consumer links real update/delete service calls
+against fixed caller-owned state, without executing firmware.

@@ -637,6 +637,8 @@ async fn dispatch_with_peer(
             | Route::OrganizationCollections(_)
             | Route::OrganizationCollectionCreate(_)
             | Route::OrganizationCollectionDetails(..)
+            | Route::OrganizationCollectionUpdate(..)
+            | Route::OrganizationCollectionDelete(..)
     ) {
         // Send and organization Headers require current device authority before UUID or JSON guards.
         devices::access_binding(&store.db, &digest(bearer), &owner)?.ok_or_else(unauthorized)?;
@@ -649,6 +651,38 @@ async fn dispatch_with_peer(
         ));
     }
     match route {
+        Route::OrganizationCollectionUpdate(raw_org, raw_col) => {
+            let (org, col) = organization_collections::paths(
+                &mut store,
+                &owner,
+                raw_org,
+                Some(raw_col),
+                uri.query(),
+            )?;
+            let input = organization_collections::Input::parse(&body)?;
+            Ok(Json(VaultService::new(&mut *store).update_org_collection(
+                &owner,
+                &org,
+                col.as_deref().expect("Collection path"),
+                &input,
+            )?)
+            .into_response())
+        }
+        Route::OrganizationCollectionDelete(raw_org, raw_col) => {
+            let (org, col) = organization_collections::paths(
+                &mut store,
+                &owner,
+                raw_org,
+                Some(raw_col),
+                uri.query(),
+            )?;
+            VaultService::new(&mut *store).delete_org_collection(
+                &owner,
+                &org,
+                col.as_deref().expect("Collection path"),
+            )?;
+            Ok(StatusCode::OK.into_response())
+        }
         Route::OrganizationCollections(raw) => {
             let (org, _) =
                 organization_collections::paths(&mut store, &owner, raw, None, uri.query())?;

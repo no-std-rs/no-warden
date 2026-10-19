@@ -1638,7 +1638,8 @@ agree on `GET`/`POST /api/organizations/{orgId}/collections`; the registered
 [single read](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L736-L799)
 is `GET /api/organizations/{orgId}/collections/{collectionId}/details`.
 There is no plain single-collection GET. Aggregate `/collections/details`,
-bulk access, users, update and deletion handlers remain separate contracts.
+bulk access, users and bulk deletion remain separate contracts. Single update
+and deletion are described below.
 
 `ManagerHeadersLoose` requires a confirmed Owner, Admin or Manager. List also
 requires `access_all` or Owner/Admin role; otherwise it returns 404
@@ -1689,3 +1690,57 @@ nineteen commands on both, exercising production list/create/get and fresh-cache
 name decryption. Fourteen direct HTTP requests include one password login; two
 further logins are CLI commands, and one registration/two requests is excluded.
 Client internals remain uncounted; no captured trace or full-parity claim follows.
+
+## Organization collection replacement and deletion
+
+The [pinned mutation handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L606-L734)
+and [release 1.37.4 handlers](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/organizations.rs#L604-L732)
+agree on `PUT` and `DELETE /api/organizations/{orgId}/collections/{collectionId}`.
+There are no POST aliases. Bulk DELETE and bulk-access POST are separate,
+unimplemented contracts.
+
+Both selected routes use strict `ManagerHeaders`: current device and confirmed
+manager membership precede global collection manageability, typed UUID guards
+and, for PUT, JSON decoding. Query fallbacks authorize guards without replacing
+the final path. Missing, foreign or no-longer-manageable collections return 401;
+a collection managed by the actor in another organization reaches handler 400
+`Collection not found`. Raw dotted and percent-encoded paths reach these guards.
+
+PUT reuses the creation schema and selection ordering above. It validates every
+group before every membership, then checks organization/scoped collection
+existence. It replaces the name and complete assignment sets rather than merging
+ACLs. Unlike creation, omitted/null or Unicode-whitespace-only `externalId`
+clears the value; nonblank strings retain their original bytes. Opaque names,
+unknown-field handling and membership-ID selections retain the creation rules.
+Validated `access_all` selections are skipped and duplicate writes use the last
+selection. A Manager can remove their own last grant and still receive a
+successful ten-field `collectionDetails`; without other access its flags are
+`readOnly: true`, `hidePasswords: false`, `manage: false`.
+
+DELETE has no JSON guard, ignores its request body and returns empty 200. The
+[model cleanup](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/collection.rs#L192-L217)
+removes only the selected collection, ACLs and cipher associations. Cipher
+records, encrypted bytes, attachment data and cipher revisions survive.
+Account revisions advance for previous `access_all`/direct-grant recipients,
+removed direct users and new non-full-access selections, without membership
+status or Owner/Admin shortcuts. Source persistence is sequential; local
+collection/ACL/revision cleanup and response staging are atomic.
+
+The [production CLI edit](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/commands/edit.command.ts#L257-L334)
+and [delete](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/vault/delete.command.ts#L143-L155)
+call the selected PUT and DELETE directly. Edit encrypts names under the
+organization key and supplies empty arrays for omitted selections. Its response
+wrapper tolerates the ten-field response without users/groups arrays. All six
+HTTP cases pass both actual targets with 229 counted requests, two password
+logins and two refreshes, excluding two modern fixtures/four registration
+requests. Eight updates and one deletion verify all read views, independent
+authenticated name decryption and full membership/foreign/sibling preservation.
+The separate official CLI `2026.10.0` comparison passes twenty commands on both
+actual targets, with fifteen direct HTTP requests, two CLI logins and one direct
+setup login, excluding one registration/two requests. It independently verifies
+renamed ciphertext, fresh-cache decryption and live/synced deletion; client
+internals are not counted or traced. Public scope remains created
+Owner/full-access memberships; imported Manager self-removal and seeded
+cipher-association cleanup have separate local provider evidence. No general
+member/group administration, sharing, bulk mutation, event/notification,
+transport or full-parity claim follows.

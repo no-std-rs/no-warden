@@ -46,6 +46,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Personal text Sends, recipient `send_access` grant and sync | Encrypted owner lifecycle, scoped recipient access, password management and atomic access limits | Six matching Rust HTTP cases and twenty matching official CLI commands on both servers. File Sends are verified separately below; full policy/transport parity remains open |
 | Personal file Sends: reservation, multipart upload, file-URL issuance and binary GET | Immutable encrypted metadata, exact bytes, scoped capabilities and create-only storage | Six matching HTTP cases and a separate twenty-command official CLI comparison on both servers; configured policies and full transport remain open |
 | Organization-owner creation/discovery and initial collection | Confirmed Owner membership, exact public/profile/collection projections and last-owner deletion protection | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers |
+| Single organization-collection update/delete | Complete grant replacement, opaque names, whitespace external-ID clearing and preserved cipher data | Allocation-free core and local rollback/cascade tests; six matching HTTP cases and twenty matching official CLI commands on both actual targets |
 | Organization-scoped collection list/create/single access-details | Confirmed manager authorization, exact projections, opaque names/external IDs and reference validation | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers; atomic local provider tests |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
 | `GET /api/accounts/keys`, `POST /api/accounts/keys`, `GET /api/users/<id>/public-key` | Owner-only private retrieval, initialization of an absent pair, authenticated cross-user public lookup | Borrowed core/provider contracts; Rust HTTP comparison group and SQLite rollback/reopen tests |
@@ -107,7 +108,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 636 active workspace unit tests pass: 304 core, 225 host and 107 support,
+All 656 active workspace unit tests pass: 315 core, 233 host and 108 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -1074,8 +1075,8 @@ aggregate endpoint's `unmanaged` field.
 The host persists supported direct ACLs and affected revisions atomically, a
 stronger failure boundary than upstream sequential saves. Its public fixture
 scope is owner/full-access membership; imported role/grant behavior uses local
-provider tests. There is no group/member lifecycle, general collection CRUD,
-sharing, notifications or full configured policy support. All six HTTP cases
+provider tests. There is no group/member lifecycle, bulk/aggregate collection
+administration, sharing, notifications or full configured policy support. All six HTTP cases
 pass both actual servers: 194 counted requests, two password logins and two
 refreshes, excluding two modern fixtures/four registration requests. They create
 five collections and preserve full membership arrays and foreign/other-owned
@@ -1088,3 +1089,34 @@ and one direct setup login, excluding one registration/two requests. Client
 internals are uncounted and no trace is captured. Imported role/ACL behavior
 remains separately tested provider evidence; these results do not imply a full
 membership lifecycle, general sharing or complete organization parity.
+
+## Single organization-collection mutations
+
+The selected `PUT`/`DELETE /api/organizations/{orgId}/collections/{collectionId}`
+contracts reuse strict manager and current-device guards. Update replaces name
+and all supported grants, preserves the ID, validates groups before membership
+IDs, and clears omitted/null/Unicode-whitespace-only external IDs. It returns
+ten-field `collectionDetails`. DELETE ignores its body and returns empty 200;
+missing, foreign or previously deleted IDs fail the manager guard. There are no
+POST aliases. The [protocol references](protocol.md#organization-collection-replacement-and-deletion)
+record source ordering and the distinct bulk contracts.
+
+The host transaction preserves personal and foreign vault state and advances old
+and new affected account revisions. Local SQL tests separately prove rollback,
+removed/new grantee revisions, an imported Manager's successful self-removal,
+and deletion of seeded collection/cipher links without changing cipher
+revisions or attachment bytes. Public fixture accounts remain confirmed
+Owner/full-access memberships. These tests do not establish membership
+administration, sharing or imported-role sync parity.
+
+All six authored HTTP cases pass both actual targets: 229 counted requests,
+two password logins and two refreshes, excluding two modern fixtures/four
+registration requests. Eight updates and one deletion preserve complete
+membership, sibling and foreign organization baselines and personal authority.
+The separate official CLI `2026.10.0` comparison passes twenty commands on both
+actual targets. It calls production edit/delete, checks independently
+authenticated ciphertext, fresh-cache decryption and live/synced absence after
+deletion. Fifteen direct HTTP requests include one setup password login; two
+other logins are CLI commands, excluding one registration/two requests.
+Client-internal requests are not counted or traced. Full collection, bulk,
+policy, notification and transport parity remain open.
