@@ -11,6 +11,7 @@ mod auth_requests;
 mod cipher_reads;
 mod devices;
 mod domains;
+mod organizations;
 mod password_login;
 mod prelogin;
 mod protocol;
@@ -91,6 +92,10 @@ impl IntoResponse for Failure {
             || self.1 == "refresh_token cannot be blank"
             || sends::is_send_error(self.1)
             || self.1 == "Unexpected data"
+            || self.1 == "Can't delete last owner"
+            || self.1 == "Can't find organization details"
+            || self.1 == "Organization not found"
+            || self.1 == "User not allowed to create organizations"
         {
             return password_login::error_response(self.0, self.1);
         }
@@ -210,10 +215,17 @@ fn parse_avatar_input(body: &[u8]) -> Result<AvatarInput, Failure> {
 fn json_response(value: Value) -> Response {
     Json(value).into_response()
 }
-fn profile_document(store: &Store, account: &Value) -> Result<Value, Failure> {
+fn profile_document(store: &mut Store, account: &Value) -> Result<Value, Failure> {
     let owner = account["id"].as_str().ok_or_else(invalid)?;
     let stamp = account_security::stamp(&store.db, owner)?;
-    Ok(protocol::profile(account, &stamp))
+    let mut document = protocol::profile(account, &stamp);
+    let mut service = VaultService::new(&mut *store);
+    let organizations = service.profile_organizations(owner)?;
+    document["organizations"] =
+        serde_json::to_value(organizations.confirmed()).map_err(|_| invalid())?;
+    document["organizationsNew"] =
+        serde_json::to_value(organizations.accepted_and_confirmed()).map_err(|_| invalid())?;
+    Ok(document)
 }
 fn digest(value: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(value.as_bytes()))
@@ -617,8 +629,11 @@ async fn dispatch_with_peer(
             | Route::SendRemovePassword(_)
             | Route::SendFileCreate
             | Route::SendFileUpload(..)
+            | Route::OrganizationCreate
+            | Route::OrganizationGet(_)
+            | Route::Collections
     ) {
-        // Ordinary Send Headers require current device authority before UUID or JSON guards.
+        // Send and organization Headers require current device authority before UUID or JSON guards.
         devices::access_binding(&store.db, &digest(bearer), &owner)?.ok_or_else(unauthorized)?;
     }
     if invalid_purge_id {
@@ -629,6 +644,26 @@ async fn dispatch_with_peer(
         ));
     }
     match route {
+        Route::OrganizationCreate => {
+            let input = organizations::Input::parse(&body)?;
+            let mut service = VaultService::new(&mut *store);
+            match service.create_organization(&owner, &input.request()) {
+                Ok(response) => Ok(Json(response).into_response()),
+                Err(error) if error.message == "BillingEmail is not a valid email address" => Ok(
+                    password_login::error_response(StatusCode::BAD_REQUEST, &input.billing_error()),
+                ),
+                Err(error) => Err(error.into()),
+            }
+        }
+        Route::OrganizationGet(raw) => {
+            let id = organizations::owner_path(&store.db, &owner, raw, uri.query())?;
+            let mut service = VaultService::new(&mut *store);
+            Ok(Json(service.get_organization(&owner, &id)?).into_response())
+        }
+        Route::Collections => {
+            let mut service = VaultService::new(&mut *store);
+            Ok(Json(service.list_user_collections(&owner)?).into_response())
+        }
         Route::AccountDelete => {
             devices::access_binding(&store.db, &digest(bearer), &owner)?
                 .ok_or_else(unauthorized)?;
@@ -640,9 +675,8 @@ async fn dispatch_with_peer(
             devices::access_binding(&store.db, &digest(bearer), &owner)?
                 .ok_or_else(unauthorized)?;
             if purge::organization_requested(uri.query()) {
-                // This adapter has personal accounts and no organization
-                // memberships. A selected organization route must never fall
-                // through to destructive personal-vault handling.
+                // Organization vault purge is not implemented. A selected
+                // organization must never fall through to personal-vault cleanup.
                 return Err(Failure(
                     StatusCode::UNAUTHORIZED,
                     "The current user isn't member of the organization",
@@ -759,7 +793,7 @@ async fn dispatch_with_peer(
             let request = ProfileUpdateRequest { name: &input.name };
             VaultService::new(&mut *store).update_profile(&owner, &request)?;
             let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
-            Ok(json_response(profile_document(&store, &account)?))
+            Ok(json_response(profile_document(&mut store, &account)?))
         }
         Route::AvatarUpdate => {
             let input = parse_avatar_input(&body)?;
@@ -768,7 +802,7 @@ async fn dispatch_with_peer(
             };
             VaultService::new(&mut *store).update_avatar(&owner, &request)?;
             let account = store.account("id", &owner)?.ok_or_else(unauthorized)?;
-            Ok(json_response(profile_document(&store, &account)?))
+            Ok(json_response(profile_document(&mut store, &account)?))
         }
         Route::AccountKeysGet => {
             let mut service = VaultService::new(&mut *store);
@@ -923,7 +957,7 @@ async fn dispatch_with_peer(
             VaultService::new(&mut *store).set_user_key_id(&owner, &input.request())?;
             Ok(StatusCode::OK.into_response())
         }
-        Route::Profile => Ok(json_response(profile_document(&store, &account)?)),
+        Route::Profile => Ok(json_response(profile_document(&mut store, &account)?)),
         Route::RevisionDate => {
             let revision: String =
                 store
@@ -938,6 +972,11 @@ async fn dispatch_with_peer(
         }
         Route::Sync => {
             let send_documents = sends::sync(&mut store, &owner)?;
+            let collection_documents = {
+                let mut service = VaultService::new(&mut *store);
+                let collections = service.list_user_collections(&owner)?;
+                serde_json::to_value(collections.details()).map_err(|_| invalid())?
+            };
             let exclude_domains = domains::sync_excludes(uri.query())?;
             let settings = if exclude_domains {
                 Value::Null
@@ -953,8 +992,8 @@ async fn dispatch_with_peer(
                 })?
             };
             Ok(json_response(json!({
-                "object":"sync","profile":profile_document(&store,&account)?,"folders":store.items(&owner,"folder")?.iter().map(protocol::folder).collect::<Vec<_>>(),
-                "ciphers":store.items(&owner,"cipher")?,"collections":[],"policies":[],"sends":send_documents,
+                "object":"sync","profile":profile_document(&mut store,&account)?,"folders":store.items(&owner,"folder")?.iter().map(protocol::folder).collect::<Vec<_>>(),
+                "ciphers":store.items(&owner,"cipher")?,"collections":collection_documents,"policies":[],"sends":send_documents,
                 "domains":settings,
                 "userDecryption":protocol::user_decryption(&account)
             })))

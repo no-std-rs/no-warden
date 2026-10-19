@@ -52,6 +52,9 @@ pub enum Route<'a> {
     AuthRequestUpdate(&'a str),
     AuthRequestResponse(&'a str),
     Sync,
+    OrganizationCreate,
+    OrganizationGet(&'a str),
+    Collections,
     SendList,
     SendGet(&'a str),
     SendCreate,
@@ -184,6 +187,8 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (Post, "/api/auth-requests") => Some(AuthRequestCreate),
         (Get, "/api/auth-requests" | "/api/auth-requests/pending") => Some(AuthRequests),
         (Get, "/api/sync") => Some(Sync),
+        (Post, "/api/organizations") => Some(OrganizationCreate),
+        (Get, "/api/collections") => Some(Collections),
         (Get, "/api/sends") => Some(SendList),
         (Post, "/api/sends") => Some(SendCreate),
         (Post, "/api/sends/access") => Some(SendAccess),
@@ -219,6 +224,12 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
             | "/api/ciphers/unarchive",
         ) => None,
         _ => {
+            if let Some(id) = path.strip_prefix("/api/organizations/") {
+                // Request authentication and the adapter's decoded UUID guard run
+                // before rejecting malformed IDs, including owned query fallbacks.
+                return (method == Get && !id.is_empty() && !id.contains('/'))
+                    .then_some(OrganizationGet(id));
+            }
             if let Some(tail) = path.strip_prefix("/api/sends/") {
                 if let Some(file_id) = tail.strip_prefix("access/file/") {
                     return (method == Post && !file_id.is_empty() && !file_id.contains('/'))
@@ -381,6 +392,69 @@ fn valid_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn organization_get_keeps_raw_segments_for_adapter_authentication_and_uuid_guards() {
+        for id in [
+            "bad.id",
+            "%300000000-0000-0000-0000-000000000001",
+            "bad%2Fid",
+            "malformed%",
+        ] {
+            let path = std::format!("/api/organizations/{id}?organizationId=owned");
+            assert_eq!(
+                classify(Method::Get, &path),
+                Some(Route::OrganizationGet(id))
+            );
+            assert!(
+                classify(Method::Get, &path)
+                    .unwrap()
+                    .requires_authentication()
+            );
+            assert_eq!(classify(Method::Put, &path), None);
+        }
+        for path in [
+            "/api/organizations/",
+            "/api/organizations//",
+            "/api/organizations/bad.id/collections",
+        ] {
+            assert_eq!(classify(Method::Get, path), None);
+        }
+    }
+
+    #[test]
+    fn organization_owner_routes_remain_distinct_authenticated_and_method_specific() {
+        for (method, path, expected) in [
+            (
+                Method::Post,
+                "/api/organizations",
+                Route::OrganizationCreate,
+            ),
+            (
+                Method::Get,
+                "/api/organizations/raw-id/?ignored=true",
+                Route::OrganizationGet("raw-id"),
+            ),
+            (
+                Method::Get,
+                "/api/collections/?writeOnly=false",
+                Route::Collections,
+            ),
+        ] {
+            assert_eq!(classify(method, path), Some(expected));
+            assert!(expected.requires_authentication());
+        }
+        for (method, path) in [
+            (Method::Get, "/api/organizations"),
+            (Method::Put, "/api/organizations/raw-id"),
+            (Method::Delete, "/api/organizations/raw-id"),
+            (Method::Post, "/api/collections"),
+            (Method::Get, "/api/organizations/raw-id/collections"),
+            (Method::Get, "/api/organizations//"),
+        ] {
+            assert_eq!(classify(method, path), None);
+        }
+    }
 
     #[test]
     fn file_send_routes_keep_owner_uploads_and_scoped_recipient_downloads_distinct() {

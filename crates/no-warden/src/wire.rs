@@ -1820,6 +1820,454 @@ impl<'a, T: Serialize> ListResponse<'a, T> {
     }
 }
 
+/// The ignored organization plan remains a required integer-or-string input.
+#[derive(Clone, Copy)]
+pub enum OrganizationPlanType<'a> {
+    Integer(i64),
+    String(&'a str),
+}
+impl core::fmt::Debug for OrganizationPlanType<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationPlanType([REDACTED])")
+    }
+}
+impl<'de: 'a, 'a> Deserialize<'de> for OrganizationPlanType<'a> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct PlanVisitor<'a>(core::marker::PhantomData<&'a str>);
+        impl<'de: 'a, 'a> serde::de::Visitor<'de> for PlanVisitor<'a> {
+            type Value = OrganizationPlanType<'a>;
+            fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.write_str("a signed 64-bit integer or borrowed string")
+            }
+            fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(OrganizationPlanType::Integer(value))
+            }
+            fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value, E> {
+                i64::try_from(value)
+                    .map(OrganizationPlanType::Integer)
+                    .map_err(|_| E::custom("Plan integer exceeds i64"))
+            }
+            fn visit_borrowed_str<E: serde::de::Error>(
+                self,
+                value: &'de str,
+            ) -> Result<Self::Value, E> {
+                Ok(OrganizationPlanType::String(value))
+            }
+        }
+        deserializer.deserialize_any(PlanVisitor(core::marker::PhantomData))
+    }
+}
+
+/// Borrowed owner creation input. Dynamic number/string decoding needs a deserializer
+/// with deserialize_any support; adapters can construct this view after owned decoding.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizationCreateRequest<'a> {
+    pub billing_email: &'a str,
+    pub collection_name: &'a str,
+    #[serde(borrow)]
+    pub key: Secret<'a>,
+    pub name: &'a str,
+    #[serde(borrow)]
+    pub keys: Option<AccountKeys<'a>>,
+    #[serde(borrow)]
+    pub plan_type: OrganizationPlanType<'a>,
+}
+impl core::fmt::Debug for OrganizationCreateRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationCreateRequest([REDACTED])")
+    }
+}
+
+/// Exact ordinary organization projection, excluding wrapped/private/public key strings.
+#[derive(Debug)]
+pub struct OrganizationResponse<'a> {
+    record: crate::organizations::OrganizationRecord<'a>,
+}
+impl<'a> OrganizationResponse<'a> {
+    pub(crate) const fn new(record: crate::organizations::OrganizationRecord<'a>) -> Self {
+        Self { record }
+    }
+    pub const fn id(&self) -> &'a str {
+        self.record.id
+    }
+}
+impl Serialize for OrganizationResponse<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(47))?;
+        let row = self.record;
+        for (name, value) in [
+            ("allowAdminAccessToAllCollectionItems", true),
+            ("limitCollectionCreation", true),
+            ("limitCollectionDeletion", true),
+            ("limitItemDeletion", false),
+            ("selfHost", true),
+            ("use2fa", true),
+            ("useApi", true),
+            ("useCustomPermissions", true),
+            ("useDirectory", false),
+            ("useDisableSMAdsForUsers", true),
+            ("useInviteLinks", false),
+            ("useKeyConnector", false),
+            ("useMyItems", false),
+            ("useOrganizationDomains", false),
+            ("usePam", false),
+            ("usePasswordManager", true),
+            ("usePhishingBlocker", false),
+            ("usePolicies", true),
+            ("useScim", false),
+            ("useSecretsManager", false),
+            ("useSso", false),
+            ("useTotp", true),
+            ("usersGetPremium", true),
+        ] {
+            map.serialize_entry(name, &value)?;
+        }
+        for name in [
+            "seats",
+            "maxCollections",
+            "businessAddress1",
+            "businessAddress2",
+            "businessAddress3",
+            "businessCountry",
+            "businessTaxNumber",
+            "maxAutoscaleSeats",
+            "maxAutoscaleSmSeats",
+            "maxAutoscaleSmServiceAccounts",
+            "secretsManagerPlan",
+            "smSeats",
+            "smServiceAccounts",
+        ] {
+            map.serialize_entry(name, &Option::<&str>::None)?;
+        }
+        map.serialize_entry("id", row.id)?;
+        map.serialize_entry("name", row.name)?;
+        map.serialize_entry("businessName", row.name)?;
+        map.serialize_entry("billingEmail", row.billing_email)?;
+        map.serialize_entry("object", "organization")?;
+        map.serialize_entry("planType", &6)?;
+        map.serialize_entry("maxStorageGb", &32767)?;
+        map.serialize_entry("hasPublicAndPrivateKeys", &row.has_public_and_private_keys)?;
+        map.serialize_entry("useEvents", &row.features.events)?;
+        map.serialize_entry("useGroups", &row.features.groups)?;
+        map.serialize_entry("useResetPassword", &row.features.mail)?;
+        map.end()
+    }
+}
+
+#[derive(Debug)]
+pub struct CollectionResponse<'a> {
+    record: crate::organizations::CollectionRecord<'a>,
+}
+impl<'a> CollectionResponse<'a> {
+    pub(crate) const fn new(record: crate::organizations::CollectionRecord<'a>) -> Self {
+        Self { record }
+    }
+}
+impl Serialize for CollectionResponse<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(7))?;
+        map.serialize_entry("id", self.record.id)?;
+        map.serialize_entry("organizationId", self.record.organization_id)?;
+        map.serialize_entry("name", self.record.name)?;
+        map.serialize_entry("externalId", &self.record.external_id)?;
+        map.serialize_entry("type", &0)?;
+        map.serialize_entry("defaultUserCollectionEmail", &Option::<&str>::None)?;
+        map.serialize_entry("object", "collection")?;
+        map.end()
+    }
+}
+
+#[derive(Debug)]
+pub struct CollectionDetailsResponse<'a> {
+    record: crate::organizations::UserCollectionRecord<'a>,
+}
+impl Serialize for CollectionDetailsResponse<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(10))?;
+        let row = self.record;
+        map.serialize_entry("id", row.collection.id)?;
+        map.serialize_entry("organizationId", row.collection.organization_id)?;
+        map.serialize_entry("name", row.collection.name)?;
+        map.serialize_entry("externalId", &row.collection.external_id)?;
+        map.serialize_entry("type", &0)?;
+        map.serialize_entry("defaultUserCollectionEmail", &Option::<&str>::None)?;
+        map.serialize_entry("object", "collectionDetails")?;
+        map.serialize_entry("readOnly", &row.read_only)?;
+        map.serialize_entry("hidePasswords", &row.hide_passwords)?;
+        map.serialize_entry("manage", &row.manage)?;
+        map.end()
+    }
+}
+
+/// Basic collection list envelope. details() borrows the same authorized stable view
+/// as a bare collectionDetails array for an adapter's sync response.
+pub struct UserCollectionListResponse<L> {
+    records: L,
+}
+impl<L> UserCollectionListResponse<L> {
+    pub(crate) const fn new(records: L) -> Self {
+        Self { records }
+    }
+    pub const fn details(&self) -> UserCollectionDetails<'_, L> {
+        UserCollectionDetails {
+            records: &self.records,
+        }
+    }
+}
+impl<L> core::fmt::Debug for UserCollectionListResponse<L> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("UserCollectionListResponse([REDACTED])")
+    }
+}
+impl<L: crate::organizations::UserCollectionListData> Serialize for UserCollectionListResponse<L> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(3))?;
+        map.serialize_entry(
+            "data",
+            &CollectionArray {
+                records: &self.records,
+                details: false,
+            },
+        )?;
+        map.serialize_entry("object", "list")?;
+        map.serialize_entry("continuationToken", &Option::<&str>::None)?;
+        map.end()
+    }
+}
+pub struct UserCollectionDetails<'a, L> {
+    records: &'a L,
+}
+impl<L> core::fmt::Debug for UserCollectionDetails<'_, L> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("UserCollectionDetails([REDACTED])")
+    }
+}
+impl<L: crate::organizations::UserCollectionListData> Serialize for UserCollectionDetails<'_, L> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        CollectionArray {
+            records: self.records,
+            details: true,
+        }
+        .serialize(serializer)
+    }
+}
+struct CollectionArray<'a, L> {
+    records: &'a L,
+    details: bool,
+}
+impl<L: crate::organizations::UserCollectionListData> Serialize for CollectionArray<'_, L> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut seq = serializer.serialize_seq(Some(self.records.len()))?;
+        for index in 0..self.records.len() {
+            let row = self
+                .records
+                .get(index)
+                .ok_or_else(|| serde::ser::Error::custom("Incomplete collection view"))?;
+            if self.details {
+                seq.serialize_element(&CollectionDetailsResponse { record: row })?;
+            } else {
+                seq.serialize_element(&CollectionResponse::new(row.collection))?;
+            }
+        }
+        seq.end()
+    }
+}
+
+/// Explicit projection of one member's wrapped organization key and metadata.
+#[derive(Debug)]
+pub struct OrganizationProfileResponse<'a> {
+    record: crate::organizations::OrganizationProfileRecord<'a>,
+}
+impl Serialize for OrganizationProfileResponse<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(59))?;
+        let row = self.record;
+        for (name, value) in [
+            ("accessSecretsManager", false),
+            ("allowAdminAccessToAllCollectionItems", true),
+            ("enabled", true),
+            ("familySponsorshipAvailable", false),
+            ("keyConnectorEnabled", false),
+            ("limitCollectionDeletion", true),
+            ("limitItemDeletion", false),
+            ("selfHost", true),
+            ("ssoBound", false),
+            ("use2fa", true),
+            ("useActivateAutofillPolicy", false),
+            ("useAdminSponsoredFamilies", false),
+            ("useApi", true),
+            ("useCustomPermissions", true),
+            ("useDirectory", false),
+            ("useDisableSMAdsForUsers", true),
+            ("useInviteLinks", false),
+            ("useKeyConnector", false),
+            ("useMyItems", false),
+            ("useOrganizationDomains", false),
+            ("usePam", false),
+            ("usePasswordManager", true),
+            ("usePhishingBlocker", false),
+            ("usePolicies", true),
+            ("useRiskInsights", false),
+            ("useScim", false),
+            ("useSecretsManager", false),
+            ("useSso", false),
+            ("useTotp", true),
+            ("userIsClaimedByOrganization", false),
+            ("usersGetPremium", true),
+        ] {
+            map.serialize_entry(name, &value)?;
+        }
+        for name in [
+            "identifier",
+            "maxCollections",
+            "providerId",
+            "providerName",
+            "providerType",
+            "familySponsorshipFriendlyName",
+            "keyConnectorUrl",
+            "familySponsorshipLastSyncDate",
+            "familySponsorshipValidUntil",
+            "familySponsorshipToDelete",
+        ] {
+            map.serialize_entry(name, &Option::<&str>::None)?;
+        }
+        map.serialize_entry("id", row.organization.id)?;
+        map.serialize_entry("name", row.organization.name)?;
+        map.serialize_entry("organizationUserId", row.membership_id)?;
+        map.serialize_entry("userId", row.membership.user_id)?;
+        map.serialize_entry("key", row.key)?;
+        map.serialize_entry("object", "profileOrganization")?;
+        map.serialize_entry("seats", &20)?;
+        map.serialize_entry("productTierType", &3)?;
+        map.serialize_entry("maxStorageGb", &32767)?;
+        map.serialize_entry("status", &row.membership.status)?;
+        map.serialize_entry(
+            "type",
+            &if row.membership.role == 3 {
+                4
+            } else {
+                row.membership.role
+            },
+        )?;
+        map.serialize_entry(
+            "hasPublicAndPrivateKeys",
+            &row.organization.has_public_and_private_keys,
+        )?;
+        map.serialize_entry("useEvents", &row.organization.features.events)?;
+        map.serialize_entry("useGroups", &row.organization.features.groups)?;
+        map.serialize_entry("useResetPassword", &row.organization.features.mail)?;
+        map.serialize_entry("resetPasswordEnrolled", &row.reset_password_enrolled)?;
+        map.serialize_entry(
+            "limitCollectionCreation",
+            &(!row.access_all || !matches!(row.membership.role, 0 | 1 | 3)),
+        )?;
+        map.serialize_entry(
+            "permissions",
+            &OrganizationPermissions {
+                collection_manager: row.membership.role == 3 && row.access_all,
+            },
+        )?;
+        map.end()
+    }
+}
+struct OrganizationPermissions {
+    collection_manager: bool,
+}
+impl Serialize for OrganizationPermissions {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(12))?;
+        for name in [
+            "accessEventLogs",
+            "accessImportExport",
+            "accessReports",
+            "manageGroups",
+            "managePolicies",
+            "manageSso",
+            "manageUsers",
+            "manageResetPassword",
+            "manageScim",
+        ] {
+            map.serialize_entry(name, &false)?;
+        }
+        for name in [
+            "createNewCollections",
+            "editAnyCollection",
+            "deleteAnyCollection",
+        ] {
+            map.serialize_entry(name, &self.collection_manager)?;
+        }
+        map.end()
+    }
+}
+
+pub struct OrganizationProfileListResponse<L> {
+    records: L,
+}
+impl<L> OrganizationProfileListResponse<L> {
+    pub(crate) const fn new(records: L) -> Self {
+        Self { records }
+    }
+    pub const fn confirmed(&self) -> OrganizationProfileArray<'_, L> {
+        OrganizationProfileArray {
+            records: &self.records,
+            accepted: false,
+        }
+    }
+    pub const fn accepted_and_confirmed(&self) -> OrganizationProfileArray<'_, L> {
+        OrganizationProfileArray {
+            records: &self.records,
+            accepted: true,
+        }
+    }
+}
+impl<L> core::fmt::Debug for OrganizationProfileListResponse<L> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationProfileListResponse([REDACTED])")
+    }
+}
+impl<L: crate::organizations::OrganizationProfileListData> Serialize
+    for OrganizationProfileListResponse<L>
+{
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.confirmed().serialize(serializer)
+    }
+}
+pub struct OrganizationProfileArray<'a, L> {
+    records: &'a L,
+    accepted: bool,
+}
+impl<L> core::fmt::Debug for OrganizationProfileArray<'_, L> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationProfileArray([REDACTED])")
+    }
+}
+impl<L: crate::organizations::OrganizationProfileListData> Serialize
+    for OrganizationProfileArray<'_, L>
+{
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut seq = serializer.serialize_seq(None)?;
+        for index in 0..self.records.len() {
+            let row = self
+                .records
+                .get(index)
+                .ok_or_else(|| serde::ser::Error::custom("Incomplete organization profile view"))?;
+            if row.membership.status == 2 || (self.accepted && row.membership.status == 1) {
+                seq.serialize_element(&OrganizationProfileResponse { record: row })?;
+            }
+        }
+        seq.end()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

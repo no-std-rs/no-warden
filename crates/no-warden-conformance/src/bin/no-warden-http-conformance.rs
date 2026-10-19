@@ -33,6 +33,8 @@ enum Suite {
     UserKeyIdCli,
     Prelogin,
     PreloginCli,
+    OrganizationOwner,
+    OrganizationOwnerCli,
 }
 
 impl Suite {
@@ -69,6 +71,8 @@ impl Suite {
             "user-key-id-cli" => Self::UserKeyIdCli,
             "prelogin" => Self::Prelogin,
             "prelogin-cli" => Self::PreloginCli,
+            "organization-owner" => Self::OrganizationOwner,
+            "organization-owner-cli" => Self::OrganizationOwnerCli,
             _ => return None,
         })
     }
@@ -93,7 +97,7 @@ fn check<E: Display>(result: Result<(), E>) {
 
 fn usage() {
     eprintln!(
-        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials|personal-vault-purge|account-deletion|cipher-reads|password-grants|refresh-grants|text-sends|text-sends-cli|file-sends|file-sends-cli|user-key-id|user-key-id-cli|prelogin|prelogin-cli]"
+        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials|personal-vault-purge|account-deletion|cipher-reads|password-grants|refresh-grants|text-sends|text-sends-cli|file-sends|file-sends-cli|user-key-id|user-key-id-cli|prelogin|prelogin-cli|organization-owner|organization-owner-cli]"
     );
 }
 
@@ -201,5 +205,11 @@ fn main() {
     }
     if suite == Suite::PreloginCli {
         check(no_warden_conformance::prelogin_cli::run());
+    }
+    if suite == Suite::OrganizationOwner {
+        check(no_warden_conformance::organization_owner::run());
+    }
+    if suite == Suite::OrganizationOwnerCli {
+        check(no_warden_conformance::organization_owner_cli::run());
     }
 }

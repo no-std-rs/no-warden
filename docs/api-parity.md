@@ -39,25 +39,25 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 99 routed patterns, 53 with typed requests, 92 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 102 routed patterns, 54 with typed requests, 95 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 96 partial and 198 unimplemented. Query/rank/configuration
+status: 99 partial and 195 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
 
-44 local patterns have some typed response representation, including
+47 local patterns have some typed response representation, including
 the domain settings projections and empty mutation response, explicit API-key
 responses, and attachment responses. Bulk cipher lists use the generic `ListResponse`
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 93 patterns, negative
-HTTP evidence for 92, 227 named HTTP cases, and 44 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 96 patterns, negative
+HTTP evidence for 95, 233 named HTTP cases, and 46 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -966,8 +966,9 @@ The pin explicitly deletes auth-request rows, while release 1.37.4 omits that
 step and retains a non-cascading SQLite foreign key. Portable fixtures exclude
 auth requests so their comparison does not imply cross-version equivalence for
 that cleanup. Local provider tests cover complete supported deletion separately.
-Organization last-owner policy is a provider obligation tested at the core
-boundary, not a claim of host organization APIs or actual organization comparison.
+Organization last-owner policy is a trusted provider obligation. The later
+organization-owner slice adds actual membership state and its deletion guard;
+the earlier personal deletion proof did not establish organization behavior.
 See [protocol details](protocol.md#account-deletion) for primary cleanup references.
 
 The [bundled SDK generated API](https://github.com/bitwarden/sdk-internal/blob/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6/crates/bitwarden-api-api/src/apis/accounts_api.rs#L237-L252)
@@ -1167,9 +1168,10 @@ Four registered handlers become partial: reservation, multipart upload,
 recipient file-URL issuance and binary GET. They deepen existing owner CRUD,
 recipient metadata, `send_access` and sync; they do not implement the static
 client upload-renewal GET or complete the Send family. The ledger retains all
-294 handler variants: 96 partial, 198 unimplemented, zero full and zero traces.
-It records 99 routed patterns, 53 with typed requests, 44 with any typed response
-and 92 with reusable core services after the later backfill/discovery deepening. Measured multipart facts are not counted as
+294 handler variants. At the later prelogin milestone, 96 were partial and 198
+unimplemented, with zero full and zero traces. That ledger recorded 99 routed
+patterns, 53 with typed requests, 44 with any typed response and 92 with reusable
+core services. Measured multipart facts are not counted as
 a wire request DTO; `FileSendRequest<P>` is a semantic view, and the explicit
 reservation/download responses are typed serializers.
 
@@ -1230,7 +1232,7 @@ prelogins and two password logins, excluding two modern fixtures. A separate
 official CLI `2026.10.0` comparison passes twenty-six commands with real
 PBKDF2/Argon2 login, note encryption/sync/unlock/decryption and Argon2 fresh-cache
 recovery. It counts three CLI logins and two direct prelogin HTTP requests;
-client internals are uncounted and untraced. The current ledger records 99 routes,
+client internals are uncounted and untraced. At this milestone the ledger recorded 99 routes,
 53 typed requests, 44 typed responses, 92 reusable services and 227 HTTP names.
 The local legacy extension has host-unit evidence only, so positive/negative
 network totals rise by two to 93/92. Source/provider and no-allocator proofs
@@ -1238,3 +1240,34 @@ remain distinct from actual-client and captured-request evidence. Independent lo
 errors, absent rate controls and encoded-body limits remain qualified gaps.
 All 294 upstream variants and every remaining partial contract stay on the full
 API roadmap; no full-parity or captured-trace flag is enabled.
+
+## Organization owner creation and discovery
+
+Three route patterns add a substantive organization boundary: creation, owner
+discovery and accessible collection listing. `OrganizationStorage` supplies
+trusted policy, membership and stable indexed views; allocation-free services
+authorize the owner and serialize public organization, membership and collection
+projections. Profile and sync gain these components without implying complete
+typed whole-response contracts. Last-confirmed-owner account deletion must
+remain guarded before cleanup. The source model files agree between inventory
+pin and release 1.37.4, including shared collection `type: 0`.
+
+Creation is atomic in the adapter, while upstream performs sequential saves.
+Default creation permission does not implement all enterprise policies or
+configuration variants. General organization CRUD, invitations, members,
+collection administration, sharing, notification and transport contracts remain
+open. The corrected six-case HTTP comparison passes both targets with 137 counted
+requests, two password logins, two refreshes and two organization creates,
+excluding two modern-registration fixtures. They verify decrypted initial
+collection content, exact projections/guards and both last-owner deletion
+rejections without changing personal or foreign state. The separate official
+CLI `2026.10.0` comparison passes nineteen commands on both servers: two CLI
+password logins, one direct setup login and thirteen direct HTTP requests,
+excluding one registration. It verifies membership and decrypted initial
+collections after login, unlock and fresh-cache login, with preserved personal
+note decryption. Cached reads do not prove direct discovery endpoint calls.
+The ledger binds 119 source hashes and adds two existing CLI command forms to
+its catalog: organization and collection lists. Full-parity and captured-trace
+catalogs stay empty. Corrected raw-segment classification passes dotted-ID
+401/422 and percent-encoded valid-UUID regression checks in the expanded
+137-request comparison.

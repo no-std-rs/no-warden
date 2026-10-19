@@ -1,7 +1,7 @@
 # Bitwarden protocol notes
 
-Research date: 2026-10-18. These notes describe upstream wire contracts relevant
-to an initial personal vault. They are a research target, **not a claim that
+Research date: 2026-10-19. These notes describe upstream wire contracts relevant
+to the supported API slices. They are a research target, **not a claim that
 every endpoint below is implemented or verified**. The README and real CLI
 integration results define the demonstrated compatibility of no-warden.
 
@@ -1155,9 +1155,8 @@ POST alias; it does not return a deleted-user JSON projection.
 
 After verifying the proof, upstream rejects a confirmed organization owner if
 its organization has at most one confirmed owner. The guard is after successful
-protected-action OTP consumption but before cleanup. The personal adapter has
-no organization membership implementation; the reusable provider must enforce
-that trusted policy when embedded in an organization-aware application.
+protected-action OTP consumption but before cleanup. Organization-aware providers
+must enforce this trusted policy before deleting any account-dependent state.
 
 Pinned cleanup removes Sends, emergency-access relationships/invitations,
 memberships and their collection/group links, personal ciphers and attachments,
@@ -1549,3 +1548,84 @@ Local units separately prove rollback, reopen, first-field parsing and physical
 account-FK cleanup. Configured quota/organization/email policy, notifications,
 rate controls, purge cron, live maximum-size/TTL and full JWT/transport behavior
 remain open; the host persists HS256 authority instead of upstream RS256.
+## Organization owner creation and discovery
+
+The [pinned creation and discovery handlers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L101-L324)
+and [release 1.37.4](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/organizations.rs#L99-L322)
+agree on `POST /api/organizations`, owner `GET /api/organizations/{id}` and
+authenticated `GET /api/collections`. Creation requires canonical camelCase
+`billingEmail`, `collectionName`, `key`, `name` and `planType`; optional `keys`
+contains required `encryptedPrivateKey` then `publicKey`. Positional input keeps
+all six slots in that order, with `keys` before `planType`. The plan accepts a
+signed 64-bit integer or arbitrary string and is ignored; the response uses 6.
+Unknown fields cannot select IDs, role, status or owner. Name, collection name
+and key strings remain opaque, including empty strings. Billing email is
+Unicode-lowercased without trimming, then validated by the mailbox/domain helper.
+
+Creation checks configured permission first, then applicable SingleOrg policy,
+then billing validity. It assigns independent organization, membership and
+collection IDs. The creator is confirmed status 2, Owner role 0, with full
+collection access and the submitted wrapped organization key. Upstream saves
+organization, membership and initial collection sequentially. Membership and
+collection saves advance the owner's revision without changing personal vault
+payloads, credentials, account keys, device authority or security stamp. The
+local provider's atomic creation/revision contract is stronger than those
+sequential saves; it does not establish notifications or general administration.
+
+The [owner guard](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/auth.rs#L747-L829)
+receives the raw nonempty path segment, including dotted or percent-encoded
+spellings, before current device/stamp authentication and exact membership and
+confirmed-owner checks. A missing or inaccessible organization is 401. A valid
+UUID path keeps its exact spelling and takes precedence over query values.
+Only malformed paths fall back to the case-sensitive decoded `organizationId`
+query root; an owned query can pass the request guard before the malformed path
+fails with 422. JSON guards run after authentication: data/schema failures are
+422, syntax or invalid whole-body UTF-8 is 400, and these routes do not constrain
+JSON by Content-Type. GET bodies and unused queries confer no authority.
+
+The [organization model](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/organization.rs#L185-L249)
+projects 47 public fields, excluding private/public key contents and member keys.
+Its `seats` is null and `limitCollectionCreation` is true. The separate
+[profile membership](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/organization.rs#L438-L534)
+has 59 fields plus twelve permission flags: Owner permissions are false because
+those flags describe custom roles, `seats` is 20, and collection creation is not
+limited for this owner. It includes the membership ID, account ID and opaque
+RSA-wrapped organization key. Confirmed memberships appear in both profile
+`organizations` and `organizationsNew`; the latter also admits accepted members.
+JWT organization-role arrays are omitted upstream and are not needed for this
+discovery flow.
+
+The [collection model](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/collection.rs#L57-L153)
+uses seven basic fields, including `type: 0`, null `externalId` and
+`defaultUserCollectionEmail`. Sync adds `readOnly: false`, `hidePasswords: false`
+and `manage: true` for the confirmed owner. Both model files are identical in
+the pinned revision and release 1.37.4. List order is not promised. Event/group
+flags depend on configuration and default false; reset-password support depends
+on SMTP. Source feature flags do not prove the corresponding APIs are implemented.
+
+The shipped CLI reads organizations and collections from synchronized state
+([organization get](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/commands/get.command.ts#L538-L569),
+[list](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/commands/list.command.ts#L169-L193),
+[crypto/profile sync](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/common/src/platform/sync/default-sync.service.ts#L185-L201)).
+Owner `list org-collections` instead calls `/organizations/{id}/collections`,
+which is outside this three-route slice. Shared API and generated SDK request
+constructors do not establish an executed CLI organization-creation call or
+captured request trace. General organization CRUD, invitations, member/collection
+administration, shared ciphers, enterprise policies, SMTP and notifications
+remain separate work. All implementation remains independently authored under
+MIT OR Apache-2.0; upstream references describe protocol facts only.
+
+All six selected direct Rust HTTP cases pass against the adapter and actual
+Vaultwarden 1.37.4: 137 counted requests, two password logins, two refreshes and
+two organization creates per target, excluding two modern registration fixtures.
+The cases compare exact public/member/collection projections, decrypt the initial
+collection, verify guards and both last-owner deletion rejections, and preserve
+personal keys/vault state and foreign authority. The separate focused official
+CLI `2026.10.0` comparison passes nineteen commands on both servers, with
+collection decryption after login, unlock and fresh-cache login and retained
+personal-note decryption. Thirteen direct setup HTTP requests include one
+password login; two more logins are CLI commands, and one registration fixture
+is excluded. Client internals are not counted or traced. Neither result implies
+general organization or captured request-trace parity. A route-classifier
+regression verifies dotted-ID authentication/fallback and percent-encoded valid-ID
+checks in those same six cases.

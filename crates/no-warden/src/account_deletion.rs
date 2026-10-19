@@ -40,6 +40,17 @@ pub trait AccountDeletionStorage: Storage {
         proof: ReauthenticationProof<'_>,
     ) -> Result<bool, Self::Error>;
 
+    /// Organization-aware providers must report a confirmed Owner membership when
+    /// its organization has no other confirmed Owner. This runs after reauthentication.
+    /// The default preserves providers without organization support. Recheck this policy
+    /// within the deletion transaction to avoid concurrent orphaning.
+    fn account_deletion_blocked_by_last_owner(
+        &mut self,
+        _owner: &str,
+    ) -> Result<bool, Self::Error> {
+        Ok(false)
+    }
+
     fn delete_account(&mut self, owner: &str) -> Result<(), Self::Error>;
 }
 
@@ -54,6 +65,10 @@ impl<T: AccountDeletionStorage + ?Sized> AccountDeletionStorage for &mut T {
 
     fn delete_account(&mut self, owner: &str) -> Result<(), Self::Error> {
         (**self).delete_account(owner)
+    }
+
+    fn account_deletion_blocked_by_last_owner(&mut self, owner: &str) -> Result<bool, Self::Error> {
+        (**self).account_deletion_blocked_by_last_owner(owner)
     }
 }
 
@@ -76,6 +91,13 @@ impl<S: AccountDeletionStorage> VaultService<S> {
                 "reauthentication",
                 "Reauthentication failed.",
             ));
+        }
+        if self
+            .storage_mut()
+            .account_deletion_blocked_by_last_owner(owner)
+            .map_err(S::map_error)?
+        {
+            return Err(ApiError::invalid("account", "Can't delete last owner"));
         }
         self.storage_mut()
             .delete_account(owner)
@@ -170,6 +192,8 @@ mod tests {
         password: &'a str,
         expected_pointer: Option<usize>,
         otp_available: bool,
+        last_owner: bool,
+        policy_checks: usize,
         calls: [Option<Call>; 4],
         count: usize,
         fail: Option<Stage>,
@@ -189,6 +213,8 @@ mod tests {
                 password: PASSWORD,
                 expected_pointer: None,
                 otp_available: true,
+                last_owner: false,
+                policy_checks: 0,
                 calls: [None; 4],
                 count: 0,
                 fail: None,
@@ -276,6 +302,10 @@ mod tests {
                 }
             })
         }
+        fn account_deletion_blocked_by_last_owner(&mut self, _: &str) -> Result<bool, Failure> {
+            self.policy_checks += 1;
+            Ok(self.last_owner)
+        }
         fn delete_account(&mut self, owner: &str) -> Result<(), Failure> {
             self.record(Call::Delete);
             self.check(Stage::Policy)?;
@@ -311,6 +341,43 @@ mod tests {
             master_password_hash: None,
             otp: Some(Secret::new(OTP)),
         }
+    }
+
+    #[test]
+    fn deletion_last_owner_policy_runs_after_proof_and_preserves_all_state() {
+        let mut store = Bounded::new();
+        store.last_owner = true;
+        let before = store.state;
+        let mut borrowed = &mut store;
+        let mut service = VaultService::new(&mut borrowed);
+        assert_eq!(
+            service
+                .delete_account(OWNER, &password("wrong"))
+                .unwrap_err()
+                .status_code(),
+            400
+        );
+        assert_eq!(service.storage().policy_checks, 0);
+        let error = service
+            .delete_account(OWNER, &password(PASSWORD))
+            .unwrap_err();
+        assert_eq!(error.status_code(), 400);
+        assert_eq!(error.message, "Can't delete last owner");
+        assert_eq!(service.storage().policy_checks, 1);
+        assert_eq!(service.storage().state, before);
+        assert!(
+            service
+                .storage()
+                .calls
+                .iter()
+                .all(|call| *call != Some(Call::Delete))
+        );
+        assert_eq!(
+            service.delete_account(OWNER, &otp()).unwrap_err().message,
+            "Can't delete last owner"
+        );
+        assert!(!service.storage().otp_available);
+        assert_eq!(service.storage().state, before);
     }
 
     #[test]

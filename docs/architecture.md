@@ -710,10 +710,10 @@ another account identifier. HTTP authentication, locks, cryptography, clocks,
 policy and persistence remain outside the allocation-free core.
 
 An organization-aware provider enforces last-confirmed-owner policy after proof
-verification and before mutation. The personal adapter implements no organization
-membership or emergency-access lifecycle; an empty local organization feature
-is not a proof of that broader policy. Provider unit tests exercise policy
-rejection and error mapping separately from personal HTTP behavior. A consumed
+verification and before mutation. The organization-owner creation slice adds
+real membership state and this restriction; emergency-access lifecycle and
+general member administration remain separate work. Provider unit tests exercise
+policy rejection and error mapping separately from personal HTTP behavior. A consumed
 protected-action OTP is not rolled back implicitly when later policy or storage
 fails; the host supports password proofs and rejects unsupported OTPs.
 
@@ -880,8 +880,9 @@ Notification or later response construction is a separate boundary. SQL tests
 cover rollback, durable reopen, signing authority, account-deletion FK cleanup
 and preservation of Sends during personal vault purge. Account deletion removes
 Send rows; vault purge continues to remove personal ciphers/folders/attachments
-while retaining Sends. Sync now includes real owner Send responses; organization,
-collection and policy placeholders do not acquire implementation by that change.
+while retaining Sends. Sync includes real owner Send responses. Organization
+membership and initial collections are supplied by their separate provider;
+enterprise policy APIs remain outside those boundaries.
 
 All six selected HTTP cases pass against the adapter and actual Vaultwarden
 1.37.4: 129 counted requests each, including two password logins, 23 Send-token
@@ -965,3 +966,30 @@ random key is independent of upstream's RSA-derived key. Backend errors, absent
 rate controls and the 16-MiB versus 20,000,000-byte body limit remain explicit
 adapter differences. The two identity aliases are upstream; the `/api` alias is
 an additional local contract.
+
+## Organization owner discovery
+
+`OrganizationStorage` is an opt-in allocation-free boundary for creation policy,
+organization/membership reads and stable indexed collection/profile views.
+`VaultService::create_organization` admits an opaque borrowed request only after
+trusted creation, SingleOrg and billing-email checks, then gives the provider a
+sealed `ValidatedOrganizationCreate` plan. Identifier generation, Unicode email
+lowercase, mailbox/domain validation, clocks and transactions remain adapters.
+The provider commits a fresh organization, confirmed full-access owner, initial
+collection and owner revision together; this is stronger than upstream's three
+sequential saves. Credentials, personal vault state and foreign owners remain
+outside that mutation.
+
+Separate typed serializers represent public organization metadata, profile
+memberships and basic/sync collections. Private organization key material is
+excluded from public discovery; only the authenticated membership projection
+contains its opaque wrapped organization key. Caller-owned indexed views avoid
+a fixed collection count or allocation. Owner discovery checks actual confirmed
+role and exact identity. Classification retains raw nonempty path segments so
+device authentication and the organization/UUID guards run before malformed-ID
+rejection; dotted/percent spelling cannot cause an earlier classifier 404.
+Collection views resolve trusted access before exposing
+records. Whole profile and sync responses remain adapter-built. An
+organization-aware deletion provider must reject a last confirmed owner before
+cleanup. General administration, invitations, sharing and policy management are
+outside this boundary.
