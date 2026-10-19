@@ -1312,10 +1312,17 @@ pub struct PreloginRequest<'a> {
     pub email: &'a str,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+/// One-time user-key identifier migration. The value is opaque, including an empty string.
+#[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserKeyIdRequest<'a> {
     pub user_key_id: &'a str,
+}
+
+impl core::fmt::Debug for UserKeyIdRequest<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("UserKeyIdRequest([REDACTED])")
+    }
 }
 
 /// Profile mutation input. The service checks UTF-8 byte length without normalization.

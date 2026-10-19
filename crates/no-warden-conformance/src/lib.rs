@@ -29,4 +29,6 @@ pub mod registration;
 pub mod text_sends;
 pub mod text_sends_cli;
 pub mod transport;
+pub mod user_key_id;
+pub mod user_key_id_cli;
 pub mod webauthn_credentials;

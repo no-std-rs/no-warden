@@ -10,6 +10,7 @@
 
 pub mod account_deletion;
 pub mod account_kdf;
+pub mod account_key_id;
 pub mod account_keys;
 pub mod account_password;
 pub mod account_profile;

@@ -49,7 +49,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | `GET /api/accounts/keys`, `POST /api/accounts/keys`, `GET /api/users/<id>/public-key` | Owner-only private retrieval, initialization of an absent pair, authenticated cross-user public lookup | Borrowed core/provider contracts; Rust HTTP comparison group and SQLite rollback/reopen tests |
 | `POST /api/accounts/api-key`, `POST /api/accounts/rotate-api-key` | Password-reauthenticated personal key retrieval, lazy creation, rotation | Core, HTTP comparison with upstream, rollback and restart tests; keys used by real CLI |
 | Personal `client_credentials` at `POST /identity/connect/token` | `user.<id>`, exact `api` scope, access token without refresh token | Real CLI API login, password unlock and decryption; core and HTTP comparison with upstream |
-| `POST /api/accounts/key-management/user-key-id` | One-time key-ID migration | SDK login and HTTP |
+| `POST /api/accounts/key-management/user-key-id` | Opaque one-time ID, current-device guards and atomic local persistence | Six matching HTTP cases and fifteen-command actual CLI migration comparison |
 | Profile, revision date, sync | Personal account and opaque encrypted vault | CLI and HTTP |
 | `PUT`/`POST /api/accounts/profile`, `PUT /api/accounts/avatar` | Exact profile names and nullable avatar colors with UTF-8 byte limits | Core/provider contracts, host rollback tests, and eight matching Rust HTTP cases on both servers; no CLI mutation claim |
 | `GET`/`POST`/`PUT /api/settings/domains`, sync domains | Opaque ordered custom groups, signed exclusions, full flagged catalog for GET and filtered catalog for sync | Reusable borrowed views and typed projections, host rollback/isolation tests, eight matching Rust HTTP cases; no CLI domain mutation or settings request trace claim |
@@ -103,7 +103,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 550 active workspace unit tests pass: 260 core, 194 host and 96 support,
+All 567 active workspace unit tests pass: 269 core, 200 host and 98 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -980,3 +980,23 @@ sequence. Scoped URLs remain readable after disable/date/count changes while
 bytes and token remain valid. No live TTL/maximum upload, configured quota,
 organization/email policy, object storage, notification/rate/cron, Range/full
 transport or RS256-equivalence claim is made. Full Send/API parity remains open.
+
+## User-key-ID backfill
+
+All six focused Rust HTTP cases pass against both the adapter and Vaultwarden
+`1.37.4`: 168 counted requests, three password logins and three refreshes per
+target, excluding three registrations. They check opaque empty/long/Unicode/NUL
+and positional initialization, current authentication before schema guards,
+raw UTF-8 rejection, ignored Content-Type, exact empty 200 and repeated 422
+`Unexpected data`, account revision, owner isolation, keys, sessions and vault
+preservation. Key-ID observations use `sync.userDecryption.userKeyId`.
+
+The separate fifteen-command official CLI 2026.10.0 migration comparison passes
+both targets: absent sync metadata becomes a stable SDK-generated ID, and a
+retained note decrypts after login, unlock and fresh-cache login. Sixteen direct
+HTTP requests include one fixture login; two additional logins are CLI commands.
+It is separate from baseline120 and adds no command-form or captured-route
+claim. Local SQL tests separately establish atomic one-time assignment and
+rollback/reopen; upstream's separate check/save is weaker. Full key rotation,
+all account variants, complete token projections and transport-limit parity
+(16,777,216 versus 20,000,000 bytes) remain open.
