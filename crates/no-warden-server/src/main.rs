@@ -12,6 +12,7 @@ mod cipher_reads;
 mod devices;
 mod domains;
 mod organization_collections;
+mod organization_invitations;
 mod organization_members;
 mod organizations;
 mod password_login;
@@ -718,6 +719,16 @@ async fn dispatch_with_peer(
                 )?)
                 .into_response(),
             )
+        }
+        Route::OrganizationInvite(raw_org) => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let org = organization_invitations::path(&mut store, &owner, raw_org, uri.query())?;
+            let input = organization_invitations::Input::parse(&body)?;
+            match VaultService::new(&mut *store).invite_org_members(&owner, &org, &input) {
+                Ok(_) => Ok(StatusCode::OK.into_response()),
+                Err(error) => Ok(organization_invitations::error_response(error)),
+            }
         }
         Route::OrganizationMember(raw_org, raw_member) => {
             devices::access_binding(&store.db, &digest(bearer), &owner)?

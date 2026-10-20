@@ -21,6 +21,10 @@ use no_warden::{
         CollectionAccessData, CollectionAccessEntry, CollectionCreateData, CollectionListData,
         OrganizationCollectionMembership, OrganizationCollectionStorage, ValidatedCollectionCreate,
     },
+    organization_invitations::{
+        InvitationPolicy, InvitationTarget, InviteCommit, OrganizationInvitationStorage,
+        OrganizationInviteData, ValidatedOrganizationInvite,
+    },
     organization_members::{
         OrganizationMemberCollection, OrganizationMemberDetailQuery,
         OrganizationMemberDetailStorage, OrganizationMemberGroup, OrganizationMemberListData,
@@ -55,7 +59,8 @@ use no_warden::{
         DomainSettingsUpdateResponse, FileSendRequest, FolderRequest, ImportRequest,
         InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
         MasterPasswordPolicy, MasterPasswordPolicyResponse, OrganizationCollectionCreateRequest,
-        OrganizationCreateRequest, OrganizationPlanType, PasswordLoginRequest,
+        OrganizationCreateRequest, OrganizationInviteCollection, OrganizationInvitePermissions,
+        OrganizationInviteRequest, OrganizationPlanType, PasswordLoginRequest,
         PasswordOrOtpRequest, PreloginKdfSettings, PreloginRequest, PreloginResponse,
         ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest, RegistrationAuthentication,
         RegistrationCredentials, RegistrationFinishRequest, RegistrationFinishResponse,
@@ -92,6 +97,7 @@ struct PurgeProbe {
     added_collection_name_len: usize,
     added_external: [u8; 64],
     added_external_len: Option<usize>,
+    invited: [bool; 2],
 }
 impl PurgeProbe {
     fn organization_record(&self) -> OrganizationRecord<'_> {
@@ -440,6 +446,87 @@ impl OrganizationCollectionStorage for PurgeProbe {
         self.added_collection = true;
         self.revision += 1;
         Ok(self.added_collection_row())
+    }
+}
+// Caller-owned storage proves sequential invitation service/error formatting links
+// without a heap. These fixed capacities belong only to this compile probe.
+struct InvitationMessageBuffer {
+    bytes: [u8; 192],
+    len: usize,
+}
+impl core::fmt::Write for InvitationMessageBuffer {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        let end = self.len.checked_add(text.len()).ok_or(core::fmt::Error)?;
+        let destination = self.bytes.get_mut(self.len..end).ok_or(core::fmt::Error)?;
+        destination.copy_from_slice(text.as_bytes());
+        self.len = end;
+        Ok(())
+    }
+}
+impl OrganizationInvitationStorage for PurgeProbe {
+    type AccountId = &'static str;
+    fn invitation_policy(&mut self, _: &str, _: &str) -> Result<InvitationPolicy, ()> {
+        Ok(InvitationPolicy {
+            mail_enabled: false,
+            invitations_allowed: true,
+        })
+    }
+    fn invitation_collection_exists(&mut self, org: &str, col: &str) -> Result<bool, ()> {
+        Ok(org == "embedded-org" && col == "embedded-collection" && self.organization_present)
+    }
+    fn invitation_target(
+        &mut self,
+        _: &str,
+        email: &str,
+    ) -> Result<InvitationTarget<Self::AccountId>, ()> {
+        match email {
+            "existing@example.com" => Ok(InvitationTarget::Existing {
+                account_id: "existing-account",
+                has_master_password: true,
+                already_member: self.invited[0],
+            }),
+            "new@example.com" if self.invited[1] => Ok(InvitationTarget::Existing {
+                account_id: "new-account",
+                has_master_password: false,
+                already_member: true,
+            }),
+            "new@example.com" => Ok(InvitationTarget::Missing {
+                domain_allowed: true,
+                email_valid: true,
+            }),
+            _ => Err(()),
+        }
+    }
+    fn commit_organization_invitation<D: OrganizationInviteData + ?Sized>(
+        &mut self,
+        owner: &str,
+        org: &str,
+        plan: &ValidatedOrganizationInvite<'_, D, Self::AccountId>,
+    ) -> Result<InviteCommit, ()> {
+        let index = match plan.email() {
+            "existing@example.com" => 0,
+            "new@example.com" => 1,
+            _ => return Err(()),
+        };
+        if owner != "embedded-owner"
+            || org != "embedded-org"
+            || plan.role() != 2
+            || plan.access_all()
+            || plan.key() != ""
+        {
+            return Err(());
+        }
+        if self.invited[index] {
+            return Ok(InviteCommit::AlreadyMember);
+        }
+        if plan.membership_status() != if index == 0 { 1 } else { 0 }
+            || plan.requires_invitation() != (index == 1)
+        {
+            return Err(());
+        }
+        self.invited[index] = true;
+        self.revision += 1;
+        Ok(InviteCommit::Created)
     }
 }
 impl OrganizationCollectionMutationStorage for PurgeProbe {
@@ -990,6 +1077,7 @@ pub extern "C" fn _start() -> ! {
             added_collection_name_len: 0,
             added_external: [0; 64],
             added_external_len: None,
+            invited: [false; 2],
         };
         let organization = OrganizationCreateRequest {
             billing_email: "owner@example.com",
@@ -1114,6 +1202,51 @@ pub extern "C" fn _start() -> ! {
         black_box(classify(
             Method::Get,
             "/api/organizations/embedded-org/users/embedded-guest-member?includeGroups=true",
+        ));
+        let selected = serde_json_core::from_slice::<OrganizationInviteCollection<'_>>(black_box(
+            br#"{"id":"embedded-collection","readOnly":true,"hidePasswords":false,"manage":false}"#,
+        ));
+        if let Ok((selected, _)) = selected {
+            let mut emails = no_warden::bounded::BoundedList::<_, 2>::new();
+            let _ = emails.push(black_box("existing@example.com"));
+            let _ = emails.push(black_box("new@example.com"));
+            let mut collections = no_warden::bounded::BoundedList::<_, 1>::new();
+            let _ = collections.push(selected);
+            let request = OrganizationInviteRequest {
+                emails,
+                groups: no_warden::bounded::BoundedList::<&str, 0>::new(),
+                role: OrganizationPlanType::String("User"),
+                collections: Some(collections),
+                permissions: OrganizationInvitePermissions::default(),
+            };
+            let _ = black_box(serde_json_core::to_slice(
+                &selected,
+                &mut organization_output,
+            ));
+            let _ = black_box(organization_service.invite_org_members(
+                "embedded-owner",
+                "embedded-org",
+                &request,
+            ));
+            if let Err(error) =
+                organization_service.invite_org_members("embedded-owner", "embedded-org", &request)
+            {
+                let mut output = InvitationMessageBuffer {
+                    bytes: [0; 192],
+                    len: 0,
+                };
+                let _ = black_box(error.write_message(&mut output, error.email()));
+                black_box((
+                    error.cause(),
+                    error.completed(),
+                    error.index(),
+                    output.bytes,
+                ));
+            }
+        }
+        black_box(classify(
+            Method::Post,
+            "/api/organizations/embedded-org/users/invite",
         ));
         black_box(organization_output);
         for email in black_box(["bare-metal@example.com", ""]) {

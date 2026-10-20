@@ -63,6 +63,14 @@ pass both actual targets. Two strict checks verify the existing confirmed
 Owner's local `Error: User is already confirmed.` result after lookup; this
 does not implement invitation or confirmation mutations.
 
+Default no-SMTP organization invitations now include registered recipients and
+passwordless accounts that complete modern registration under the same UUID.
+An allocation-free provider preserves successful email prefixes and atomically
+commits each recipient's mutation. All six focused HTTP cases and the separate
+twenty-four-command official CLI comparison pass both actual targets.
+Invitation and registration are direct HTTP setup, not CLI commands;
+successful confirmation remains separate work.
+
 The remaining surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden
 replacement. Client-side vault encryption stays with the client.
@@ -179,15 +187,15 @@ corrected servers;
 see the compatibility matrix for recorded results. Two-factor/mail policies,
 trusted proxies, expiry cleanup and local rate controls remain open.
 
-The modern identity registration pair is also implemented for new accounts with
-SMTP disabled. An opt-in `RegistrationStorage` provider preserves opaque
+The modern identity registration pair is also implemented for new accounts and eligible
+passwordless placeholders with SMTP disabled. An opt-in `RegistrationStorage` provider preserves opaque
 credentials while the host verifies a persistent, purpose-bound email token and
 commits only canonical account state. Finish also applies upstream mailbox/domain
 validation after proof and KDF checks; verification issuance stays permissive.
 The strict legacy registration API remains available. All eight modern HTTP
 cases pass against the adapter and Vaultwarden `1.37.4`: 541 requests per server.
-This HTTP proof adds no CLI registration-command or route-trace claim. SMTP, invitations/emergency
-access, placeholder completion, registration configuration and abuse controls
+This HTTP proof adds no CLI registration-command or route-trace claim. SMTP, invite-JWT/emergency
+access, registration configuration and abuse controls
 remain open.
 
 General organization administration, sharing, remaining attachment variants, Sends, notifications and

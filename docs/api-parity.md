@@ -39,13 +39,13 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 109 routed patterns, 56 with typed requests, 102 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 110 routed patterns, 57 with typed requests, 103 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 106 partial and 188 unimplemented. Query/rank/configuration
+status: 107 partial and 187 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
@@ -56,8 +56,8 @@ responses, and attachment responses. Bulk cipher lists use the generic `ListResp
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 103 patterns, negative
-HTTP evidence for 102, 251 named HTTP cases, and 53 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 104 patterns, negative
+HTTP evidence for 103, 257 named HTTP cases, and 53 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -711,7 +711,7 @@ signing. It validates the registration issuer and JWT times with the upstream
 30-second leeway, then atomically stores a canonical account and private verified
 metadata. Registration tokens, raw master hashes, nested credentials and arbitrary
 finish extensions are excluded from account documents. Duplicate registration or
-failure preserves existing accounts and vaults. SMTP delivery, invitation and
+failure preserves existing accounts and vaults. SMTP delivery, invite-JWT and
 emergency-access completion, signup configuration, abuse limits and broader
 account lifecycle remain partial.
 
@@ -1374,3 +1374,25 @@ lookup, without claiming successful confirmation, invitations, user-key
 delivery or a captured HTTP trace. All upstream identities and full-parity
 requirements remain in scope; imported non-full-access states are provider
 evidence only.
+
+## Default no-SMTP invitation subset
+
+One additional handler uses `OrganizationInvitationStorage`, a caller-bounded
+or uncapped borrowed request and sealed per-recipient plans. It returns empty
+200 without a response DTO. Missing users get real passwordless accounts,
+markers and Invited memberships; existing password accounts become Accepted.
+The existing registration provider completes eligible placeholders under the
+same UUID and accepts all their status-zero memberships. No confirmation/key
+delivery follows.
+
+All six HTTP cases and the separate twenty-four-command official CLI 2026.10.0
+comparison pass both actual targets. HTTP has 211 counted requests plus eight
+modern registration requests, three password attempts (two successful, one
+rejected placeholder) and two refreshes. The CLI has sixteen direct HTTP
+requests plus four registration requests, three CLI password attempts and one
+direct attempt. Existing command forms are reused after HTTP setup; the
+invitation route has no production CLI caller or trace claim. Private
+marker/verifier, creation-date preservation, rollback and reopen effects use
+separate provider/SQL tests. Successful confirmation, SMTP, invite JWTs,
+general group/policy administration, sharing and complete
+failure/rate/transport variants remain open.

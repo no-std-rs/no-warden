@@ -931,3 +931,26 @@ pass. This exercises the production member-detail GET followed by local status
 rejection, not a successful confirmation POST, invitation lifecycle or request
 trace. The earlier six-case 190-request/sixteen-command list proof remains a
 separate historical milestone.
+
+## Organization invitations and registration completion
+
+`--suite organization-invites` passes all six HTTP cases on both actual
+targets: 211 counted requests plus eight modern registration requests, three
+password attempts (two successful, one rejected placeholder) and two
+refreshes. It checks guards/references/roles, empty batches, registered-user
+acceptance, ordered partial success and same-ID multi-org completion, with
+protected account/vault/authority snapshots. Private marker/inviter/verifier,
+creation-date preservation, rollback and reopen evidence remains in local
+provider/SQL tests.
+
+The separate `--suite organization-invites-cli` comparison passes twenty-four
+official CLI 2026.10.0 commands on both actual targets, sixteen direct HTTP
+requests plus four registration requests, one direct and three CLI password
+attempts. It uses HTTP invitation/registration setup, then owner member
+listing and completed-invitee personal-note create/get/unlock/fresh-cache
+recovery. No CLI invitation/registration command or successful confirmation is
+claimed. Separate fresh reference processes retain unchanged controls; default
+104-case and baseline 120-command suites remain separate.
+`BW_ORGANIZATION_INVITES_RECEIPT` and `BW_ORGANIZATION_INVITES_CLI_RECEIPT`
+record authored status/counters only, with no credentials, response bodies,
+keys, private URLs or request traces.

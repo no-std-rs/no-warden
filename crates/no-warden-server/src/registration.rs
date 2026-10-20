@@ -12,8 +12,12 @@ use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
+mod completion;
+pub(crate) use completion::{finish_account, invitation_exists};
+
 pub const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS registration_signing_key(singleton INTEGER PRIMARY KEY CHECK(singleton=1),secret BLOB NOT NULL CHECK(length(secret)=32));
-    CREATE TABLE IF NOT EXISTS registration_metadata(owner TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,email_verified INTEGER NOT NULL CHECK(email_verified IN(0,1)));";
+    CREATE TABLE IF NOT EXISTS registration_metadata(owner TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,email_verified INTEGER NOT NULL CHECK(email_verified IN(0,1)));
+    CREATE TABLE IF NOT EXISTS organization_invitations(email TEXT PRIMARY KEY);";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

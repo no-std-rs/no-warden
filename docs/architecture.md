@@ -524,8 +524,8 @@ the storage email, with no extra ASCII-only policy. Invalid addresses return
 400 after proof, account-policy and KDF checks; verification still issues tokens
 for them. The parser and URL dependencies stay outside the allocation-free core.
 
-The standalone adapter fixes registration to the ordinary no-SMTP, signup-allowed
-new-account flow. It returns a verification token directly as JSON or plain text
+The standalone adapter fixes registration to the ordinary no-SMTP new-account and
+eligible passwordless-placeholder flow. It returns a verification token directly as JSON or plain text
 according to Rocket-style preferred `Accept` selection. Its cursor parser
 preserves quoted delimiters/escapes and reads quality only from a first `q`
 parameter of at most five bytes; weighting/specificity selection remains ordered.
@@ -551,8 +551,8 @@ Account insertion and private verification metadata commit in one savepoint.
 Failures after account insertion, metadata writes or deferred commit restore
 existing accounts, credentials, sessions, attachments and vault state. The token
 is not consumed by a failed finish; repeating a completed finish rejects as a
-duplicate without replacement. The host treats every existing account as a
-duplicate; invitation/placeholder completion is not exposed. Provider and host
+duplicate without replacement. The host rejects initialized accounts; eligible empty-verifier accounts can
+complete under the same UUID, as described below. Provider and host
 tests cover these boundaries and persistence. All eight corrected modern HTTP
 cases pass against the adapter and actual Vaultwarden `1.37.4`: 541 counted
 requests per server. A fresh unchanged 120-command CLI regression also passes
@@ -560,8 +560,8 @@ against both servers. The HTTP registration proof stays separate from that
 client baseline, whose fixture uses legacy registration; no CLI registration
 command or route trace is attributed to it.
 
-SMTP delivery/verification, invitation and emergency-access enrollment,
-placeholder completion, registration configuration, signup-domain policy,
+SMTP delivery/verification, invite-JWT and emergency-access enrollment,
+registration configuration, signup-domain policy,
 notifications, rate controls, full JWT interoperability, complete header grammar,
 error envelopes and
 transport-limit parity remain open. The adapter's encoded-body cap remains
@@ -1083,3 +1083,42 @@ not implemented member administration. The expanded six-case HTTP and
 eighteen-command official CLI comparisons pass both targets. The client branch
 reads a confirmed member and rejects confirmation locally; successful
 confirmation, invitations or key delivery are not claimed.
+
+## Organization invitations and placeholder completion
+
+`OrganizationInvitationStorage` extends the collection provider with owned
+lookup handles, `InvitationPolicy` and per-recipient commits.
+`VaultService::invite_org_members` checks Admin authority, all collections,
+all groups and role/escalation policy before processing addresses in original
+order. `ValidatedOrganizationInvite` is a sealed write plan. Each recipient's
+mutation is atomic locally; earlier successes remain when a later one fails.
+There is no batch rollback or deduplication. `OrganizationInviteError` redacts
+addresses in Debug and streams source-visible dynamic text only through
+explicit `write_message` to a caller-owned writer.
+
+`OrganizationInviteRequest<E,G,C>` has caller-selected capacities; an uncapped
+`OrganizationInviteData` view is also available. Signed role provenance and
+three exact permission booleans determine custom access. HTTP/UTF8/URI
+decoding, email normalization/validation, IDs, clocks, configuration, SMTP and
+persistence remain adapters. The no-allocator consumer invokes the actual
+service; union/permission decoding needs deserialize_any and is not universal
+embedded-parser parity.
+
+The host stores normalized invitation markers and trusted inviter emails
+separately from public responses. Same-ID registration atomically rechecks
+private verifier absence and signup-or-invitation eligibility, initializes the
+account, consumes its marker and accepts every status-zero membership.
+Creation time and omitted name/keypair fields remain; initialized accounts
+cannot be overwritten. Device rows remain while pre-initialization authority
+is revoked. These local rollback guarantees are stronger than upstream inner
+sequential saves and early invitation consumption. Groups have no host
+lifecycle/rows, so IDs reject rather than disappear. SMTP, invite JWTs,
+confirmation/key delivery, sharing and complete configuration/rate/transport
+policy remain open.
+
+Both actual targets pass six focused HTTP cases and the separate
+twenty-four-command official CLI comparison. Wire evidence establishes the
+same account IDs and all pending status transitions and preserved supported
+state; private markers, inviter metadata, original creation times and
+rollback/reopen guarantees use local SQL tests. This proves no CLI
+invitation/registration caller or confirmation success.
