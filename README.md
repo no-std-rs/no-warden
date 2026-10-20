@@ -51,6 +51,12 @@ Six matching HTTP cases and a separate twenty-command official CLI comparison
 verify single-collection PUT and DELETE, renamed ciphertext, fresh-cache
 decryption and removal through allocation-free mutation contracts. General
 membership, group administration and shared-cipher writes remain open.
+Six matching HTTP cases verify real organization-member discovery through an
+allocation-free provider, including fresh account names/avatar metadata and
+preserved authority. A separate sixteen-command official CLI comparison passes
+both servers, including fresh member names without an intervening sync and
+fresh-cache membership/collection reads. General membership administration
+and cipher sharing remain open.
 The remaining surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden
 replacement. Client-side vault encryption stays with the client.

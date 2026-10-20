@@ -12,6 +12,7 @@ mod cipher_reads;
 mod devices;
 mod domains;
 mod organization_collections;
+mod organization_members;
 mod organizations;
 mod password_login;
 mod prelogin;
@@ -715,6 +716,16 @@ async fn dispatch_with_peer(
                     col.as_deref().expect("Collection path"),
                 )?)
                 .into_response(),
+            )
+        }
+        Route::OrganizationMembers(raw) => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let org = organization_members::path(&mut store, &owner, raw, uri.query())?;
+            let query = organization_members::query(uri.query());
+            Ok(
+                Json(VaultService::new(&mut *store).list_org_members(&owner, &org, &query)?)
+                    .into_response(),
             )
         }
         Route::OrganizationCreate => {

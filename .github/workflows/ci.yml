@@ -110,6 +110,8 @@ jobs:
           target/debug/no-warden-http-conformance --suite organization-collections-cli
           target/debug/no-warden-http-conformance --suite organization-collection-mutations
           target/debug/no-warden-http-conformance --suite organization-collection-mutations-cli
+          target/debug/no-warden-http-conformance --suite organization-members
+          target/debug/no-warden-http-conformance --suite organization-members-cli
           target/debug/no-warden-http-conformance --suite account-kdf-cli
           target/debug/no-warden-http-conformance --suite account-password-cli
           bash tools/e2e.sh

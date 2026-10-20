@@ -12,7 +12,7 @@ use rusqlite::types::Value as SqlValue;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
-pub(super) fn fixture(path: &str) -> Store {
+pub(crate) fn fixture(path: &str) -> Store {
     let mut store = Store::open(path).unwrap();
     for owner in ["alice", "bob"] {
         let doc = json!({"id":owner,"email":format!("{owner}@example.test"),"key":"opaque-key","securityStamp":"stamp","revisionDate":"2000-01-01T00:00:00.000Z"});
@@ -41,7 +41,7 @@ pub(super) fn fixture(path: &str) -> Store {
     create_org(&mut store, "alice");
     store
 }
-pub(super) fn create_org(store: &mut Store, owner: &str) -> String {
+pub(crate) fn create_org(store: &mut Store, owner: &str) -> String {
     let request = OrganizationCreateRequest {
         billing_email: "a@example.test",
         collection_name: "opaque-initial",
@@ -60,7 +60,7 @@ pub(super) fn create_org(store: &mut Store, owner: &str) -> String {
         .unwrap()
         .to_owned()
 }
-pub(super) fn org(store: &Store) -> String {
+pub(crate) fn org(store: &Store) -> String {
     store
         .db
         .query_row(
@@ -82,7 +82,7 @@ pub(super) fn create(store: &mut Store, org: &str) -> Value {
     )
     .unwrap()
 }
-pub(super) fn snapshot(store: &Store) -> Vec<Vec<SqlValue>> {
+pub(crate) fn snapshot(store: &Store) -> Vec<Vec<SqlValue>> {
     let mut data = Vec::new();
     for table in [
         "accounts",

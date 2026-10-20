@@ -54,6 +54,7 @@ pub enum Route<'a> {
     Sync,
     OrganizationCreate,
     OrganizationGet(&'a str),
+    OrganizationMembers(&'a str),
     OrganizationCollections(&'a str),
     OrganizationCollectionCreate(&'a str),
     OrganizationCollectionUpdate(&'a str, &'a str),
@@ -235,6 +236,7 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                         return None;
                     }
                     return match (method, action) {
+                        (Get, "users") => Some(OrganizationMembers(organization)),
                         (Get, "collections") => Some(OrganizationCollections(organization)),
                         (Post, "collections") => Some(OrganizationCollectionCreate(organization)),
                         (Put | Delete, action) => {
@@ -485,6 +487,36 @@ mod tests {
             (Method::Get, "/api/organizations//"),
         ] {
             assert_eq!(classify(method, path), None);
+        }
+    }
+
+    #[test]
+    fn organization_member_discovery_route_is_authenticated_and_preserves_guard_inputs() {
+        for org in [
+            "org",
+            "bad.id",
+            "%300000000-0000-0000-0000-000000000001",
+            "malformed%",
+        ] {
+            let path = std::format!(
+                "/api/organizations/{org}/users/?includeCollections=true&organizationId=owned"
+            );
+            assert_eq!(
+                classify(Method::Get, &path),
+                Some(Route::OrganizationMembers(org))
+            );
+            assert!(Route::OrganizationMembers(org).requires_authentication());
+            for method in [Method::Post, Method::Put, Method::Delete] {
+                assert_eq!(classify(method, &path), None);
+            }
+        }
+        for path in [
+            "/api/organizations//users",
+            "/api/organizations/org/users/member",
+            "/api/organizations/org/users/mini-details",
+            "/api/organizations/org/users/member/details",
+        ] {
+            assert_eq!(classify(Method::Get, path), None);
         }
     }
 

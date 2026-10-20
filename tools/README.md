@@ -887,3 +887,30 @@ no direct password login and two explicit modern registration fixtures.
 commands; internal client requests are uncounted and untraced. These commands
 reuse existing forms and remain separate from baseline120 and all other focused
 suites. Reference processes retain their default limits.
+
+## Organization member discovery
+
+`--suite organization-members` passes six Rust HTTP cases against both actual
+targets: 190 counted requests, two password logins and two refreshes, excluding
+two modern fixtures/four registration requests. Exact real-member projections,
+fresh name/avatar changes, query/path guards and complete foreign/organization/
+vault/authority snapshots are checked. `BW_ORGANIZATION_MEMBERS_RECEIPT` writes
+private authored names/status/counters.
+
+The separate `--suite organization-members-cli` comparison passes all sixteen
+official CLI `2026.10.0` commands on both actual targets, with seventeen direct
+HTTP requests including one setup password login, two additional CLI logins and
+one excluded modern registration/two requests. It observes fresh server member
+names without an intervening sync and again after fresh-cache login, alongside
+retained collection/personal-note decryption.
+`BW_ORGANIZATION_MEMBERS_CLI_RECEIPT` keeps those counters distinct from
+client-internal traffic. Both selections are separate
+from the default 104-case HTTP and 120-command CLI baselines.
+The CLI's `list org-members --organizationid` command uses a production API call;
+cached organization and collection lists remain separate evidence. Receipts
+record only authored status/case/command counters, never account credentials,
+keys, response bodies or request traces. Public fixture scope is created
+Owner/full-access membership; imported role/status/group behavior is provider
+evidence rather than a member-administration lifecycle. Empty owner/group arrays
+make the network query matrix acceptance evidence; it does not independently
+prove parsing or non-full-access projection branches.

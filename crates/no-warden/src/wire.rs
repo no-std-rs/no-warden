@@ -1879,6 +1879,10 @@ impl core::fmt::Debug for OrganizationCreateRequest<'_> {
     }
 }
 
+/// Public organization-member list response backed by a caller-owned indexed view.
+pub type OrganizationMemberListResponse<L> =
+    crate::organization_members::OrganizationMemberListResponse<L>;
+
 /// Exact ordinary organization projection, excluding wrapped/private/public key strings.
 #[derive(Debug)]
 pub struct OrganizationResponse<'a> {

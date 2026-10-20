@@ -253,7 +253,7 @@ fn detail(db: &Connection, owner: &str, id: &str) -> rusqlite::Result<Option<Det
 
 // Query fallbacks are request-guard inputs, not successful route parameters.
 // Typed path failures remain 422 after all membership/collection guards succeed.
-fn query_root(name: &str) -> &str {
+pub(super) fn query_root(name: &str) -> &str {
     if let Some(rest) = name.strip_prefix('[') {
         return rest.split(']').next().unwrap_or_default();
     }
@@ -415,7 +415,7 @@ impl OrganizationCollectionStorage for Store {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 mod mutations;
 

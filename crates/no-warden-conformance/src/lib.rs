@@ -26,6 +26,8 @@ pub mod organization_collection_mutations;
 pub mod organization_collection_mutations_cli;
 pub mod organization_collections;
 pub mod organization_collections_cli;
+pub mod organization_members;
+pub mod organization_members_cli;
 pub mod organization_owner;
 pub mod organization_owner_cli;
 pub mod password_login;
