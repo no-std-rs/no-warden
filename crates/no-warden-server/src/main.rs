@@ -1440,10 +1440,8 @@ async fn dispatch_with_peer(
                 Ok(json_response(
                     store.item(&owner, id, "cipher")?.ok_or_else(missing)?,
                 ))
-            } else if matches!(route, Route::CipherSoftDelete(_)) {
-                Ok(StatusCode::OK.into_response())
             } else {
-                Ok(StatusCode::NO_CONTENT.into_response())
+                Ok(StatusCode::OK.into_response())
             }
         }
         _ => Err(missing()),

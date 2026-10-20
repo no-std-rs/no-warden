@@ -1017,7 +1017,7 @@ GETs with different typed response models; their generated existence is not
 runtime client evidence or a claim of complete Bitwarden response parity.
 
 All six selected Rust HTTP cases pass against the adapter and actual
-Vaultwarden 1.37.4: 335 counted requests per server, four successful password
+Vaultwarden 1.37.4: 337 counted requests per server, four successful password
 logins and two excluded fixture registrations. They verify all three GETs,
 authentication/UUID order, exact missing/inaccessible messages, active/trash/archive
 projection equivalence, ignored bodies/queries, encoded UUIDs, trailing slashes,
@@ -1583,10 +1583,16 @@ extension-onboarding and welcome-tour dialogs are dismissed through their
 ordinary Skip controls. Both create a login item through the UI, read its
 decrypted username/password, edit it, decrypt the persisted edit after unlock,
 and move it to trash. The adapter's single-cipher trash response now matches the
-reference's empty200 response; a tightened existing Rust fixture catches the
-previous204. Other item types, restore/permanent-delete UI, notification
-WebSockets and the wider web interface remain open. This is not evidence for the unmodified official Web
-artifact or complete API parity.
+reference's empty 200 response; a tightened existing Rust fixture catches the
+previous 204. Both also navigate Trash, decrypt the trashed login, restore it,
+verify its persisted edit in All items, retrash it, and permanently delete it
+through the ordinary confirmation. Restore and permanent deletion return 200.
+The reference's permanent-delete response is empty with no Content-Type; the
+adapter now matches that empty 200 instead of 204. The existing final Rust
+cipher-read case checks DELETE 200/empty and then a missing-item read, bringing
+its unchanged six-case comparison to 337 requests per target. Other item types,
+notification WebSockets and the wider web interface remain open. This is not evidence for the
+unmodified official Web artifact or complete API parity.
 
 The [portable setup](../tools/web-compat/README.md) verifies the immutable image,
 all image blobs, official Chromium 149.0.7827.55 archive and executable, and three

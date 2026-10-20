@@ -93,6 +93,8 @@ for (const [name, mutate] of [
   ["an unknown CLI command", data => { data.routes[0].cli_command_coverage.push("unverified-command"); }],
   ["a cache command presented as a request trace", data => { data.routes[0].cli_route_trace_tested = true; }],
   ["a bare full-parity assertion", data => { data.routes[0].full_upstream_parity_verified = true; }],
+  ["omitted browser restore evidence", data => { data.web_client_evidence_sources.paired_checks = data.web_client_evidence_sources.paired_checks.filter(check => check !== "trashRestore"); }],
+  ["omitted browser permanent-deletion evidence", data => { data.web_client_evidence_sources.paired_checks = data.web_client_evidence_sources.paired_checks.filter(check => check !== "permanentDelete"); }],
 ]) {
   test(`rejects ${name}`, () => {
     const data = structuredClone(snapshot);

@@ -687,7 +687,19 @@ fn readonly_isolation_and_revoked_authority(s: &mut Suite) -> Result<(), CipherR
     require(
         s.http.identities == 4 && s.http.logins == 4,
         "Cipher read identity counts differed",
-    )
+    )?;
+    // Finish the existing lifecycle fixture only after every read-only snapshot
+    // assertion. Actual web-client comparison exposed a successful 204 that the
+    // CLI accepted, while the pinned reference returns an empty 200.
+    let token = s.accounts[0].access.clone();
+    let id = s.ciphers[1].id.clone();
+    s.http
+        .raw(Method::DELETE, &path(&id, ""), Some(&token), None)?
+        .status(200)?
+        .empty()?;
+    s.http
+        .raw(Method::GET, &path(&id, ""), Some(&token), None)?
+        .inaccessible("Cipher doesn't exist")
 }
 fn seed_account(http: &mut Http) -> Result<Account, CipherReadsError> {
     let email = format!("cipher-reads-{}@example.test", Uuid::new_v4());

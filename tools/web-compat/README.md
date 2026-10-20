@@ -11,7 +11,9 @@ authenticated initial sync and profile retrieval, vault navigation, Lock now,
 password unlock, a second authenticated sync, and browser reload returning to
 the lock screen against both servers. It also creates/reads/edits a personal
 login through the rendered UI, decrypts its saved values after unlock and
-moves it to trash. The reference's ordinary onboarding
+moves it to Trash, restores it, verifies the saved edit in All items, then
+retrashes and permanently deletes it through the normal confirmation. The
+reference's ordinary onboarding
 dialogs are dismissed through Add it later, Skip to web app, and the welcome
 tour's Skip button. `BW_WEB_VAULT_MODE=login` limits both servers to login/sync;
 `target` runs the extra vault steps only against no-warden. The harness does
@@ -185,11 +187,24 @@ screen after reload. The reference initially routed its fresh account to
 `#/setup-extension`; Add it later, the dialog's Skip to web app link, and the
 welcome-tour Skip button reached the ordinary vault. Both browsers also
 created/read/edited a personal login, decrypted its persisted edit after unlock
-and moved it to trash. Create/update/trash each returned200. The reference's
+and moved it to trash. Create/update/trash each returned 200. The reference's
 trash response was empty with no Content-Type; the adapter now returns the same
-empty200 rather than204. A tightened existing Rust comparison setup requires
+empty 200 rather than 204. A tightened existing Rust comparison setup requires
 200 with an empty body; this does not add another named HTTP case.
 
-Other item types, UI restore/permanent deletion, notification behavior and the
-broader web interface remain unverified by this smoke. Cipher identifiers are
-normalized to `{id}` before allowlisted operation counts are emitted.
+A follow-up on 2026-10-21 passed ordinary Trash navigation, decryption of the
+trashed login, Restore, decryption of the restored edit in All items, retrash,
+and permanent deletion through the Yes confirmation on both actual servers.
+The pinned client issued `PUT /api/ciphers/{id}/restore` once and
+`DELETE /api/ciphers/{id}` once, both with 200; the two trash operations each
+returned 200. A metadata-only probe confirmed the reference's permanent-delete
+response is empty with no Content-Type. The adapter now returns the same
+empty 200 rather than 204. The existing final Rust cipher-read case requires
+DELETE 200/empty and a subsequent missing-item read after preserving all its
+read-only assertions: all six cases pass at 337 requests per target.
+
+Other item types, notification behavior and the broader web interface remain
+unverified by this smoke. Cipher identifiers are normalized to `{id}` before
+allowlisted operation counts are emitted. These lifecycle checks add browser
+phases and tighten an existing HTTP case; they do not add an implemented route,
+a named HTTP case or a complete endpoint-parity claim.

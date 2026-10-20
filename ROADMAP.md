@@ -43,8 +43,8 @@ invoke the pinned official Bitwarden CLI as an external process.
 - [x] Owned fixed-capacity vault consumer exercises service rules without std/alloc.
 - [x] Pinned real Web 2026.7.0 login/initial-sync/profile smoke on both actual
   servers, paired vault lock/unlock/reload after ordinary onboarding controls,
-  personal-login UI create/read/edit/read-after-unlock/trash, immutable
-  browser/image inputs and a dedicated CI runner. Other item types,
+  personal-login UI create/read/edit/read-after-unlock/trash/restore/permanent
+  deletion, immutable browser/image inputs and a dedicated CI runner. Other item types,
   notifications and full web parity remain open.
 - [ ] Expanded clients: browser extension, desktop, mobile.
 - [ ] Device sessions, token rotation, revocation, account lifecycle and recovery.
