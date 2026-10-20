@@ -1039,3 +1039,24 @@ stored `access_all`/direct links and grant recipients without a status or role
 shortcut. This atomic failure boundary is stronger than upstream sequential
 saves. Imported roles and seeded links are local provider tests, separate from
 the public Owner/full-access lifecycle and actual client evidence.
+
+## Organization member discovery
+
+`OrganizationMemberStorage` is a separate opt-in collection-provider extension.
+`VaultService::list_org_members` applies confirmed manager and direct-full-access
+admission before reading a stable caller-owned `OrganizationMemberListData`.
+The view joins trusted account metadata to membership records and nested
+organization-scoped direct grants/groups without an intrinsic member count cap.
+A sealed `OrganizationMemberListResponse` serializes the nineteen-field member
+records and three-field list envelope without an allocator. The semantic
+`OrganizationMemberQuery` contains booleans; HTTP query parsing stays outside
+the core.
+
+Member listing is observational: the provider preserves account revisions,
+credentials, keys, devices, sessions, vaults, grants and foreign organizations.
+The serializer controls invited/revoked names/status, Manager/custom roles,
+nullable permissions and configured group/direct-collection visibility. Public
+HTTP scope uses actual created Owner/full-access memberships. Imported roles,
+statuses and grants are provider-test inputs, not a public member lifecycle.
+This boundary introduces no invitation, enrollment, sharing or administration
+mutation and does not turn profile feature flags into implemented APIs.

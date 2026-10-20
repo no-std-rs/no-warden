@@ -1744,3 +1744,65 @@ Owner/full-access memberships; imported Manager self-removal and seeded
 cipher-association cleanup have separate local provider evidence. No general
 member/group administration, sharing, bulk mutation, event/notification,
 transport or full-parity claim follows.
+
+## Organization member discovery
+
+The [pinned member-list handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L886-L927)
+and [release 1.37.4 handler](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/organizations.rs#L884-L925)
+agree on `GET /api/organizations/{orgId}/users`. It uses current-device
+`Headers` and `ManagerHeadersLoose`: the requesting member must be confirmed
+Owner, Admin or Manager. Handler admission additionally requires `access_all` or
+Owner/Admin role, otherwise 404 `Resource not found.`. Raw organization paths
+and owned query fallback retain the existing authentication/UUID ordering.
+There is no JSON body guard or member-state mutation.
+
+`includeCollections` and `includeGroups` are case-sensitive optional query
+booleans. Rocket's [optional form wrapper](https://github.com/rwf2/Rocket/blob/v0.5.1/core/lib/src/form/from_form.rs#L791-L808)
+makes missing, invalid or repeated matching fields absent; the handler defaults
+those to false. The [boolean value parser](https://github.com/rwf2/Rocket/blob/v0.5.1/core/lib/src/form/from_form_field.rs#L317-L328)
+accepts a single bare/empty or case-insensitive `on`/`yes`/`true` as true, and
+`off`/`no`/`false` as false, without whitespace trimming. Derived matching uses
+the decoded [first name key](https://github.com/rwf2/Rocket/blob/v0.5.1/core/lib/src/form/name/view.rs#L152-L175),
+so dotted/bracketed and leading-dot/bracket roots can match. Unknown or wrongly
+cased keys are ignored. The query parser remains adapter-owned; the core takes
+semantic booleans.
+
+The [member projection](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/organization.rs#L536-L640)
+returns nineteen fields inside a three-field list envelope: membership `id`,
+`userId`, name, email, externalId, avatarColor, groups, collections, status,
+type, twoFactorEnabled, resetPasswordEnrolled, hasMasterPassword, permissions,
+ssoBound, claimedByOrganization, usesKeyConnector, accessSecretsManager and
+`object: "organizationUserUserDetails"`. No account or organization keys are
+included. All memberships are enumerated, including invited and revoked rows.
+The unrevoked status controls nullable name; output status below -1 becomes -1.
+Stored Manager role 3 becomes Custom 4. Permissions are null except projected
+Custom with `access_all`, which has twelve flags and three collection flags true.
+
+Included collections are direct assignments only, suppressed by stored
+`access_all` or an enabled full-access group. They are administrative metadata
+and have no membership-status filter. Manager unrestricted read/write grants
+acquire effective manage permission. Included groups obey group configuration;
+other unsupported SSO/Key Connector/Secrets Manager flags remain false. Providers
+resolve enrollment, master-password presence and two-factor state from trusted
+records rather than request or registration extras.
+
+The [production CLI list command](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/commands/list.command.ts#L244-L283)
+calls the [organization-user API](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/admin-console/src/common/organization-user/services/default-organization-user-api.service.ts#L55-L79)
+for `bw list org-members --organizationid`. This is a direct request, distinct
+from cached organization/collection lists. All six selected HTTP cases pass
+both actual targets with 190 counted requests, two password logins and two
+refreshes, excluding two modern fixtures/four registration requests. Three
+organizations demonstrate membership identity/isolation and fresh account
+name/avatar projections with preserved vault, revision and session authority.
+The separate official CLI `2026.10.0` comparison passes sixteen commands on
+both targets, including fresh member names without an intervening sync and
+fresh-cache recovery. Seventeen direct HTTP requests include one setup login;
+two further logins are CLI commands, excluding one registration/two requests.
+Client-internal HTTP remains uncounted and no request trace is captured.
+The host's reachable membership lifecycle remains created Owner/full-access;
+status/role/group variants have separate provider evidence, not implemented
+invitations or administration. Owner/full-access and disabled-group arrays are
+empty for every query option, so HTTP acceptance does not independently prove
+boolean decoding or non-full-access ACL projection. Source/parser/provider tests
+establish those distinctions. Sharing and general organization parity remain
+open.

@@ -39,25 +39,25 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 107 routed patterns, 56 with typed requests, 100 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 108 routed patterns, 56 with typed requests, 101 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 104 partial and 190 unimplemented. Query/rank/configuration
+status: 105 partial and 189 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
 
-51 local patterns have some typed response representation, including
+52 local patterns have some typed response representation, including
 the domain settings projections and empty mutation response, explicit API-key
 responses, and attachment responses. Bulk cipher lists use the generic `ListResponse`
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 101 patterns, negative
-HTTP evidence for 100, 245 named HTTP cases, and 51 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 102 patterns, negative
+HTTP evidence for 101, 251 named HTTP cases, and 52 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -1318,10 +1318,34 @@ separate official CLI `2026.10.0` comparison passes twenty commands on both
 targets: production edit/delete, independent authenticated name decryption,
 fresh-cache reads and live/synced absence. Fifteen direct HTTP requests include
 one setup login; two further logins are CLI commands, and one registration/two
-requests is excluded. Client internals remain uncounted and untraced. The current
-ledger binds 129 source hashes. Public scope is confirmed Owner/full-access
+requests is excluded. Client internals remain uncounted and untraced. That
+mutation milestone bound 129 source hashes. Public scope is confirmed Owner/full-access
 memberships. Imported Manager self-removal, revision recipients and seeded
-cipher associations use separate core/local provider evidence; no membership lifecycle or sharing API
-is inferred. Bulk access/delete, aggregate details, member/group policy and
+cipher associations use separate core/local provider evidence; no membership
+lifecycle or sharing API is inferred. Bulk access/delete, aggregate details, member/group policy and
 notification/transport matrices remain open. All 294 source handlers retain
 separate identities and every full-parity and captured-trace flag remains false.
+
+## Organization member discovery subset
+
+One further source handler lists organization membership metadata through an
+opt-in allocation-free provider. It joins real member/account records, applies
+confirmed-manager/full-access admission, and serializes a nineteen-field member
+projection inside a list envelope. Optional collection/group views remain
+caller-owned and source-scoped. The host exposes actual created Owner members;
+no constant empty list substitutes for stored state.
+
+Both actual targets pass all six HTTP cases with 190 counted requests, two
+password logins and two refreshes, excluding two modern fixtures/four requests.
+The cases verify exact identities/projections, profile/avatar freshness,
+foreign/other-owned organization isolation and complete membership/collection
+and personal/authority preservation. The separate official CLI `2026.10.0`
+comparison passes sixteen commands on both targets, with seventeen direct HTTP
+requests, two CLI logins and one direct login, excluding one registration/two
+requests. It observes server name changes without an intervening sync and
+fresh-cache recovery; client-internal traffic is uncounted and untraced. The
+ledger binds 134 source hashes. Query parser and imported status/role/permission
+evidence remain distinct from the public Owner/full-access comparison and from
+membership administration, invitations, group lifecycle and cipher sharing.
+All 294 upstream handler identities remain tracked, with every full-parity and
+captured-trace status false.

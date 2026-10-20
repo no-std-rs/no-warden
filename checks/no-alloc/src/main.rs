@@ -21,6 +21,10 @@ use no_warden::{
         CollectionAccessData, CollectionAccessEntry, CollectionCreateData, CollectionListData,
         OrganizationCollectionMembership, OrganizationCollectionStorage, ValidatedCollectionCreate,
     },
+    organization_members::{
+        OrganizationMemberCollection, OrganizationMemberGroup, OrganizationMemberListData,
+        OrganizationMemberQuery, OrganizationMemberRecord, OrganizationMemberStorage,
+    },
     organizations::{
         CollectionRecord, OrganizationCreationPolicy, OrganizationFeatures, OrganizationMembership,
         OrganizationProfileListData, OrganizationProfileRecord, OrganizationRecord,
@@ -491,6 +495,71 @@ impl OrganizationCollectionMutationStorage for PurgeProbe {
         self.added_collection = false;
         self.revision += 1;
         Ok(())
+    }
+}
+struct OrganizationMembersProbe<'a>(&'a PurgeProbe);
+impl OrganizationMemberListData for OrganizationMembersProbe<'_> {
+    fn len(&self) -> usize {
+        usize::from(self.0.organization_present) * 2
+    }
+    fn get(&self, index: usize) -> Option<OrganizationMemberRecord<'_>> {
+        (index < self.len()).then_some(OrganizationMemberRecord {
+            membership_id: if index == 0 {
+                "embedded-member"
+            } else {
+                "embedded-guest-member"
+            },
+            user_id: if index == 0 {
+                "embedded-owner"
+            } else {
+                "embedded-guest"
+            },
+            organization_id: "embedded-org",
+            name: Some("public embedded account"),
+            email: "account@example.com",
+            external_id: None,
+            avatar_color: None,
+            status: 2,
+            role: if index == 0 { 0 } else { 3 },
+            access_all: index == 0,
+            two_factor_enabled: false,
+            reset_password_enrolled: false,
+            has_master_password: true,
+            full_access_group: false,
+        })
+    }
+    fn groups_enabled(&self) -> bool {
+        true
+    }
+    fn groups_len(&self, _: usize) -> usize {
+        1
+    }
+    fn group(&self, _: usize, index: usize) -> Option<OrganizationMemberGroup<'_>> {
+        (index == 0).then_some(OrganizationMemberGroup {
+            id: "embedded-group",
+            organization_id: "embedded-org",
+        })
+    }
+    fn collections_len(&self, _: usize) -> usize {
+        1
+    }
+    fn collection(&self, _: usize, index: usize) -> Option<OrganizationMemberCollection<'_>> {
+        (index == 0).then_some(OrganizationMemberCollection {
+            id: "embedded-collection",
+            organization_id: "embedded-org",
+            read_only: false,
+            hide_passwords: false,
+            manage: false,
+        })
+    }
+}
+impl OrganizationMemberStorage for PurgeProbe {
+    type Members<'a> = OrganizationMembersProbe<'a>;
+    fn organization_members(&mut self, org: &str) -> Result<Self::Members<'_>, ()> {
+        if org != "embedded-org" {
+            return Err(());
+        }
+        Ok(OrganizationMembersProbe(self))
     }
 }
 impl PreloginStorage for PurgeProbe {
@@ -976,6 +1045,22 @@ pub extern "C" fn _start() -> ! {
                 "embedded-org",
                 "embedded-added-collection",
             ));
+        }
+        for query in [
+            OrganizationMemberQuery::default(),
+            OrganizationMemberQuery {
+                include_groups: true,
+                include_collections: true,
+            },
+        ] {
+            if let Ok(response) =
+                organization_service.list_org_members("embedded-owner", "embedded-org", &query)
+            {
+                let _ = black_box(serde_json_core::to_slice(
+                    &response,
+                    &mut organization_output,
+                ));
+            }
         }
         black_box(organization_output);
         for email in black_box(["bare-metal@example.com", ""]) {

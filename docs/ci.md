@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 656 active Rust tests: 315 core, 233 host, and 108 conformance
+The workspace has 676 active Rust tests: 328 core, 239 host, and 109 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -477,3 +477,21 @@ Local provider tests cover imported Manager self-removal and seeded cipher-link
 cleanup with rollback; real-client tests do not imply those membership/sharing
 lifecycles. The allocator-free consumer links real update/delete service calls
 against fixed caller-owned state, without executing firmware.
+
+The member-discovery selections are `--suite organization-members` and
+`--suite organization-members-cli`, with optional private
+`BW_ORGANIZATION_MEMBERS_RECEIPT`/`BW_ORGANIZATION_MEMBERS_CLI_RECEIPT` files.
+Both actual targets pass six HTTP cases with 190 counted requests, two password
+logins and two refreshes, excluding two modern fixtures/four registration
+requests. They check current authentication, raw path/query guards, exact
+nineteen-field real-member projection, fresh account name/avatar updates and
+preserved account/vault/organization state. The separate official CLI
+`2026.10.0` comparison passes sixteen commands on both targets, with seventeen
+direct HTTP requests, two CLI password logins and one direct setup login,
+excluding one registration/two requests. It uses the production `list org-members`
+call rather than cached member data, observes server name changes without an
+intervening sync and recovers from a fresh cache. Client internals are uncounted.
+Owner/group empty arrays cannot independently reveal query decoding;
+parser/core/provider tests establish those branches. Neither fixture proves a
+captured route trace or a general membership lifecycle. The default 104-case
+HTTP and 120-command baselines retain separate receipts.

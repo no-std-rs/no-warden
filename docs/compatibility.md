@@ -46,6 +46,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Personal text Sends, recipient `send_access` grant and sync | Encrypted owner lifecycle, scoped recipient access, password management and atomic access limits | Six matching Rust HTTP cases and twenty matching official CLI commands on both servers. File Sends are verified separately below; full policy/transport parity remains open |
 | Personal file Sends: reservation, multipart upload, file-URL issuance and binary GET | Immutable encrypted metadata, exact bytes, scoped capabilities and create-only storage | Six matching HTTP cases and a separate twenty-command official CLI comparison on both servers; configured policies and full transport remain open |
 | Organization-owner creation/discovery and initial collection | Confirmed Owner membership, exact public/profile/collection projections and last-owner deletion protection | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers |
+| Organization member discovery | Actual member/account metadata, exact nineteen-field projection and current-device/full-access guards | Six matching HTTP cases and sixteen matching official CLI commands on both actual targets; imported-role/query branches have separate provider/parser tests |
 | Single organization-collection update/delete | Complete grant replacement, opaque names, whitespace external-ID clearing and preserved cipher data | Allocation-free core and local rollback/cascade tests; six matching HTTP cases and twenty matching official CLI commands on both actual targets |
 | Organization-scoped collection list/create/single access-details | Confirmed manager authorization, exact projections, opaque names/external IDs and reference validation | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers; atomic local provider tests |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
@@ -108,7 +109,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 656 active workspace unit tests pass: 315 core, 233 host and 108 support,
+All 676 active workspace unit tests pass: 328 core, 239 host and 109 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -1120,3 +1121,31 @@ deletion. Fifteen direct HTTP requests include one setup password login; two
 other logins are CLI commands, excluding one registration/two requests.
 Client-internal requests are not counted or traced. Full collection, bulk,
 policy, notification and transport parity remain open.
+
+## Organization member discovery
+
+`GET /api/organizations/{orgId}/users` lists actual joined account and membership
+metadata under current-device, confirmed-manager and full-access guards. The
+response has nineteen explicit fields per member, not an empty placeholder or
+profile-organization projection. It excludes account/organization keys and
+preserves nullable name, status/type mappings, permissions and optional direct
+collection/group metadata. Read operations leave revisions and authority intact.
+The [source protocol](protocol.md#organization-member-discovery) distinguishes
+optional-boolean query behavior from ordinary required Boolean guards.
+
+All six HTTP cases pass both actual targets: 190 counted requests, two password
+logins and two refreshes, excluding two modern fixtures/four registration
+requests. They check real membership identities, exact projections, empty and
+Unicode profile names/avatar freshness, foreign/other-owned organizations and
+preserved vault/revision/authority state. The separate official CLI `2026.10.0`
+comparison passes sixteen commands on both, including fresh member names without
+an intervening sync and fresh-cache recovery. Seventeen direct HTTP requests
+include one fixture login; two additional logins are CLI commands, excluding
+one modern registration/two requests. Client internals are uncounted and no
+route trace is captured. The public adapter
+creates Owner/full-access memberships; imported status/role/ACL projections are
+separate local provider evidence. Owner/full-access always suppresses direct
+collections and the host has no group rows; the HTTP query matrix cannot by
+itself distinguish Boolean decoding. Parser/provider tests establish those
+branches. No invitations, arbitrary member changes, group lifecycle, sharing or
+full organization/configuration parity is claimed.
