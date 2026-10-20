@@ -13,6 +13,7 @@ mod devices;
 mod domains;
 mod organization_bulk_confirmations;
 mod organization_bulk_member_removal;
+mod organization_bulk_member_status;
 mod organization_collections;
 mod organization_confirmations;
 mod organization_invitations;
@@ -788,6 +789,23 @@ async fn dispatch_with_peer(
                 &input,
                 &mut scratch,
             )?;
+            Ok(Json(response).into_response())
+        }
+        Route::OrganizationBulkMemberRevoke(raw_org)
+        | Route::OrganizationBulkMemberRestore(raw_org) => {
+            use no_warden::organization_bulk_member_status::OrganizationBulkMemberStatusData;
+            let revoke = matches!(route, Route::OrganizationBulkMemberRevoke(_));
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let org = organization_invitations::path(&mut store, &owner, raw_org, uri.query())?;
+            let input = organization_bulk_member_status::Input::parse(&body, revoke)?;
+            let mut scratch = vec![None; input.len()];
+            let mut service = VaultService::new(&mut *store);
+            let response = if revoke {
+                service.bulk_revoke_org_members(&owner, &org, &input, &mut scratch)?
+            } else {
+                service.bulk_restore_org_members(&owner, &org, &input, &mut scratch)?
+            };
             Ok(Json(response).into_response())
         }
         Route::OrganizationMemberRevoke(raw_org, raw_member) => {

@@ -116,7 +116,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 816 active workspace unit tests pass: 403 core, 296 host and 117 support,
+All 831 active workspace unit tests pass: 415 core, 297 host and 119 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -1318,3 +1318,32 @@ Default-policy behavior excludes configured 2FA enrollment/SingleOrg effects,
 SMTP, events/groups, bulk status changes and shared-cipher writes. Atomic local
 revision/status and live commit checks strengthen source failure/concurrency
 timing without claiming complete parity.
+
+
+## Bulk organization-member revoke and restore
+
+Two PUT routes reuse the allocation-free status rules with caller-owned
+ordered inputs and result slots. Revoke permits absent/null IDs; restore
+requires the array. Exact opaque IDs and duplicates survive. Each result is
+independent: earlier successes persist and later rows run after failures.
+
+Both actual targets pass six focused HTTP cases: 286 counted requests plus
+ten registration requests for five fixtures, two password logins and two
+refreshes. Shared client code constructs these routes; the CLI has no bulk
+status mutation command. The suite verifies exact list/row projections,
+whole-body rejection, guard ordering and retained personal/sibling/account
+and encrypted membership state.
+
+Local SQL failure injection proves successful-prefix persistence and
+per-item status/revision rollback. Live provider checks and atomic writes
+strengthen upstream timing, and backend diagnostics are safely mapped.
+Configured policies, SMTP/events/groups and full failure/transport parity
+remain open.
+
+The separate official CLI 2026.10.0 comparison passes 31 commands on both
+actual targets: 43 direct HTTP requests plus four registration requests,
+three CLI password logins and two direct setup logins. After HTTP bulk setup,
+sync and fresh-cache reads verify primary visibility loss/recovery with
+retained personal/sibling decryption. One strict revoked-confirmation
+rejection observes metadata. No CLI bulk mutation caller, captured route
+trace or successful member confirmation is inferred.

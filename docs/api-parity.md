@@ -39,25 +39,25 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 117 routed patterns, 60 with typed requests, 110 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 119 routed patterns, 62 with typed requests, 112 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 114 partial and 180 unimplemented. Query/rank/configuration
+status: 116 partial and 178 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
 
-55 local patterns have some typed response representation, including
+57 local patterns have some typed response representation, including
 the domain settings projections and empty mutation response, explicit API-key
 responses, and attachment responses. Bulk cipher lists use the generic `ListResponse`
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 111 patterns, negative
-HTTP evidence for 110, 287 named HTTP cases, and 53 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 113 patterns, negative
+HTTP evidence for 112, 293 named HTTP cases, and 53 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -1523,3 +1523,46 @@ command form is inferred. Configured 2FA fallback/SingleOrg policy effects,
 SMTP, events/groups, bulk status changes and shared-cipher writes remain open.
 Local atomic status/revision and live commit checks strengthen source failure
 and concurrency timing; full parity remains false.
+
+
+## Bulk organization-member revoke/restore subset
+
+Two PUT routes add ordered bulk status transitions over the existing
+allocation-free single-member provider. Revoke accepts absent/null `ids` as
+an empty batch; restore requires the string array. IDs remain opaque and
+ordered, including duplicates, empty strings and escaped values. The entire
+body decodes before mutation. Caller-owned output slots and a stable indexed
+input view impose no intrinsic HTTP item cap.
+
+The [pinned shared client service](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/admin-console/src/common/organization-user/services/default-organization-user-api.service.ts#L343)
+constructs both bulk transports. The pinned server inventory records
+`bulk_revoke_members` and `bulk_restore_members` separately from the single
+routes. Each exact result row has `id`, `error` and
+`object: "OrganizationUserBulkResponseModel"`; the enclosing list has
+`data`, `object` and `continuationToken`. An item failure does not abort later
+rows or undo earlier commits. Duplicate IDs observe earlier transitions.
+Self-status changes remain prohibited. Current-device Owner/Admin authority
+precedes organization UUID and whole-body guards.
+
+Both actual targets pass six focused HTTP cases: 286 counted requests plus
+ten registration requests for five fixtures, two password logins and two
+refreshes. The suite checks optional-versus-required schemas, opaque IDs,
+ordered domain failures and successes, duplicates, role/self/Owner rules,
+retained account/key/grant authority and selective visibility recovery.
+
+The standalone adapter atomically commits each status/revision change and
+rechecks live authority and target metadata. A local SQL failure-injection
+test proves an earlier success survives, the failing item rolls back and a
+later duplicate is still processed. Those guarantees strengthen upstream
+sequential revision/save and cached-role timing. Provider diagnostics are
+mapped to public errors rather than upstream backend Debug text. Configured
+2FA enrollment/SingleOrg effects, SMTP/events/groups and complete
+configuration/failure/transport parity remain open.
+
+The separate official CLI 2026.10.0 comparison passes 31 commands on both
+actual targets: 43 direct HTTP requests plus four registration requests,
+three CLI password logins and two direct setup logins. After HTTP bulk setup,
+sync and fresh-cache reads verify primary visibility loss/recovery with
+retained personal/sibling decryption. One strict revoked-confirmation
+rejection observes metadata. No CLI bulk mutation caller, captured route
+trace or successful member confirmation is inferred.
