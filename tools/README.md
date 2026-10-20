@@ -1016,5 +1016,37 @@ the shipped CLI has no member-delete command or captured route trace.
 without credentials, keys or response bodies. Client-internal traffic and the
 default 104-case/baseline 120-command suites retain separate evidence.
 Account sessions and previously cached keys are not revoked or erased. Bulk
-removal, groups/notifications and full transport/configuration parity remain
-open.
+removal uses a separate selection; groups/notifications and full
+transport/configuration parity remain open.
+
+## Bulk member removal and request-scoped authority
+
+The `organization-bulk-member-removal` HTTP selection checks complete-body
+schema guards, exact ordered rows, mixed failures and later successes, cached
+authority after intentional self-removal, last-owner protection and retained
+account state. Both actual targets pass six focused HTTP cases: 251 counted requests plus
+eight registration requests for four fixtures, two password logins and two
+refreshes. The separate official CLI 2026.10.0 comparison passes 25 commands
+on both, with 40 direct HTTP requests plus four registration requests, three
+CLI password logins and two direct setup logins.
+
+The separate `organization-bulk-member-removal-cli` selection observes existing
+sync/decryption commands after direct HTTP bulk setup. The shipped CLI has no
+member-removal branch; no bulk caller, new command form or captured endpoint
+trace is inferred. Client-internal requests and the default 104-case/baseline
+120-command suites remain separate.
+
+Each host item uses a savepoint; there is no outer batch rollback. Local
+stale-actor and marker-error checks are stronger than source request snapshots
+and sequential cleanup. Private row deletion is local SQL evidence, not an
+inference from portable collection absence. SMTP, groups/notifications,
+shared-cipher writes, offline erasure and full transport parity remain open.
+
+`BW_ORGANIZATION_BULK_MEMBER_REMOVAL_RECEIPT` and
+`BW_ORGANIZATION_BULK_MEMBER_REMOVAL_CLI_RECEIPT` keep authored counters and
+status separate from credentials, keys and private response content.
+
+The existing single-removal observer also passes a separate 25-command run on
+each final target, with 40 direct HTTP requests plus four registration requests
+and three CLI plus two direct password logins. That regression uses single
+HTTP removal; it is not added to the bulk comparison or baseline 120 totals.

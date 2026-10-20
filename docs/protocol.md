@@ -2071,3 +2071,50 @@ decrypts. Private marker cleanup and physical rollback use
 local SQL tests, not portable list absence. Bulk removal, configured
 group/SMTP/notification variants, shared-cipher writes and complete
 failure/transport parity remain open.
+
+## Bulk organization-member removal
+
+The [pinned bulk handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L1596-L1694)
+and [release 1.37.4 handler](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/organizations.rs#L1594-L1692)
+are byte-identical for this selected block. The route is
+`DELETE /api/organizations/{orgId}/users`. Current-device confirmed Owner/Admin
+authority precedes organization UUID and whole-body JSON guards. Existing GET
+on the same path remains member discovery, not a removal alias.
+
+The [body](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L178-L182)
+requires canonical `ids`, an array of strings. These membership newtypes do
+not validate UUIDs during JSON decoding. Empty, malformed, Unicode and NUL
+strings therefore reach scoped lookup and become item errors. Unknown fields
+are ignored; missing/null/wrong-type IDs or nonstring elements reject the
+whole body before writes. Positional `[["id"]]` is accepted. An empty IDs
+array returns an empty list. Input order, spelling and duplicates remain.
+
+Every item produces exactly `object`, `id` and `error`; the object value is
+`OrganizationBulkConfirmResponseModel`. The wrapper has `data`, `object: list`
+and `continuationToken: null`. Successful `error` is empty. Missing targets,
+hierarchy and last-owner failures retain the single-member messages in their
+row and processing continues. A repeated successfully removed ID becomes a
+missing-target row. There is no absent-ID semantic abort as in bulk confirmation.
+
+The source passes the same cached AdminHeaders into every item, even after
+self-removal. Target lookup, hierarchy, current confirmed-owner count and
+invitation decisions run afresh. The local sealed batch context permits absent
+actor membership only after this batch's successful self-removal; unrelated
+stale authority remains rejected. This narrows concurrency timing relative to
+source request snapshots. Each local item is atomic, unlike sequential source
+cleanup, and earlier successes survive subsequent failures. Source Error Debug
+can include backend causes; matching private SQL/SMTP diagnostics is not claimed.
+
+The [shared bulk transport](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/admin-console/src/common/organization-user/services/default-organization-user-api.service.ts#L319-L331)
+constructs this DELETE. The shipped CLI DeleteCommand has no member branch.
+Both actual targets pass six focused HTTP cases: 251 counted requests plus
+eight registration requests for four fixtures, two password logins and two
+refreshes. The separate official CLI 2026.10.0 comparison passes 25 commands
+on both, with 40 direct HTTP requests plus four registration requests, three
+CLI password logins and two direct setup logins.
+
+CLI sync/decryption after HTTP bulk setup cannot establish a bulk caller or
+trace.
+Private marker effects remain local SQL evidence. SMTP, groups/notifications,
+shared-cipher writes, offline cache erasure and full transport/configuration
+parity remain open.

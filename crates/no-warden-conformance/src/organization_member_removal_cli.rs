@@ -19,7 +19,28 @@ use tempfile::TempDir;
 
 pub const COMMAND_COUNT: usize = 25;
 pub const DIRECT_HTTP_REQUEST_COUNT: usize = 40;
+#[derive(Clone, Copy)]
+pub(crate) enum RemovalMode {
+    Single,
+    Bulk,
+}
+impl RemovalMode {
+    fn receipt_env(self) -> &'static str {
+        match self {
+            Self::Single => "BW_ORGANIZATION_MEMBER_REMOVAL_CLI_RECEIPT",
+            Self::Bulk => "BW_ORGANIZATION_BULK_MEMBER_REMOVAL_CLI_RECEIPT",
+        }
+    }
+    fn suite(self) -> &'static str {
+        match self {
+            Self::Single => "organization-member-removal",
+            Self::Bulk => "organization-bulk-member-removal",
+        }
+    }
+}
+
 struct Cli {
+    mode: RemovalMode,
     binary: PathBuf,
     environment: BTreeMap<OsString, OsString>,
     commands: usize,
@@ -39,7 +60,7 @@ impl Cli {
     fn receipt(&mut self, status: &str) -> Result<(), Error> {
         write_receipt(
             &mut self.receipt,
-            &json!({"schemaVersion":1,"status":status,"commands":self.commands,"expectedCommands":COMMAND_COUNT,"cliVersion":"2026.10.0","cliPasswordLoginCommands":self.logins,"directPasswordLoginRequests":2,"directHttpRequests":self.direct_requests,"expectedDirectHttpRequests":DIRECT_HTTP_REQUEST_COUNT,"fixtureRegistrations":2,"fixtureRegistrationHttpRequests":4,"directHttpRemovalRequests":1,"cliRemovalCallerClaimed":false,"cliInvitationCommandClaimed":false,"separateFromBaseline120":true,"clientInternalRequestsCounted":false,"capturedRouteTrace":false}),
+            &json!({"schemaVersion":1,"status":status,"commands":self.commands,"expectedCommands":COMMAND_COUNT,"cliVersion":"2026.10.0","cliPasswordLoginCommands":self.logins,"directPasswordLoginRequests":2,"directHttpRequests":self.direct_requests,"expectedDirectHttpRequests":DIRECT_HTTP_REQUEST_COUNT,"fixtureRegistrations":2,"fixtureRegistrationHttpRequests":4,"directHttpRemovalRequests":1,"cliRemovalCallerClaimed":false,"cliBulkRemovalCallerClaimed":false,"bulkRemovalSetupViaDirectHttp":matches!(self.mode,RemovalMode::Bulk),"cliInvitationCommandClaimed":false,"separateFromBaseline120":true,"clientInternalRequestsCounted":false,"capturedRouteTrace":false}),
         )
     }
     fn command(
@@ -194,6 +215,10 @@ fn normalize_cli(mut value: Value) -> Result<Value, Error> {
     Ok(value)
 }
 pub fn run() -> Result<(), Error> {
+    run_mode(RemovalMode::Single)
+}
+
+pub(crate) fn run_mode(mode: RemovalMode) -> Result<(), Error> {
     let owner_cache = private_dir("no-warden-removal-owner-cli-")?;
     let recipient_cache = private_dir("no-warden-removal-recipient-cli-")?;
     let fresh = private_dir("no-warden-removal-fresh-cli-")?;
@@ -310,12 +335,13 @@ pub fn run() -> Result<(), Error> {
         );
     }
     let mut c = Cli {
+        mode,
         binary,
         environment,
         commands: 0,
         logins: 0,
         direct_requests: None,
-        receipt: receipt_file("BW_ORGANIZATION_MEMBER_REMOVAL_CLI_RECEIPT")?,
+        receipt: receipt_file(mode.receipt_env())?,
         finished: false,
     };
     c.receipt("running")?;
@@ -370,7 +396,17 @@ pub fn run() -> Result<(), Error> {
         true,
     )?;
     c.note(&recipient.cipher_id, recipient_cache.path(), &session)?;
-    removal::remove_member(&mut http, &org.id, text(&row["id"])?, &owner.token)?;
+    match mode {
+        RemovalMode::Single => {
+            removal::remove_member(&mut http, &org.id, text(&row["id"])?, &owner.token)?
+        }
+        RemovalMode::Bulk => crate::organization_bulk_member_removal::remove_members_probe(
+            &mut http,
+            &org.id,
+            text(&row["id"])?,
+            &owner.token,
+        )?,
+    }
     let list = http.json(
         reqwest::Method::GET,
         &organization_invites::member_path(&org.id),
@@ -456,7 +492,8 @@ pub fn run() -> Result<(), Error> {
     c.receipt("passed")?;
     c.finished = true;
     println!(
-        "PASS organization-member-removal CLI: {COMMAND_COUNT} commands, 3 CLI logins, 2 direct setup logins"
+        "PASS {} CLI: {COMMAND_COUNT} commands, 3 CLI logins, 2 direct setup logins",
+        mode.suite()
     );
     Ok(())
 }

@@ -30,8 +30,9 @@ use no_warden::{
         OrganizationInviteData, ValidatedOrganizationInvite,
     },
     organization_member_removal::{
+        OrganizationBulkMemberRemovalStorage, OrganizationMemberRemovalBatchAuthority,
         OrganizationMemberRemovalRecord, OrganizationMemberRemovalStorage,
-        ValidatedOrganizationMemberRemoval,
+        ValidatedOrganizationBulkMemberRemoval, ValidatedOrganizationMemberRemoval,
     },
     organization_members::{
         OrganizationMemberCollection, OrganizationMemberDetailQuery,
@@ -67,15 +68,16 @@ use no_warden::{
         DomainSettingsUpdateResponse, FileSendRequest, FolderRequest, ImportRequest,
         InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
         MasterPasswordPolicy, MasterPasswordPolicyResponse, OrganizationBulkConfirmRequest,
-        OrganizationCollectionCreateRequest, OrganizationConfirmRequest, OrganizationCreateRequest,
-        OrganizationInviteCollection, OrganizationInvitePermissions, OrganizationInviteRequest,
-        OrganizationPlanType, PasswordLoginRequest, PasswordOrOtpRequest, PreloginKdfSettings,
-        PreloginRequest, PreloginResponse, ProfileUpdateRequest, RefreshTokenRequest,
-        RegisterRequest, RegistrationAuthentication, RegistrationCredentials,
-        RegistrationFinishRequest, RegistrationFinishResponse, RegistrationUnlock,
-        RegistrationVerificationRequest, RegistrationVerificationToken, SecretVerificationRequest,
-        SendAccessTokenRequest, SendFileData, TextSendRequest, UserKeyIdRequest,
-        UserPublicKeyResponse, WebAuthnCredentialsResponse,
+        OrganizationBulkMemberRemovalRequest, OrganizationCollectionCreateRequest,
+        OrganizationConfirmRequest, OrganizationCreateRequest, OrganizationInviteCollection,
+        OrganizationInvitePermissions, OrganizationInviteRequest, OrganizationPlanType,
+        PasswordLoginRequest, PasswordOrOtpRequest, PreloginKdfSettings, PreloginRequest,
+        PreloginResponse, ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest,
+        RegistrationAuthentication, RegistrationCredentials, RegistrationFinishRequest,
+        RegistrationFinishResponse, RegistrationUnlock, RegistrationVerificationRequest,
+        RegistrationVerificationToken, SecretVerificationRequest, SendAccessTokenRequest,
+        SendFileData, TextSendRequest, UserKeyIdRequest, UserPublicKeyResponse,
+        WebAuthnCredentialsResponse,
     },
 };
 
@@ -474,6 +476,43 @@ impl core::fmt::Write for InvitationMessageBuffer {
         destination.copy_from_slice(text.as_bytes());
         self.len = end;
         Ok(())
+    }
+}
+// This probe's only removable target is a different User, so its stack-owned
+// batch context never authorizes a missing actor or a self-removal transition.
+struct RemovalBatchProbe {
+    role: i32,
+}
+impl OrganizationBulkMemberRemovalStorage for PurgeProbe {
+    type Batch = RemovalBatchProbe;
+    fn begin_member_removal_batch(
+        &mut self,
+        authority: &OrganizationMemberRemovalBatchAuthority<'_>,
+    ) -> Result<Self::Batch, ()> {
+        if !self.organization_present
+            || authority.owner() != "embedded-owner"
+            || authority.organization() != "embedded-org"
+            || authority.actor_role() != 0
+        {
+            return Err(());
+        }
+        Ok(RemovalBatchProbe {
+            role: authority.actor_role(),
+        })
+    }
+    fn remove_organization_member_in_batch(
+        &mut self,
+        batch: &mut Self::Batch,
+        plan: &ValidatedOrganizationBulkMemberRemoval<'_, Self::Id>,
+    ) -> Result<(), ()> {
+        if !self.organization_present
+            || plan.actor_role() != batch.role
+            || plan.actor_removed_by_batch()
+            || plan.removes_actor()
+        {
+            return Err(());
+        }
+        self.remove_organization_member(plan.removal())
     }
 }
 impl OrganizationMemberRemovalStorage for PurgeProbe {
@@ -1438,6 +1477,34 @@ pub extern "C" fn _start() -> ! {
         black_box(classify(
             Method::Post,
             "/api/organizations/embedded-org/users/embedded-invited-member/confirm",
+        ));
+        // Caller-bounded decoding and output storage exercise the real bulk service:
+        // an opaque missing ID, successful recipient removal and duplicate row error.
+        let bulk_removal = serde_json_core::from_slice::<OrganizationBulkMemberRemovalRequest<'_, 3>>(
+            black_box(br#"{"ids":["bad.id","embedded-invited-member","embedded-invited-member"]}"#),
+        );
+        if let Ok((request, _)) = bulk_removal {
+            let mut slots = [None; 3];
+            if let Ok(response) = organization_service.bulk_remove_org_members(
+                "embedded-owner",
+                "embedded-org",
+                &request,
+                &mut slots,
+            ) {
+                let _ = black_box(serde_json_core::to_slice(
+                    &response,
+                    &mut organization_output,
+                ));
+                black_box((
+                    response.len(),
+                    response.get(1).map(|row| row.id()),
+                    response.get(2).and_then(|row| row.error()),
+                ));
+            }
+        }
+        black_box(classify(
+            Method::Delete,
+            "/api/organizations/embedded-org/users",
         ));
         // Single-member removal uses the same stack-owned provider. Personal
         // account and vault state survive; only the selected membership is removed.

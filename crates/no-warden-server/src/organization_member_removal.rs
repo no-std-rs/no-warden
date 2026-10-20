@@ -49,84 +49,133 @@ impl OrganizationMemberRemovalStorage for Store {
         &mut self,
         plan: &ValidatedOrganizationMemberRemoval<'_, String>,
     ) -> rusqlite::Result<()> {
-        let tx = self.db.savepoint()?;
-        let actor: Option<(i32, i32)> = tx.query_row(
-            "SELECT role,status FROM organization_memberships WHERE organization_id=?1 AND user_id=?2",
-            params![plan.organization(), plan.owner()], |row| Ok((row.get(0)?, row.get(1)?)),
+        commit(self, RemovalCommit::Single(plan))
+    }
+}
+
+// A bulk write can carry only the core's sealed per-item authority, never a free
+// "skip authorization" flag. The single entry point always selects Live checks.
+pub(super) enum RemovalCommit<'a, 'data> {
+    Single(&'a ValidatedOrganizationMemberRemoval<'data, String>),
+    Bulk(
+        &'a mut crate::organization_bulk_member_removal::Batch,
+        &'a no_warden::organization_member_removal::ValidatedOrganizationBulkMemberRemoval<
+            'data,
+            String,
+        >,
+    ),
+}
+pub(super) fn commit(store: &mut Store, context: RemovalCommit<'_, '_>) -> rusqlite::Result<()> {
+    let (plan, batch) = match context {
+        RemovalCommit::Single(plan) => (plan, None),
+        RemovalCommit::Bulk(batch, plan) => (plan.removal(), Some((batch, plan))),
+    };
+    let tx = store.db.savepoint()?;
+    let actor: Option<(String, i32, i32)> = tx.query_row(
+            "SELECT id,role,status FROM organization_memberships WHERE organization_id=?1 AND user_id=?2",
+            params![plan.organization(), plan.owner()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional()?;
-        let Some((actor_role @ (0 | 1), 2)) = actor else {
-            return Err(rusqlite::Error::InvalidQuery);
-        };
-        if plan.role() != 2 && actor_role != 0 {
+    let actor_role = if let Some((batch, bulk_plan)) = batch.as_ref() {
+        if batch.owner != plan.owner()
+            || batch.organization != plan.organization()
+            || batch.role != bulk_plan.actor_role()
+            || batch.removed != bulk_plan.actor_removed_by_batch()
+        {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        let target: Option<(String, i32, i32)> = tx.query_row(
+        if batch.removed {
+            if actor.is_some() {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        } else if actor
+            .as_ref()
+            .map(|(id, role, status)| (id.as_str(), *role, *status))
+            != Some((batch.membership.as_str(), batch.role, 2))
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        batch.role
+    } else {
+        let Some((_, actor_role @ (0 | 1), 2)) = actor else {
+            return Err(rusqlite::Error::InvalidQuery);
+        };
+        actor_role
+    };
+    if plan.role() != 2 && actor_role != 0 {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    let target: Option<(String, i32, i32)> = tx.query_row(
             "SELECT user_id,role,status FROM organization_memberships WHERE organization_id=?1 AND id=?2",
             params![plan.organization(), plan.membership_id()],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional()?;
-        if target
-            .as_ref()
-            .map(|(user, role, status)| (user.as_str(), *role, *status))
-            != Some((plan.user_id(), plan.role(), plan.status()))
-        {
-            return Err(rusqlite::Error::InvalidQuery);
-        }
-        if plan.requires_other_confirmed_owner() {
-            let owners: u64 = tx.query_row(
+    if target
+        .as_ref()
+        .map(|(user, role, status)| (user.as_str(), *role, *status))
+        != Some((plan.user_id(), plan.role(), plan.status()))
+    {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    if plan.requires_other_confirmed_owner() {
+        let owners: u64 = tx.query_row(
                 "SELECT count(*) FROM organization_memberships WHERE organization_id=?1 AND role=0 AND status=2",
                 [plan.organization()], |row| row.get(0),
             )?;
-            if owners <= 1 {
-                return Err(rusqlite::Error::InvalidQuery);
-            }
+        if owners <= 1 {
+            return Err(rusqlite::Error::InvalidQuery);
         }
-        let email: Option<String> = tx
-            .query_row(
-                "SELECT email FROM accounts WHERE id=?1",
-                [plan.user_id()],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let other_invited: bool = tx.query_row(
+    }
+    let email: Option<String> = tx
+        .query_row(
+            "SELECT email FROM accounts WHERE id=?1",
+            [plan.user_id()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let other_invited: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM organization_memberships WHERE user_id=?1 AND status=0 AND id<>?2)",
             params![plan.user_id(), plan.membership_id()], |row| row.get(0),
         )?;
-        // This adapter has no SMTP configuration. Check the marker decision again
-        // inside the write boundary so concurrent membership changes cannot remove
-        // another pending invitation's registration authority.
-        if (email.is_some() && !other_invited) != plan.remove_invitation() {
-            return Err(rusqlite::Error::InvalidQuery);
-        }
-        tx.execute(
+    // This adapter has no SMTP configuration. Check the marker decision again
+    // inside the write boundary so concurrent membership changes cannot remove
+    // another pending invitation's registration authority.
+    if (email.is_some() && !other_invited) != plan.remove_invitation() {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    tx.execute(
             "DELETE FROM organization_collection_users WHERE user_id=?1 AND collection_id IN (SELECT id FROM organization_collections WHERE organization_id=?2)",
             params![plan.user_id(), plan.organization()],
         )?;
+    tx.execute(
+        "DELETE FROM organization_member_inviters WHERE membership_id=?1",
+        [plan.membership_id()],
+    )?;
+    if plan.remove_invitation()
+        && let Some(email) = email.as_ref()
+    {
         tx.execute(
-            "DELETE FROM organization_member_inviters WHERE membership_id=?1",
-            [plan.membership_id()],
+            "DELETE FROM organization_invitations WHERE email=?1",
+            [email],
         )?;
-        if plan.remove_invitation()
-            && let Some(email) = email.as_ref()
-        {
-            tx.execute(
-                "DELETE FROM organization_invitations WHERE email=?1",
-                [email],
-            )?;
-        }
-        let changed = tx.execute(
+    }
+    let changed = tx.execute(
             "DELETE FROM organization_memberships WHERE organization_id=?1 AND id=?2 AND user_id=?3 AND role=?4 AND status=?5",
             params![plan.organization(), plan.membership_id(), plan.user_id(), plan.role(), plan.status()],
         )?;
-        if changed != 1 {
-            return Err(rusqlite::Error::InvalidQuery);
-        }
-        if email.is_some() {
-            let revision = crate::store::next_revision(&tx, plan.user_id())?;
-            crate::store::bump(&tx, plan.user_id(), &revision)?;
-        }
-        tx.commit()
+    if changed != 1 {
+        return Err(rusqlite::Error::InvalidQuery);
     }
+    if email.is_some() {
+        let revision = crate::store::next_revision(&tx, plan.user_id())?;
+        crate::store::bump(&tx, plan.user_id(), &revision)?;
+    }
+    tx.commit()?;
+    if let Some((batch, bulk_plan)) = batch
+        && bulk_plan.removes_actor()
+    {
+        batch.removed = true;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

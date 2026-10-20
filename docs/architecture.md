@@ -1199,5 +1199,31 @@ organization keys or plaintext.
 
 Both actual targets pass six focused HTTP cases and the separate 25-command
 official CLI state/decryption comparison after HTTP setup. Private marker and
-rollback guarantees remain local SQL evidence. Bulk removal and sharing are
-not implemented here.
+rollback guarantees remain local SQL evidence. Bulk removal uses a separate
+batch contract; sharing remains open.
+
+## Bulk-removal authority boundary
+
+`OrganizationBulkMemberRemovalStorage` adds a distinct opt-in batch context
+and sealed `OrganizationMemberRemovalBatchAuthority` and
+`ValidatedOrganizationBulkMemberRemoval` plans. It preserves the single-member
+provider's live actor checks. Initial confirmed Admin/Owner authority is scoped
+to the authenticated actor and organization.
+Only this invocation's successful self-removal permits subsequent items to
+continue without the actor membership. A fresh request must authorize again.
+Unrelated stale actor changes remain rejected; this is stricter than upstream's
+cached role for the entire request.
+
+Each item independently validates its scoped target, role hierarchy, current
+confirmed-owner count and conditional invitation-marker decision. One local
+savepoint commits supported cleanup and recipient revision advancement or
+rolls that item back. Earlier successful items survive later errors. No outer
+batch transaction, unbounded core allocation or reusable authorization bypass
+is introduced. JSON decoding, SQL, clocks and notifications remain adapters.
+
+Both actual targets pass six focused HTTP cases and the separate 25-command
+official CLI state/decryption comparison after direct HTTP bulk setup. Private
+marker cleanup and rollback require local SQL evidence; portable collection
+absence alone does not prove private row deletion. Account/session authority,
+personal vault and unrelated memberships remain. Group administration,
+notification transport and shared-cipher writes remain outside this slice.

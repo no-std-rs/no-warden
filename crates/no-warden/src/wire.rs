@@ -2013,6 +2013,22 @@ impl core::fmt::Debug for OrganizationConfirmRequest<'_> {
     }
 }
 
+/// Caller-bounded decoder for required opaque IDs. This is a caller capacity,
+/// not an HTTP batch limit; adapters can use an uncapped owned indexed view.
+#[derive(Deserialize)]
+pub struct OrganizationBulkMemberRemovalRequest<'a, const N: usize> {
+    #[serde(borrow)]
+    pub ids: BoundedList<&'a str, N>,
+}
+impl<const N: usize> core::fmt::Debug for OrganizationBulkMemberRemovalRequest<'_, N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationBulkMemberRemovalRequest([REDACTED])")
+    }
+}
+/// Explicit streamed bulk-removal projection, borrowing caller input/output slots.
+pub type OrganizationBulkMemberRemovalResponse<'out, 'data> =
+    crate::organization_member_removal::OrganizationBulkMemberRemovalResponse<'out, 'data>;
+
 /// Optional caller-bounded bulk confirmation decoder. A host can use an uncapped
 /// owned vector via OrganizationBulkConfirmData instead. Root [null] is valid; [] is
 /// not. All nested entries must be decoded before any service mutation begins.

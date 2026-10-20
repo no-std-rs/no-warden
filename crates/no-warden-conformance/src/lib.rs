@@ -24,6 +24,8 @@ pub mod fixture;
 pub mod folders;
 pub mod organization_bulk_confirmations;
 pub mod organization_bulk_confirmations_cli;
+pub mod organization_bulk_member_removal;
+pub mod organization_bulk_member_removal_cli;
 pub mod organization_collection_mutations;
 pub mod organization_collection_mutations_cli;
 pub mod organization_collections;

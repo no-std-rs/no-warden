@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 776 active Rust tests: 381 core, 281 host, and 114 conformance
+The workspace has 795 active Rust tests: 391 core, 289 host, and 115 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -573,3 +573,31 @@ the default 104-case suite and the baseline 120-command runs remain separate.
 `BW_ORGANIZATION_MEMBER_REMOVAL_RECEIPT` and
 `BW_ORGANIZATION_MEMBER_REMOVAL_CLI_RECEIPT` contain authored status/counters,
 without credentials, keys or private response content.
+
+## Bulk member removal comparison
+
+`--suite organization-bulk-member-removal` and
+`--suite organization-bulk-member-removal-cli` pass both actual targets.
+Both actual targets pass six focused HTTP cases: 251 counted requests plus
+eight registration requests for four fixtures, two password logins and two
+refreshes. The separate official CLI 2026.10.0 comparison passes 25 commands
+on both, with 40 direct HTTP requests plus four registration requests, three
+CLI password logins and two direct setup logins. The HTTP cases compare
+whole-body schema failure, mixed results, duplicate IDs, self-removal
+continuation and retained account/foreign authority. Private marker and
+rollback guarantees remain local provider evidence.
+
+The CLI performs existing sync, unlock and fresh-cache reads after direct HTTP
+bulk setup; it has no bulk-removal command. Its internal HTTP traffic is not
+counted or traced. The default 104-case and baseline 120-command suites retain
+separate evidence. Receipt counters contain no credentials, keys or private
+response bodies.
+
+`BW_ORGANIZATION_BULK_MEMBER_REMOVAL_RECEIPT` and
+`BW_ORGANIZATION_BULK_MEMBER_REMOVAL_CLI_RECEIPT` keep authored counters and
+status separate from credentials, keys and private response content.
+
+The existing single-removal observer also passes a separate 25-command run on
+each final target, with 40 direct HTTP requests plus four registration requests
+and three CLI plus two direct password logins. That regression uses single
+HTTP removal; it is not added to the bulk comparison or baseline 120 totals.

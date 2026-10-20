@@ -52,6 +52,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Single-member confirmation and recipient reads | Accepted-to-Confirmed key delivery, current-device Owner/Admin guards and selective collection/sync projection | Six matching HTTP cases and 23 matching official CLI commands on both targets, including actual confirmation and recipient decryption; no bulk/SMTP/sharing or trace claim |
 | Bulk member confirmation | Ordered item results, continued errors and committed-prefix abort with whole-body schema validation | Six matching HTTP cases and 21 matching official CLI state/decryption commands on both targets after HTTP bulk setup; no CLI bulk caller or trace |
 | Single member removal | Scoped membership/grant cleanup and last-owner protection with retained account authority | Six matching HTTP cases and 25 matching official CLI state/decryption commands after HTTP setup on both targets; no removal caller, trace or offline erasure claim |
+| Bulk member removal | Ordered independent item commits, exact results and intentional self-removal continuation | Six matching HTTP cases and 25 matching official CLI state/decryption commands after HTTP setup on both targets; no bulk caller or trace claim |
 | Single organization-collection update/delete | Complete grant replacement, opaque names, whitespace external-ID clearing and preserved cipher data | Allocation-free core and local rollback/cascade tests; six matching HTTP cases and twenty matching official CLI commands on both actual targets |
 | Organization-scoped collection list/create/single access-details | Confirmed manager authorization, exact projections, opaque names/external IDs and reference validation | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers; atomic local provider tests |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
@@ -114,7 +115,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 776 active workspace unit tests pass: 381 core, 281 host and 114 support,
+All 795 active workspace unit tests pass: 391 core, 289 host and 115 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -1264,6 +1265,31 @@ data decrypts. Private marker state remains local SQL evidence.
 The shipped CLI has no member-delete command. Removal does not rotate the
 organization key or erase offline cached data. Local atomic
 rollback, marker-failure handling and one revision update strengthen/differ
-from upstream sequential cleanup and two revision saves. Bulk deletion,
-SMTP/groups/notifications, sharing and full failure/transport parity remain
-open.
+from upstream sequential cleanup and two revision saves. Bulk removal uses
+a separate contract; SMTP/groups/notifications, sharing and full
+failure/transport parity remain open.
+
+## Bulk organization-member removal
+
+The bulk DELETE shares the single-member hierarchy, last-owner protection,
+scoped cleanup and retained account authority. It requires a fully decoded
+`ids` array and emits ordered three-field result rows inside a three-field
+list. Raw IDs and duplicates are preserved; domain errors remain per-item and
+earlier commits survive. Malformed whole bodies reject before all writes.
+
+A sealed request context supports continuation after its own actor's
+successful self-removal. A new request must authorize again. Local rejection
+of unrelated stale authority, atomic per-item rollback, private marker-error
+handling and recipient revision updates differ from upstream's cached role
+and sequential cleanup; these are qualified provider guarantees.
+
+Both actual targets pass six focused HTTP cases: 251 counted requests plus
+eight registration requests for four fixtures, two password logins and two
+refreshes. The separate official CLI 2026.10.0 comparison passes 25 commands
+on both, with 40 direct HTTP requests plus four registration requests, three
+CLI password logins and two direct setup logins.
+
+HTTP mutation is setup: the shipped CLI has no member-removal command, and no
+endpoint trace or offline-key erasure is claimed. SMTP, groups,
+notifications, organization sharing and full configuration/failure/transport
+parity remain open.

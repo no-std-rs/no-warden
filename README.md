@@ -92,6 +92,14 @@ invitations. Six matching HTTP cases and a separate 25-command official CLI
 state/decryption comparison pass both actual targets. Removal is HTTP setup;
 the CLI has no member-removal command and account sessions remain usable.
 
+Bulk member removal adds ordered results while preserving each successful
+item when a later item fails. Whole-body schema rejection precedes mutation.
+A sealed batch context permits continuation after that batch removes its own
+actor, while keeping the single-member route's live authorization checks.
+Six matching actual HTTP cases and a separate 25-command official CLI
+state/decryption comparison pass both targets after HTTP bulk setup. No CLI
+bulk-removal caller, SMTP, groups or shared-cipher writes are claimed.
+
 The remaining surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden
 replacement. Client-side vault encryption stays with the client.

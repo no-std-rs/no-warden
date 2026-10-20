@@ -120,6 +120,8 @@ jobs:
           target/debug/no-warden-http-conformance --suite organization-bulk-confirmation-cli
           target/debug/no-warden-http-conformance --suite organization-member-removal
           target/debug/no-warden-http-conformance --suite organization-member-removal-cli
+          target/debug/no-warden-http-conformance --suite organization-bulk-member-removal
+          target/debug/no-warden-http-conformance --suite organization-bulk-member-removal-cli
           target/debug/no-warden-http-conformance --suite account-kdf-cli
           target/debug/no-warden-http-conformance --suite account-password-cli
           bash tools/e2e.sh

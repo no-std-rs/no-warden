@@ -39,25 +39,25 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 113 routed patterns, 59 with typed requests, 106 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 114 routed patterns, 60 with typed requests, 107 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 110 partial and 184 unimplemented. Query/rank/configuration
+status: 111 partial and 183 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
 
-54 local patterns have some typed response representation, including
+55 local patterns have some typed response representation, including
 the domain settings projections and empty mutation response, explicit API-key
 responses, and attachment responses. Bulk cipher lists use the generic `ListResponse`
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 107 patterns, negative
-HTTP evidence for 106, 275 named HTTP cases, and 53 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 108 patterns, negative
+HTTP evidence for 107, 281 named HTTP cases, and 53 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -1454,5 +1454,40 @@ CLI password logins and two direct setup logins.
 There is no shipped CLI member-removal command; HTTP setup followed by sync is
 observation, not a removal caller or endpoint trace. Strong local rollback and
 one revision update differ from upstream sequential cleanup and repeated
-revision saves. Bulk deletion, group/SMTP/notification variants, shared-cipher
-writes and complete failure/transport parity remain open.
+revision saves. That single-member milestone did not cover bulk deletion.
+Group/SMTP/notification variants, shared-cipher writes and complete
+failure/transport parity remain open.
+
+## Bulk organization-member removal subset
+
+The selected DELETE adds a separate allocation-free batch contract over
+single-member removal rules. Required body IDs remain opaque strings, with
+stable input order and duplicates. The complete body decodes before mutation;
+each domain failure is a result row and processing continues. Successful
+items commit independently, with no batch-wide rollback or semantic missing-ID
+abort. The exact list and row projections have three fields each.
+
+`OrganizationBulkMemberRemovalRequest` is a caller-bounded decoder for required
+IDs; `OrganizationBulkMemberRemovalData` also accepts an uncapped stable owned
+view. `OrganizationBulkMemberRemovalResponse` streams caller-owned result slots.
+`VaultService::bulk_remove_org_members` rejects insufficient scratch before
+mutation; this embedding limit is not an HTTP batch cap.
+
+A scoped sealed context captures initial Admin/Owner authority. Its special
+continuation applies only after this invocation successfully removes its own
+actor. The provider still checks each target, live last-owner count and
+invitation-cleanup decision. Rejecting unrelated stale actor changes and
+rolling back failed individual writes are stronger than upstream's cached
+request authority and sequential cleanup. Source backend Debug diagnostics
+remain a qualified provider-format difference.
+
+Both actual targets pass six focused HTTP cases: 251 counted requests plus
+eight registration requests for four fixtures, two password logins and two
+refreshes. The separate official CLI 2026.10.0 comparison passes 25 commands
+on both, with 40 direct HTTP requests plus four registration requests, three
+CLI password logins and two direct setup logins.
+
+Shared clients construct this bulk transport, but the shipped CLI has no
+member-removal command. HTTP setup followed by sync/decryption is
+observation, not an endpoint trace. SMTP, groups/notifications, shared-cipher
+writes and complete configuration/failure/transport parity remain open.

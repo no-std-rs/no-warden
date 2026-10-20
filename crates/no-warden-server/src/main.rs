@@ -12,6 +12,7 @@ mod cipher_reads;
 mod devices;
 mod domains;
 mod organization_bulk_confirmations;
+mod organization_bulk_member_removal;
 mod organization_collections;
 mod organization_confirmations;
 mod organization_invitations;
@@ -771,6 +772,21 @@ async fn dispatch_with_peer(
                 &input.request(),
             )?;
             Ok(StatusCode::OK.into_response())
+        }
+        Route::OrganizationBulkMemberDelete(raw_org) => {
+            use no_warden::organization_member_removal::OrganizationBulkMemberRemovalData;
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let org = organization_invitations::path(&mut store, &owner, raw_org, uri.query())?;
+            let input = organization_bulk_member_removal::Input::parse(&body)?;
+            let mut scratch = vec![None; input.len()];
+            let response = VaultService::new(&mut *store).bulk_remove_org_members(
+                &owner,
+                &org,
+                &input,
+                &mut scratch,
+            )?;
+            Ok(Json(response).into_response())
         }
         Route::OrganizationMemberDelete(raw_org, raw_member) => {
             devices::access_binding(&store.db, &digest(bearer), &owner)?
