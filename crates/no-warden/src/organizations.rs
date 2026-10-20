@@ -622,6 +622,58 @@ mod tests {
     }
 
     #[test]
+    fn confirmed_user_and_manager_projections_keep_provider_access_flags_without_owner_only_guard()
+    {
+        for role in [2, 3] {
+            let mut store = Memory::new();
+            store.collections[0].membership.role = role;
+            store.collections[0].read_only = true;
+            store.collections[0].hide_passwords = true;
+            store.collections[0].manage = role == 3;
+            store.profiles[0].membership.role = role;
+            store.profiles[0].access_all = false;
+            let mut service = VaultService::new(&mut store);
+            let collections = service.list_user_collections("owner").unwrap();
+            let basic = serde_json::to_value(&collections).unwrap();
+            let detail = serde_json::to_value(collections.details()).unwrap();
+            assert_eq!(basic["data"][0].as_object().unwrap().len(), 7);
+            assert_eq!(detail[0].as_object().unwrap().len(), 10);
+            assert_eq!(detail[0]["readOnly"], true);
+            assert_eq!(detail[0]["hidePasswords"], true);
+            assert_eq!(detail[0]["manage"], role == 3);
+            let profiles = service.profile_organizations("owner").unwrap();
+            let profile = serde_json::to_value(profiles.confirmed()).unwrap();
+            assert_eq!(profile[0]["type"], if role == 3 { 4 } else { 2 });
+            assert_eq!(profile[0]["key"], "opaque-member-key");
+            assert_eq!(profile[0]["limitCollectionCreation"], true);
+            store.collections[0].membership.status = 1;
+            assert!(
+                VaultService::new(&mut store)
+                    .list_user_collections("owner")
+                    .is_err()
+            );
+            store.profiles[0].membership.status = 1;
+            let mut service = VaultService::new(&mut store);
+            let profiles = service.profile_organizations("owner").unwrap();
+            assert!(
+                serde_json::to_value(profiles.confirmed())
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(
+                serde_json::to_value(profiles.accepted_and_confirmed())
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+    }
+
+    #[test]
     fn organization_services_require_authenticated_owner_before_any_provider() {
         let mut store = Memory::new();
         let mut service = VaultService::new(&mut store);

@@ -628,7 +628,6 @@ cases is inferred. KDF changes preserve opaque new proof/key strings; client
 reencryption belongs to clients. The host-only fixture rewraps the same user key
 and encrypts an existing item to establish actual CLI decryption after the change.
 
-
 ## Password changes and previous-stamp authorization
 
 `AccountPasswordStorage` keeps password verification, exact authoritative email,
@@ -1112,9 +1111,9 @@ Creation time and omitted name/keypair fields remain; initialized accounts
 cannot be overwritten. Device rows remain while pre-initialization authority
 is revoked. These local rollback guarantees are stronger than upstream inner
 sequential saves and early invitation consumption. Groups have no host
-lifecycle/rows, so IDs reject rather than disappear. SMTP, invite JWTs,
-confirmation/key delivery, sharing and complete configuration/rate/transport
-policy remain open.
+lifecycle/rows, so IDs reject rather than disappear. This invitation-only
+provider performs no confirmation or key delivery. SMTP, invite JWTs, sharing
+and complete configuration/rate/transport policy remain open.
 
 Both actual targets pass six focused HTTP cases and the separate
 twenty-four-command official CLI comparison. Wire evidence establishes the
@@ -1122,3 +1121,32 @@ same account IDs and all pending status transitions and preserved supported
 state; private markers, inviter metadata, original creation times and
 rollback/reopen guarantees use local SQL tests. This proves no CLI
 invitation/registration caller or confirmation success.
+
+## Single-member confirmation and recipient reads
+
+`OrganizationConfirmationStorage` extends the collection provider with a
+scoped owned membership record, policy evaluation and a sealed
+`ValidatedOrganizationConfirmation`. `VaultService::confirm_org_member` checks
+confirmed Owner/Admin authority before key presence, scoped lookup, hierarchy,
+Accepted state and proposed-state policy. The borrowed
+`OrganizationConfirmRequest` has an optional ignored body ID followed by an
+optional secret key; it introduces no allocator, cipher implementation or HTTP
+dependency. The provider receives validated authority rather than request-owned
+actor or target selection.
+
+The SQLite adapter rechecks actor and target inside its savepoint, changes only
+the selected membership key/status and recipient revision, then commits. This
+is stronger local atomicity than upstream sequential operations; notification,
+SMTP and configured-policy administration remain outside this adapter.
+Recipient collection enumeration requires confirmed membership and stored
+access-all/direct assignment. Basic collection and sync details are separate
+projections: sync preserves restrictive Manager grants, and User manage stays
+false. These reads do not establish organization cipher ownership or sharing.
+
+Both actual targets pass six focused HTTP cases and a separate 23-command
+official CLI comparison. The CLI performs RSA organization-key delivery and
+selective recipient collection decryption after login, unlock and fresh-cache
+login. Private rollback/CAS evidence remains in local provider tests; no
+captured request trace, bulk confirmation, SMTP or sharing is inferred. The
+historical invitation-only and checked-negative milestones retain their
+narrower meaning.

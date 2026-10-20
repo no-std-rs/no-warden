@@ -49,6 +49,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Organization member discovery | Actual member/account metadata, exact nineteen-field projection and current-device/full-access guards | Six matching HTTP cases and sixteen matching official CLI commands on both actual targets; imported-role/query branches have separate provider/parser tests |
 | Default no-SMTP organization invitations and placeholder completion | Ordered per-email commits, real Invited/Accepted states and same-ID modern registration | Six matching HTTP cases and twenty-four matching official CLI result checks on both targets; invitation/registration setup is HTTP, not a CLI caller or confirmation claim |
 | Organization member detail | Scoped Owner/Admin read and direct nineteen-field response | Expanded six matching HTTP cases and eighteen official CLI commands on both targets, with strict local already-confirmed rejection; no successful confirmation claim |
+| Single-member confirmation and recipient reads | Accepted-to-Confirmed key delivery, current-device Owner/Admin guards and selective collection/sync projection | Six matching HTTP cases and 23 matching official CLI commands on both targets, including actual confirmation and recipient decryption; no bulk/SMTP/sharing or trace claim |
 | Single organization-collection update/delete | Complete grant replacement, opaque names, whitespace external-ID clearing and preserved cipher data | Allocation-free core and local rollback/cascade tests; six matching HTTP cases and twenty matching official CLI commands on both actual targets |
 | Organization-scoped collection list/create/single access-details | Confirmed manager authorization, exact projections, opaque names/external IDs and reference validation | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers; atomic local provider tests |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
@@ -111,7 +112,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 720 active workspace unit tests pass: 349 core, 260 host and 111 support,
+All 740 active workspace unit tests pass: 361 core, 267 host and 112 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -751,7 +752,6 @@ requests, including the real authentication-request expiry fixture.
 The unchanged official CLI `2026.10.0` baseline also passes all 120 commands
 against each server, separately from the nine-command KDF proof.
 
-
 ## Password changes and limited previous-stamp access
 
 The core models exact nested-first/legacy-fallback credentials, unchanged client
@@ -764,7 +764,6 @@ same-ID recreation can restore eligibility. Local rollback and immutable
 historical-bearer regressions establish provider guarantees separately from
 upstream sequential failure semantics. Notifications, remembered 2FA, remaining
 exception endpoints, upstream JWT expiry leeway and full account parity stay open.
-
 
 All eight selected password HTTP cases pass against the actual adapter and
 Vaultwarden 1.37.4: 285 tracked requests each, including 11 identity requests
@@ -782,7 +781,6 @@ old-password rejection, fresh-cache new-password login, lock/unlock, sync and
 decryption of an item encrypted before the HTTP password change. Seven direct
 HTTP requests and one password grant exclude bootstrap and CLI-internal HTTP.
 No CLI-posted password endpoint or captured request trace is inferred.
-
 
 The preceding password milestone passed all 104 local HTTP cases with 4499 tracked
 requests across thirteen groups, including real authentication-request and
@@ -1199,3 +1197,27 @@ unchanged limits. The client exercises owner listing and completed-invitee
 personal-vault login/decryption, not an invitation or registration command,
 confirmation, organization-key delivery or request trace. SMTP, invite JWTs,
 policy/group administration and sharing remain open.
+
+## Single organization-member confirmation
+
+The supported single POST confirms an Accepted member, preserving their
+membership ID and grants while changing the wrapped organization key, status
+and recipient revision. Owner/Admin authorization, hierarchy and scoped
+missing/foreign errors match the pinned contract; keys remain opaque.
+Confirmed recipients read only visible collection projections, including
+stored restrictions in sync. Ordinary Users do not gain organization
+administration or collection manage authority.
+
+Both actual targets pass all six HTTP cases: 213 counted requests plus eight
+registration requests for four fixtures, two password logins and two
+refreshes. Both also pass the separate official CLI 2026.10.0 comparison:
+23 commands, 32 direct HTTP requests plus four registration requests, three
+CLI password logins and two direct setup logins. Actual confirmation delivers
+the RSA-wrapped organization key; assigned collection names decrypt after
+recipient login, unlock and fresh-cache login, while unassigned collections
+remain absent. Direct setup, cached reads and client-internal traffic remain
+distinct, without a captured route trace.
+
+The historical already-confirmed CLI rejections and invitation-only results
+remain separate milestones. Bulk confirmation, SMTP, policy/group lifecycle,
+cipher sharing and complete failure/transport variants remain open.

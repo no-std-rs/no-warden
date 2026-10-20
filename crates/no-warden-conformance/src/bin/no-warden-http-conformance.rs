@@ -41,6 +41,8 @@ enum Suite {
     OrganizationCollectionMutationsCli,
     OrganizationMembers,
     OrganizationMembersCli,
+    OrganizationConfirmations,
+    OrganizationConfirmationsCli,
     OrganizationInvites,
     OrganizationInvitesCli,
 }
@@ -87,6 +89,8 @@ impl Suite {
             "organization-collection-mutations-cli" => Self::OrganizationCollectionMutationsCli,
             "organization-members" => Self::OrganizationMembers,
             "organization-members-cli" => Self::OrganizationMembersCli,
+            "organization-confirmation" => Self::OrganizationConfirmations,
+            "organization-confirmation-cli" => Self::OrganizationConfirmationsCli,
             "organization-invites" => Self::OrganizationInvites,
             "organization-invites-cli" => Self::OrganizationInvitesCli,
             _ => return None,
@@ -113,7 +117,7 @@ fn check<E: Display>(result: Result<(), E>) {
 
 fn usage() {
     eprintln!(
-        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials|personal-vault-purge|account-deletion|cipher-reads|password-grants|refresh-grants|text-sends|text-sends-cli|file-sends|file-sends-cli|user-key-id|user-key-id-cli|prelogin|prelogin-cli|organization-owner|organization-owner-cli|organization-collections|organization-collections-cli|organization-collection-mutations|organization-collection-mutations-cli|organization-members|organization-members-cli|organization-invites|organization-invites-cli]"
+        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials|personal-vault-purge|account-deletion|cipher-reads|password-grants|refresh-grants|text-sends|text-sends-cli|file-sends|file-sends-cli|user-key-id|user-key-id-cli|prelogin|prelogin-cli|organization-owner|organization-owner-cli|organization-collections|organization-collections-cli|organization-collection-mutations|organization-collection-mutations-cli|organization-members|organization-members-cli|organization-invites|organization-invites-cli|organization-confirmation|organization-confirmation-cli]"
     );
 }
 
@@ -233,6 +237,12 @@ fn main() {
     }
     if suite == Suite::OrganizationMembers {
         check(no_warden_conformance::organization_members::run());
+    }
+    if suite == Suite::OrganizationConfirmations {
+        check(no_warden_conformance::organization_confirmations::run());
+    }
+    if suite == Suite::OrganizationConfirmationsCli {
+        check(no_warden_conformance::organization_confirmations_cli::run());
     }
     if suite == Suite::OrganizationInvites {
         check(no_warden_conformance::organization_invites::run());

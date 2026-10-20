@@ -61,7 +61,7 @@ Owner/Admin authority and the same nineteen-field projection. The expanded
 six-case HTTP comparison and separate eighteen-command official CLI comparison
 pass both actual targets. Two strict checks verify the existing confirmed
 Owner's local `Error: User is already confirmed.` result after lookup; this
-does not implement invitation or confirmation mutations.
+historical comparison did not exercise invitation or confirmation mutations.
 
 Default no-SMTP organization invitations now include registered recipients and
 passwordless accounts that complete modern registration under the same UUID.
@@ -69,7 +69,14 @@ An allocation-free provider preserves successful email prefixes and atomically
 commits each recipient's mutation. All six focused HTTP cases and the separate
 twenty-four-command official CLI comparison pass both actual targets.
 Invitation and registration are direct HTTP setup, not CLI commands;
-successful confirmation remains separate work.
+that invitation-only milestone did not confirm membership.
+
+Single-member confirmation now adds an allocation-free provider, opaque
+organization-key delivery and confirmed recipient collection reads. Six
+matching HTTP cases and a separate 23-command official CLI comparison pass
+both actual servers, including selective collection decryption after recipient
+login, unlock and fresh-cache login. Bulk confirmation, SMTP, policy/group
+administration and cipher sharing remain open.
 
 The remaining surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden

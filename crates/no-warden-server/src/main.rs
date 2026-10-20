@@ -12,6 +12,7 @@ mod cipher_reads;
 mod devices;
 mod domains;
 mod organization_collections;
+mod organization_confirmations;
 mod organization_invitations;
 mod organization_members;
 mod organizations;
@@ -100,6 +101,7 @@ impl IntoResponse for Failure {
             || self.1 == "Organization not found"
             || self.1 == "User not allowed to create organizations"
             || organization_collections::is_collection_error(self.1)
+            || organization_confirmations::is_confirmation_error(self.1)
             || self.1 == "The specified user isn't a member of the organization"
         {
             return password_login::error_response(self.0, self.1);
@@ -729,6 +731,25 @@ async fn dispatch_with_peer(
                 Ok(_) => Ok(StatusCode::OK.into_response()),
                 Err(error) => Ok(organization_invitations::error_response(error)),
             }
+        }
+        Route::OrganizationMemberConfirm(raw_org, raw_member) => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let (org, member) = organization_members::detail_paths(
+                &mut store,
+                &owner,
+                raw_org,
+                raw_member,
+                uri.query(),
+            )?;
+            let input = organization_confirmations::Input::parse(&body)?;
+            VaultService::new(&mut *store).confirm_org_member(
+                &owner,
+                &org,
+                &member,
+                &input.request(),
+            )?;
+            Ok(StatusCode::OK.into_response())
         }
         Route::OrganizationMember(raw_org, raw_member) => {
             devices::access_binding(&store.db, &digest(bearer), &owner)?

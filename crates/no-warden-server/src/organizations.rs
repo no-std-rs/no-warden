@@ -169,6 +169,9 @@ pub struct Collection {
     name: String,
     external_id: Option<String>,
     member: Membership,
+    read_only: bool,
+    hide_passwords: bool,
+    manage: bool,
 }
 #[derive(Default)]
 pub struct Collections(Vec<Collection>);
@@ -186,9 +189,9 @@ impl UserCollectionListData for Collections {
             },
             membership: row.member.view(),
             readable: true,
-            read_only: false,
-            hide_passwords: false,
-            manage: true,
+            read_only: row.read_only,
+            hide_passwords: row.hide_passwords,
+            manage: row.manage,
         })
     }
 }
@@ -308,12 +311,22 @@ impl OrganizationStorage for Store {
         Ok(self.organization_cache.as_ref().map(Record::view))
     }
     fn user_collections(&mut self, owner: &str) -> rusqlite::Result<Self::Collections<'_>> {
-        // The adapter currently creates confirmed full-access owners only.
-        // Do not invent permissions for roles whose ACL lifecycle is not implemented.
-        let mut statement = self.db.prepare("SELECT c.id,c.organization_id,c.name,c.external_id,m.user_id,m.role,m.status FROM organization_collections c JOIN organization_memberships m ON m.organization_id=c.organization_id WHERE m.user_id=?1 AND m.role=0 AND m.status=2 AND m.access_all=1 ORDER BY c.rowid")?;
+        // Visibility uses stored access_all or a direct grant. Roles alone do
+        // not select rows. Once selected, full-access roles determine flags.
+        // Sync retains stored restrictions even for a Manager's manage grant.
+        let mut statement = self.db.prepare("SELECT c.id,c.organization_id,c.name,c.external_id,m.user_id,m.role,m.status,m.access_all,COALESCE(g.read_only,1),COALESCE(g.hide_passwords,0),COALESCE(g.manage,0) FROM organization_collections c JOIN organization_memberships m ON m.organization_id=c.organization_id LEFT JOIN organization_collection_users g ON g.collection_id=c.id AND g.user_id=m.user_id WHERE m.user_id=?1 AND m.status=2 AND (m.access_all=1 OR g.user_id IS NOT NULL) ORDER BY c.rowid")?;
         self.organization_collections_cache = Collections(
             statement
                 .query_map([owner], |row| {
+                    let role: i32 = row.get(5)?;
+                    let full = row.get::<_, bool>(7)? || matches!(role, 0 | 1);
+                    let read_only = !full && row.get::<_, bool>(8)?;
+                    let hide_passwords = !full && row.get::<_, bool>(9)?;
+                    let manage = matches!(role, 0 | 1)
+                        || (role == 3
+                            && (full
+                                || row.get::<_, bool>(10)?
+                                || (!read_only && !hide_passwords)));
                     Ok(Collection {
                         id: row.get(0)?,
                         organization: row.get(1)?,
@@ -322,9 +335,12 @@ impl OrganizationStorage for Store {
                         member: Membership {
                             user: row.get(4)?,
                             organization: row.get(1)?,
-                            role: row.get(5)?,
+                            role,
                             status: row.get(6)?,
                         },
+                        read_only,
+                        hide_passwords,
+                        manage,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
