@@ -517,6 +517,7 @@ fn confirm(s: &mut Suite) -> Result<(), Error> {
     let profile = s.http.json("/api/accounts/profile", &s.accounts[1].token)?;
     require(
         org_in(&profile, "organizations", &s.orgs[0].id)?.is_some_and(|o| o["key"] == wrapped)
+            && org_in(&profile, "organizations", &s.orgs[1].id)?.is_none()
             && org_in(&profile, "organizationsNew", &s.orgs[1].id)?.is_some_and(|o| o["key"] == ""),
         "Confirmation delivered wrong organization key or confirmed sibling",
     )?;
