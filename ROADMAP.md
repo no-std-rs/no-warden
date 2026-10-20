@@ -101,6 +101,12 @@ invoke the pinned official Bitwarden CLI as an external process.
   fingerprint/decryption observation commands on both targets. No CLI bulk
   caller, browser execution of this endpoint, automatic confirmation, configured
   policy/group or full-parity claim.
+- [x] Organization member mini-details subset: allocation-free seven-field
+  account/membership metadata, unfiltered names and native target states,
+  restricted Manager admission, six matching actual HTTP cases
+  (619 requests) and 18 matching official CLI observation
+  commands on both targets. No production mini CLI caller, browser mini flow,
+  configured-group/backend, adjacent member-edit or full-parity claim.
 - [ ] Attachments, Sends, event notifications and websocket transport.
 - [ ] Two-factor authentication, passkeys, SSO and administrative APIs.
 - [ ] Full import/export compatibility, remaining formats and variants, and upstream protocol regression fixtures.
