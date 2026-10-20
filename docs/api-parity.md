@@ -39,25 +39,25 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 119 routed patterns, 62 with typed requests, 112 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 120 routed patterns, 63 with typed requests, 113 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 116 partial and 178 unimplemented. Query/rank/configuration
+status: 117 partial and 177 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
 
-57 local patterns have some typed response representation, including
+58 local patterns have some typed response representation, including
 the domain settings projections and empty mutation response, explicit API-key
 responses, and attachment responses. Bulk cipher lists use the generic `ListResponse`
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 113 patterns, negative
-HTTP evidence for 112, 293 named HTTP cases, and 53 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 114 patterns, negative
+HTTP evidence for 113, 299 named HTTP cases, and 53 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -1593,3 +1593,88 @@ web bootstrap bundles. Playwright-core 1.64.1 is locked separately. A dedicated
 Linux x64 CI job runs the same disposable HTTPS comparison. Fresh anonymous
 image acquisition and the supplied-cache path both pass locally; inherited
 browser/HTTP debug modes are suppressed before credentials are created.
+
+## Organization member bulk public-key lookup subset
+
+`POST /api/organizations/{org_id}/users/public-keys` adds a scoped,
+read-only lookup under current-device, confirmed Owner/Admin authority. The
+[pinned request/route contract](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L1696-L1739)
+is separate from the actual Vaultwarden 1.37.4 release used for both comparisons.
+This adds one partial upstream handler; full parity remains false.
+
+The required canonical `ids` list contains opaque membership IDs. Whole-body
+JSON decoding precedes lookups; missing/null/mistyped IDs reject with 422 and
+malformed syntax/UTF-8/trailing input with 400. Empty and positional `[[]]`
+requests return an empty JSON list. Unknown fields are ignored. Organization
+UUID/path admission remains separate from exact, case-sensitive body IDs.
+
+The response has exactly `data`, `object: "list"`, and `continuationToken: null`.
+Each matched row has exactly `id` (membership ID), `userId` (account ID), `key`
+(string or explicit null), and `object: "organizationUserPublicKeyResponseModel"`.
+Missing scoped memberships are omitted, including foreign memberships in
+another owned organization or belonging to the same account. Successful rows
+retain input order and duplicates; an actual 1025-item duplicate request passes.
+An account ID never substitutes for a membership ID.
+
+An existing account without a public key retains its row with `key: null`.
+Portable modern registration with `keys: null` and an invited passwordless
+placeholder verify this independently of missing-row omission. The individual
+account-public-key GET instead returns 404 for the null key. Empty and synthetic
+future-format strings remain exact; client acceptance of invalid key formats is
+not implied. Actual targets include Invited 0, Accepted 1, Confirmed 2 and Revoked
+-1, and Owner/Admin/Manager/User roles, without target eligibility filtering.
+Accepted Admin, confirmed Manager/User and revoked Admin actors are denied;
+a confirmed Admin can read and a revoked Admin remains a readable target for
+an eligible Owner.
+
+`OrganizationMemberPublicKeysRequest` is a caller-bounded borrowed decoder;
+`OrganizationMemberPublicKeysData` also supplies an uncapped stable owned view.
+`OrganizationMemberPublicKeyStorage` returns owned scoped public metadata with
+`AsRef<str>` handles, without requiring Clone, Debug or Serialize. `None` means
+no scoped member/account; `Some(record)` with no public key means an existing
+null-key account. The core preflights the entire view and caller-owned output
+capacity, validates returned organization/membership associations and compacts
+found rows into a contiguous ordered prefix. Its sealed row/list serializers
+perform no storage access. The adapter selects only public identifiers/key in a
+scoped join and holds its lock through admission and response construction.
+
+The RISC-V link consumer decodes required IDs, calls the real service through
+stack-owned storage, and serializes duplicate rows while omitting absent records in caller-owned buffers
+without allocator/std/undefined symbols. Firmware is linked, not executed.
+HTTP, SQL, clocks and client cryptography remain adapters. Local provider
+failures or misassociation clear partial output and return a safe outer error;
+this does not reproduce upstream finder APIs that can collapse backend failures
+into absence, or establish complete failure/concurrency timing parity.
+
+Both actual targets pass six focused HTTP cases: 431 counted requests plus ten
+registration requests for five fixtures, two password logins and two refreshes.
+Snapshots preserve accounts, personal ciphertext, keys, revisions, memberships,
+roles/grants, organization state and device/session authority. Single-member
+confirmation/revoke/restore calls establish fixture states; the new POST does
+not mutate them.
+
+A separate official CLI 2026.10.0 comparison passes 16 commands on each target,
+with 32 direct HTTP requests plus four registration requests for two fixtures,
+two CLI password logins and two direct setup logins. Two direct bulk reads
+bracket HTTP confirmation setup. Exact bulk/individual/registered key equality,
+three cached/remote CLI fingerprint equalities, one distinct-account fingerprint
+check, personal-note decryption and organization-collection decryption pass.
+Client-internal requests are uncounted/untraced; totals remain separate from the
+120-command baseline and other focused suites.
+
+[Client source b449ac1](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/admin-console/src/common/organization-user/services/default-organization-user-api.service.ts#L215-L228)
+bundles this bulk API, but the shipped CLI
+[confirmation branch](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/admin-console/commands/confirm.command.ts#L45-L96)
+fetches one account public key. `get fingerprint me` reads its cached key;
+UUID-targeted fingerprints use the individual GET. No bulk CLI caller, new
+command form or captured route trace follows. Vaultwarden Web 2026.7.0's
+BulkConfirmDialogComponent source map has a static Accepted-member caller;
+its distribution layer is `d7b6e37be08b53480724fb772207fdfc1d75a2d150580c41348a82e7fa52403b`.
+That source evidence does not establish browser execution of this endpoint or
+make the UI's Accepted-only selection a server filter.
+
+Configured policy/group/SMTP variants, automatic confirmation and provider-key
+APIs, imported unknown statuses, actual dangling-account/backend failure cases,
+and complete error/transport/body-limit parity remain open. Synthetic local
+provider tests do not establish those actual-server variants. General sharing
+and the full upstream API remain unfinished.

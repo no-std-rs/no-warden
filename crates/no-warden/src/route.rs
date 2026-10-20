@@ -56,6 +56,7 @@ pub enum Route<'a> {
     OrganizationGet(&'a str),
     OrganizationMembers(&'a str),
     OrganizationInvite(&'a str),
+    OrganizationMemberPublicKeys(&'a str),
     OrganizationMemberConfirm(&'a str, &'a str),
     OrganizationBulkConfirm(&'a str),
     OrganizationMember(&'a str, &'a str),
@@ -250,6 +251,9 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                         (Get, "users") => Some(OrganizationMembers(organization)),
                         (Delete, "users") => Some(OrganizationBulkMemberDelete(organization)),
                         (Post, "users/invite") => Some(OrganizationInvite(organization)),
+                        (Post, "users/public-keys") => {
+                            Some(OrganizationMemberPublicKeys(organization))
+                        }
                         (Post, "users/confirm") => Some(OrganizationBulkConfirm(organization)),
                         (Put, "users/revoke") => Some(OrganizationBulkMemberRevoke(organization)),
                         (Put, "users/restore") => Some(OrganizationBulkMemberRestore(organization)),
@@ -479,6 +483,32 @@ fn valid_segment(segment: &str) -> bool {
 mod tests {
     extern crate std;
     use super::*;
+
+    #[test]
+    fn organization_member_public_keys_route_keeps_raw_org_and_is_authenticated_post() {
+        for org in ["org", "bad.id", "%30org", "malformed%"] {
+            let uri =
+                std::format!("/api/organizations/{org}/users/public-keys/?organizationId=other");
+            let route = Route::OrganizationMemberPublicKeys(org);
+            assert_eq!(classify(Method::Post, &uri), Some(route));
+            assert!(route.requires_authentication());
+            assert_eq!(classify(Method::Put, &uri), None);
+            assert_eq!(
+                classify(Method::Get, &uri),
+                Some(Route::OrganizationMember(org, "public-keys"))
+            );
+            assert_eq!(
+                classify(Method::Delete, &uri),
+                Some(Route::OrganizationMemberDelete(org, "public-keys"))
+            );
+        }
+        for uri in [
+            "/api/organizations//users/public-keys",
+            "/api/organizations/org/users/public-keys/extra",
+        ] {
+            assert_eq!(classify(Method::Post, uri), None);
+        }
+    }
 
     #[test]
     fn organization_member_status_routes_preserve_raw_ids_and_distinguish_vnext() {
@@ -778,6 +808,9 @@ mod tests {
                     let expected = match method {
                         Method::Post if member == "confirm" => {
                             Some(Route::OrganizationBulkConfirm(org))
+                        }
+                        Method::Post if member == "public-keys" => {
+                            Some(Route::OrganizationMemberPublicKeys(org))
                         }
                         Method::Delete => Some(Route::OrganizationMemberDelete(org, member)),
                         _ => None,

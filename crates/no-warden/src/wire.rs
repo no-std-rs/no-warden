@@ -2057,6 +2057,25 @@ impl<const N: usize> core::fmt::Debug for OrganizationBulkMemberRestoreRequest<'
 pub type OrganizationBulkMemberStatusResponse<'out, 'data> =
     crate::organization_bulk_member_status::OrganizationBulkMemberStatusResponse<'out, 'data>;
 
+/// Required opaque membership IDs for scoped public-key discovery. The capacity
+/// belongs to the caller; an owned indexed adapter may accept any batch length.
+#[derive(Deserialize)]
+pub struct OrganizationMemberPublicKeysRequest<'a, const N: usize> {
+    #[serde(borrow)]
+    pub ids: BoundedList<&'a str, N>,
+}
+impl<const N: usize> core::fmt::Debug for OrganizationMemberPublicKeysRequest<'_, N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationMemberPublicKeysRequest([REDACTED])")
+    }
+}
+/// Explicit scoped four-field row, including nullable public key.
+pub type OrganizationMemberPublicKeyResponse<'a, I, K> =
+    crate::organization_member_public_keys::OrganizationMemberPublicKeyResponse<'a, I, K>;
+/// Ordered, filtered public-key projection borrowing caller-owned snapshots.
+pub type OrganizationMemberPublicKeysResponse<'out, I, K> =
+    crate::organization_member_public_keys::OrganizationMemberPublicKeysResponse<'out, I, K>;
+
 /// Optional caller-bounded bulk confirmation decoder. A host can use an uncapped
 /// owned vector via OrganizationBulkConfirmData instead. Root [null] is valid; [] is
 /// not. All nested entries must be decoded before any service mutation begins.

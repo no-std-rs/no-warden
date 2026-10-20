@@ -17,6 +17,7 @@ mod organization_bulk_member_status;
 mod organization_collections;
 mod organization_confirmations;
 mod organization_invitations;
+mod organization_member_public_keys;
 mod organization_member_removal;
 mod organization_member_status;
 mod organization_members;
@@ -739,6 +740,22 @@ async fn dispatch_with_peer(
                 Ok(_) => Ok(StatusCode::OK.into_response()),
                 Err(error) => Ok(organization_invitations::error_response(error)),
             }
+        }
+        Route::OrganizationMemberPublicKeys(raw_org) => {
+            use no_warden::organization_member_public_keys::OrganizationMemberPublicKeysData;
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let org = organization_invitations::path(&mut store, &owner, raw_org, uri.query())?;
+            let input = organization_member_public_keys::Input::parse(&body)?;
+            let mut scratch = Vec::with_capacity(input.len());
+            scratch.resize_with(input.len(), || None);
+            let response = VaultService::new(&mut *store).get_org_member_public_keys(
+                &owner,
+                &org,
+                &input,
+                &mut scratch,
+            )?;
+            Ok(Json(response).into_response())
         }
         Route::OrganizationBulkConfirm(raw_org) => {
             use no_warden::organization_confirmations::OrganizationBulkConfirmData;
