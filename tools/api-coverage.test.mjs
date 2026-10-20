@@ -1,9 +1,26 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { coveragePath, sourceHashes, validateCoverage } from "./check-api-coverage.mjs";
+import { coveragePath, multilineRouteArm, sourceHashes, validateCoverage } from "./check-api-coverage.mjs";
 
 const snapshot = JSON.parse(readFileSync(coveragePath, "utf8"));
+
+test("multiline route alternatives cite the arrow on the final adjacent pattern", () => {
+  const source = "    Route::MemberRestore(org, member)\n    | Route::MemberRestoreLegacy(org, member)\n    | Route::MemberRestoreVNext(org, member) => {\n        restore();\n    }";
+  assert(multilineRouteArm(source, 1, "MemberRestore"));
+  assert(multilineRouteArm(source, 2, "MemberRestoreLegacy"));
+});
+
+test("multiline route citations reject unrelated arrows and incomplete patterns", () => {
+  for (const source of [
+    "    Route::MemberRestore(org, member)",
+    "    // Route::MemberRestore(org, member)\n    | Route::Other(org, member) => {}",
+    "    Route::MemberRestore(org, member)\n    unrelated();\n    | Route::Other(org, member) => {}",
+    "    Route::MemberRestore(org, member)\n    Route::Other(org, member) => {}",
+    "    Route::MemberRestore(org, member)\n    | Route::Other(org, member) // => {}",
+    "    Route::MemberRestoreWrong(org, member)\n    | Route::Other(org, member) => {}",
+  ]) assert.equal(multilineRouteArm(source, 1, "MemberRestore"), false);
+});
 
 test("coverage evidence and counts match the actual implementation and tests", () => {
   const knownDevice = snapshot.routes.find(route => route.path === "/api/devices/knowndevice");

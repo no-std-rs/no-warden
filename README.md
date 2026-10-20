@@ -100,6 +100,13 @@ Six matching actual HTTP cases and a separate 25-command official CLI
 state/decryption comparison pass both targets after HTTP bulk setup. No CLI
 bulk-removal caller, SMTP, groups or shared-cipher writes are claimed.
 
+Single-member revoke and both restore variants preserve encrypted organization
+keys and collection grants while hiding and recovering live membership access.
+Six matching HTTP cases and a separate 31-command official CLI observation
+comparison pass both actual targets. Mutation is direct HTTP setup; no CLI
+revoke/restore caller or endpoint trace is claimed. Default-policy behavior is
+separate from configured 2FA/SingleOrg policies, events and sharing.
+
 The remaining surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden
 replacement. Client-side vault encryption stays with the client.

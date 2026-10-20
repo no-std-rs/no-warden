@@ -1050,3 +1050,27 @@ The existing single-removal observer also passes a separate 25-command run on
 each final target, with 40 direct HTTP requests plus four registration requests
 and three CLI plus two direct password logins. That regression uses single
 HTTP removal; it is not added to the bulk comparison or baseline 120 totals.
+
+## Member status and retained grants
+
+`--suite organization-member-status` passes six HTTP cases on both actual
+targets: 265 counted requests plus ten registration requests for five fixtures,
+two password logins and two refreshes. Revoke and both bodyless restore
+variants preserve membership identity/key/grants and account authority while
+hiding and recovering live selective reads. Invited zero restore succeeds;
+its repeated revision advancement is source/local SQL evidence, not an HTTP
+claim. Local provider tests also prove rollback/reopen and private preservation.
+
+The separate `--suite organization-member-status-cli` passes 31 official CLI
+2026.10.0 commands per target, with 43 direct HTTP requests plus four
+registration requests, three CLI logins and two direct setup logins. HTTP
+mutations drive sync/unlock/fresh-cache observations and a strict revoked
+confirmation preflight. No shipped mutation caller, successful confirmation,
+new command form, internal HTTP count or endpoint trace is inferred.
+
+`BW_ORGANIZATION_MEMBER_STATUS_RECEIPT` and
+`BW_ORGANIZATION_MEMBER_STATUS_CLI_RECEIPT` keep authored counters/status
+separate from credentials, keys and private bodies. The default 104-case and
+baseline 120-command suites retain separate evidence. Atomic local writes and
+live checks are stronger than source timing; configured 2FA/SingleOrg policies,
+SMTP/events/groups, bulk status changes and sharing remain open.

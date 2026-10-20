@@ -39,13 +39,13 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 114 routed patterns, 60 with typed requests, 107 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 117 routed patterns, 60 with typed requests, 110 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 111 partial and 183 unimplemented. Query/rank/configuration
+status: 114 partial and 180 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
@@ -56,8 +56,8 @@ responses, and attachment responses. Bulk cipher lists use the generic `ListResp
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 108 patterns, negative
-HTTP evidence for 107, 281 named HTTP cases, and 53 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 111 patterns, negative
+HTTP evidence for 110, 287 named HTTP cases, and 53 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -1491,3 +1491,34 @@ Shared clients construct this bulk transport, but the shipped CLI has no
 member-removal command. HTTP setup followed by sync/decryption is
 observation, not an endpoint trace. SMTP, groups/notifications, shared-cipher
 writes and complete configuration/failure/transport parity remain open.
+
+## Single organization-member revoke/restore subset
+
+Three PUT patterns add an allocation-free `OrganizationMemberStatusStorage`
+provider and sealed `ValidatedOrganizationMemberStatus` plans. There is no
+request DTO or typed JSON response: both restore variants and revoke ignore
+body fields and return empty 200. The vnext route ignores the requested default
+collection name. Current-device Owner/Admin authority precedes UUID guards.
+
+Revoke preserves membership identity, encrypted key, grants and account/session
+authority while hiding live collection access. Restore recovers the prior
+status and selective reads. Admins may change other Admins and Managers; only
+Owner targets require an Owner actor. Every eligible Owner revoke applies the
+confirmed-owner count safeguard, even for an Invited/Accepted Owner target.
+Invited-status-zero restore succeeds without changing status. Local SQL tests
+prove its repeated revision advancement; HTTP evidence covers wire status and
+preserved grants, not that hidden revision effect.
+
+Both actual targets pass six focused HTTP cases: 265 counted requests plus
+ten registration requests for five fixtures, two password logins and two
+refreshes. The separate official CLI 2026.10.0 comparison passes 31 commands
+on both, with 43 direct HTTP requests plus four registration requests, three
+CLI password logins and two direct setup logins.
+
+The CLI observes HTTP setup through sync, unlock and fresh-cache decryption.
+One strict revoked-confirmation rejection checks fetched metadata, not a
+successful confirmation or revoke/restore caller. No endpoint trace or new
+command form is inferred. Configured 2FA fallback/SingleOrg policy effects,
+SMTP, events/groups, bulk status changes and shared-cipher writes remain open.
+Local atomic status/revision and live commit checks strengthen source failure
+and concurrency timing; full parity remains false.

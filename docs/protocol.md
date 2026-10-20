@@ -2118,3 +2118,64 @@ trace.
 Private marker effects remain local SQL evidence. SMTP, groups/notifications,
 shared-cipher writes, offline cache erasure and full transport/configuration
 parity remain open.
+
+## Single organization-member revoke and restore
+
+The selected [revoke handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L2197-L2205),
+[revoke transition](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L2247-L2288)
+and [restore aliases/transition](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L2290-L2386)
+match the [release 1.37.4 blocks](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/organizations.rs#L2195-L2384).
+
+| Method and member-path suffix | Behavior |
+| --- | --- |
+| `PUT /revoke` | Hide the scoped membership while retaining key and grants |
+| `PUT /restore` | Recover the preceding status |
+| `PUT /restore/vnext` | Same transition; requested default collection name ignored |
+
+The prefix is `/api/organizations/{orgId}/users/{memberId}`. No route has a data
+argument or JSON/media guard: malformed JSON/UTF8 and body IDs, keys and flags
+are ignored within inherited transport limits. Success is empty 200. Current
+device, confirmed Owner/Admin and organization guards precede typed path UUIDs.
+An organization query fallback can qualify an invalid org path before its final
+422, but cannot replace the target member. Scoped missing/foreign targets have
+the same 400 message; guard 401/422 bodies are not required to be JSON.
+
+Revoke first requires raw status greater than -1, then rejects self, applies
+Owner-only authority for an Owner target, and requires more than one confirmed
+Owner for every eligible Owner target, including Invited/Accepted Owners.
+Admins may revoke other Admins and Managers. The stored status decreases by
+128: 0/1/2 become -128/-127/-126. Member metadata reports -1, while profile
+organizations and live collections omit the revoked membership.
+
+Restore first requires raw status below 1, then rejects self and non-Owner
+actors restoring Owner targets. Negative status increases by 128. Ordinary
+Invited zero stays zero but still saves; repeated Invited restore succeeds.
+After transformation, non-Owner/non-Admin roles with positive status require
+[ordered restoration policies](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/org_policy.rs#L311-L345):
+2FA, another organization's SingleOrg rule, then this organization's SingleOrg
+rule. Public Custom input stores Manager; imported unknown raw roles also use
+the source's below-Admin policy comparison. The default adapter cannot configure
+these policies. Email-2FA enrollment fallback and its possible partial effects
+remain outside verified scope.
+
+The same membership UUID, wrapped organization key, direct/group grants,
+inviter/registration markers and personal account/session/device authority
+remain. Restored confirmed membership regains its prior selective collection
+visibility. Neither operation erases cached keys/plaintext or rotates an
+organization key. Local atomic status/revision writes and live rechecks are
+stronger than source revision-before-save and configured policy failure timing.
+
+Both actual targets pass six focused HTTP cases: 265 counted requests plus
+ten registration requests for five fixtures, two password logins and two
+refreshes. The separate official CLI 2026.10.0 comparison passes 31 commands
+on both, with 43 direct HTTP requests plus four registration requests, three
+CLI password logins and two direct setup logins.
+
+The [shared API](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/admin-console/src/common/organization-user/services/default-organization-user-api.service.ts#L333-L379)
+constructs revoke and restore/vnext. The shipped CLI restore command accepts
+items only. Sync/unlock/fresh-cache decryption after HTTP setup and one strict
+revoked-confirmation preflight are state observations, not mutation callers,
+successful confirmation or endpoint traces. Invited no-op revision advancement
+is source/local SQL evidence; HTTP tests claim only wire status and preserved
+grants. Bulk status changes, configured policies/SMTP, events/groups, sharing
+and full transport/failure parity remain open.

@@ -17,6 +17,7 @@ mod organization_collections;
 mod organization_confirmations;
 mod organization_invitations;
 mod organization_member_removal;
+mod organization_member_status;
 mod organization_members;
 mod organizations;
 mod password_login;
@@ -106,6 +107,7 @@ impl IntoResponse for Failure {
             || organization_collections::is_collection_error(self.1)
             || organization_confirmations::is_confirmation_error(self.1)
             || organization_member_removal::is_removal_error(self.1)
+            || organization_member_status::is_status_error(self.1)
             || self.1 == "The specified user isn't a member of the organization"
             || self.1 == "Member id is required"
         {
@@ -787,6 +789,33 @@ async fn dispatch_with_peer(
                 &mut scratch,
             )?;
             Ok(Json(response).into_response())
+        }
+        Route::OrganizationMemberRevoke(raw_org, raw_member) => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let (org, member) = organization_members::detail_paths(
+                &mut store,
+                &owner,
+                raw_org,
+                raw_member,
+                uri.query(),
+            )?;
+            VaultService::new(&mut *store).revoke_org_member(&owner, &org, &member)?;
+            Ok(StatusCode::OK.into_response())
+        }
+        Route::OrganizationMemberRestore(raw_org, raw_member)
+        | Route::OrganizationMemberRestoreVNext(raw_org, raw_member) => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let (org, member) = organization_members::detail_paths(
+                &mut store,
+                &owner,
+                raw_org,
+                raw_member,
+                uri.query(),
+            )?;
+            VaultService::new(&mut *store).restore_org_member(&owner, &org, &member)?;
+            Ok(StatusCode::OK.into_response())
         }
         Route::OrganizationMemberDelete(raw_org, raw_member) => {
             devices::access_binding(&store.db, &digest(bearer), &owner)?

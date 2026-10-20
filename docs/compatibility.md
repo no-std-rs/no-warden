@@ -53,6 +53,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Bulk member confirmation | Ordered item results, continued errors and committed-prefix abort with whole-body schema validation | Six matching HTTP cases and 21 matching official CLI state/decryption commands on both targets after HTTP bulk setup; no CLI bulk caller or trace |
 | Single member removal | Scoped membership/grant cleanup and last-owner protection with retained account authority | Six matching HTTP cases and 25 matching official CLI state/decryption commands after HTTP setup on both targets; no removal caller, trace or offline erasure claim |
 | Bulk member removal | Ordered independent item commits, exact results and intentional self-removal continuation | Six matching HTTP cases and 25 matching official CLI state/decryption commands after HTTP setup on both targets; no bulk caller or trace claim |
+| Single member revoke/restore | Bodyless status transitions preserve keys/grants and recover selective visibility | Six matching HTTP cases and 31 matching CLI observation commands on both actual targets; no mutation caller or trace claim |
 | Single organization-collection update/delete | Complete grant replacement, opaque names, whitespace external-ID clearing and preserved cipher data | Allocation-free core and local rollback/cascade tests; six matching HTTP cases and twenty matching official CLI commands on both actual targets |
 | Organization-scoped collection list/create/single access-details | Confirmed manager authorization, exact projections, opaque names/external IDs and reference validation | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers; atomic local provider tests |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
@@ -115,7 +116,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 795 active workspace unit tests pass: 391 core, 289 host and 115 support,
+All 815 active workspace unit tests pass: 403 core, 296 host and 116 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -1293,3 +1294,27 @@ HTTP mutation is setup: the shipped CLI has no member-removal command, and no
 endpoint trace or offline-key erasure is claimed. SMTP, groups,
 notifications, organization sharing and full configuration/failure/transport
 parity remain open.
+
+## Single organization-member revoke and restore
+
+Three bodyless PUT patterns cover revoke plus legacy/vnext restore through an
+allocation-free scoped status provider. They preserve account authority,
+membership identity and encrypted keys/grants while hiding and recovering
+live selective collection access. Admin peer changes and the source's
+unconfirmed-Owner count safeguard are distinct from member deletion rules.
+
+Both actual targets pass six focused HTTP cases: 265 counted requests plus
+ten registration requests for five fixtures, two password logins and two
+refreshes. The separate official CLI 2026.10.0 comparison passes 31 commands
+on both, with 43 direct HTTP requests plus four registration requests, three
+CLI password logins and two direct setup logins.
+
+The CLI observes direct HTTP mutations; it has no member revoke/restore command.
+One strict revoked-confirmation rejection is a metadata check, not successful
+confirmation or a mutation caller. Invited no-op revision advancement is proved
+by source/local SQL tests, not inferred from portable HTTP status. No trace,
+offline erasure, new command form or combined baseline total is claimed.
+Default-policy behavior excludes configured 2FA enrollment/SingleOrg effects,
+SMTP, events/groups, bulk status changes and shared-cipher writes. Atomic local
+revision/status and live commit checks strengthen source failure/concurrency
+timing without claiming complete parity.

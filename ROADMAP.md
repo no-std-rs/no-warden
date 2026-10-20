@@ -80,6 +80,11 @@ invoke the pinned official Bitwarden CLI as an external process.
   HTTP cases and 25 matching official CLI state/decryption commands after HTTP
   setup. No CLI bulk-removal caller, general member/group lifecycle or
   shared-cipher writes are claimed.
+- [x] Single organization-member revoke/restore subset: allocation-free status
+  provider, both bodyless restore variants and retained encrypted keys/grants,
+  with six matching HTTP cases and 31 matching official CLI observation
+  commands after HTTP setup. No CLI mutation caller, configured policy/2FA
+  fallback, bulk status changes, groups/events or sharing claim.
 - [ ] Attachments, Sends, event notifications and websocket transport.
 - [ ] Two-factor authentication, passkeys, SSO and administrative APIs.
 - [ ] Full import/export compatibility, remaining formats and variants, and upstream protocol regression fixtures.

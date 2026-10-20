@@ -34,6 +34,11 @@ use no_warden::{
         OrganizationMemberRemovalRecord, OrganizationMemberRemovalStorage,
         ValidatedOrganizationBulkMemberRemoval, ValidatedOrganizationMemberRemoval,
     },
+    organization_member_status::{
+        OrganizationMemberRestorationPolicy, OrganizationMemberStatusOperation,
+        OrganizationMemberStatusRecord, OrganizationMemberStatusStorage,
+        ValidatedOrganizationMemberStatus,
+    },
     organization_members::{
         OrganizationMemberCollection, OrganizationMemberDetailQuery,
         OrganizationMemberDetailStorage, OrganizationMemberGroup, OrganizationMemberListData,
@@ -113,6 +118,7 @@ struct PurgeProbe {
     confirmed_key: [u8; 96],
     confirmed_key_len: usize,
     member_removed: bool,
+    member_status: i32,
 }
 impl PurgeProbe {
     fn organization_record(&self) -> OrganizationRecord<'_> {
@@ -515,6 +521,67 @@ impl OrganizationBulkMemberRemovalStorage for PurgeProbe {
         self.remove_organization_member(plan.removal())
     }
 }
+impl OrganizationMemberStatusStorage for PurgeProbe {
+    type Id = &'static str;
+    fn status_member(
+        &mut self,
+        org: &str,
+        member: &str,
+    ) -> Result<Option<OrganizationMemberStatusRecord<Self::Id>>, ()> {
+        Ok((org == "embedded-org"
+            && member == "embedded-invited-member"
+            && self.invited[0]
+            && !self.member_removed)
+            .then_some(OrganizationMemberStatusRecord {
+                membership_id: "embedded-invited-member",
+                organization_id: "embedded-org",
+                user_id: "existing-account",
+                role: 2,
+                status: self.member_status,
+            }))
+    }
+    fn status_confirmed_owner_count(&mut self, _: &str) -> Result<u64, ()> {
+        Ok(1)
+    }
+    fn restoration_policy(
+        &mut self,
+        _: &ValidatedOrganizationMemberStatus<'_, Self::Id>,
+    ) -> Result<OrganizationMemberRestorationPolicy, ()> {
+        Ok(OrganizationMemberRestorationPolicy::Allowed)
+    }
+    fn set_organization_member_status(
+        &mut self,
+        plan: &ValidatedOrganizationMemberStatus<'_, Self::Id>,
+    ) -> Result<(), ()> {
+        let status = match plan.operation() {
+            OrganizationMemberStatusOperation::Revoke if self.member_status >= 0 => {
+                self.member_status - 128
+            }
+            OrganizationMemberStatusOperation::Restore if self.member_status < 0 => {
+                self.member_status + 128
+            }
+            OrganizationMemberStatusOperation::Restore if self.member_status == 0 => 0,
+            _ => return Err(()),
+        };
+        if !self.organization_present
+            || !self.invited[0]
+            || self.member_removed
+            || plan.owner() != "embedded-owner"
+            || plan.organization() != "embedded-org"
+            || plan.membership_id() != "embedded-invited-member"
+            || plan.user_id() != "existing-account"
+            || plan.role() != 2
+            || plan.previous_status() != self.member_status
+            || plan.status() != status
+        {
+            return Err(());
+        }
+        self.member_status = status;
+        self.confirmed = status == 2;
+        self.revision += 1;
+        Ok(())
+    }
+}
 impl OrganizationMemberRemovalStorage for PurgeProbe {
     type Id = &'static str;
     fn removal_member(
@@ -609,6 +676,7 @@ impl OrganizationConfirmationStorage for PurgeProbe {
         self.confirmed_key[..key.len()].copy_from_slice(key);
         self.confirmed_key_len = key.len();
         self.confirmed = true;
+        self.member_status = 2;
         self.revision += 1;
         Ok(())
     }
@@ -1232,6 +1300,7 @@ pub extern "C" fn _start() -> ! {
             confirmed_key: [0; 96],
             confirmed_key_len: 0,
             member_removed: false,
+            member_status: 1,
         };
         let organization = OrganizationCreateRequest {
             billing_email: "owner@example.com",
@@ -1478,6 +1547,32 @@ pub extern "C" fn _start() -> ! {
             Method::Post,
             "/api/organizations/embedded-org/users/embedded-invited-member/confirm",
         ));
+        // Status-only operations keep the existing opaque wrapped key and personal
+        // authority in stack-owned storage while revoking/restoring the same member.
+        let _ = black_box(organization_service.revoke_org_member(
+            "embedded-owner",
+            "embedded-org",
+            "embedded-invited-member",
+        ));
+        let _ = black_box(organization_service.restore_org_member(
+            "embedded-owner",
+            "embedded-org",
+            "embedded-invited-member",
+        ));
+        let state = organization_service.storage_mut();
+        black_box((
+            state.member_status,
+            state.confirmed_key_len,
+            state.account_present,
+            state.personal_items,
+        ));
+        for suffix in [
+            "/api/organizations/embedded-org/users/embedded-invited-member/revoke",
+            "/api/organizations/embedded-org/users/embedded-invited-member/restore",
+            "/api/organizations/embedded-org/users/embedded-invited-member/restore/vnext",
+        ] {
+            black_box(classify(Method::Put, suffix));
+        }
         // Caller-bounded decoding and output storage exercise the real bulk service:
         // an opaque missing ID, successful recipient removal and duplicate row error.
         let bulk_removal = serde_json_core::from_slice::<OrganizationBulkMemberRemovalRequest<'_, 3>>(
