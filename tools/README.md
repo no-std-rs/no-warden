@@ -890,6 +890,8 @@ suites. Reference processes retain their default limits.
 
 ## Organization member discovery
 
+The list-only milestone below precedes the expanded [member-detail proof](../docs/protocol.md#organization-member-detail).
+
 `--suite organization-members` passes six Rust HTTP cases against both actual
 targets: 190 counted requests, two password logins and two refreshes, excluding
 two modern fixtures/four registration requests. Exact real-member projections,
@@ -914,3 +916,18 @@ Owner/full-access membership; imported role/status/group behavior is provider
 evidence rather than a member-administration lifecycle. Empty owner/group arrays
 make the network query matrix acceptance evidence; it does not independently
 prove parsing or non-full-access projection branches.
+
+The member-detail extension reuses these two organization-members selections
+and the same six HTTP names. The expanded HTTP comparison passes both targets:
+six cases/240 counted requests, two password logins and two refreshes,
+excluding two modern fixtures/four registration requests. The expanded
+eighteen-command official CLI comparison also passes both, with eighteen
+direct HTTP requests, two CLI password logins and one direct setup login,
+excluding one registration/two requests. Two `confirm org-member` calls after
+ordinary and fresh-cache login exit 1 with strict JSON `success:false` and
+message `Error: User is already confirmed.`, with no data/private extras.
+Unrelated server, authorization, transport or malformed-output failures cannot
+pass. This exercises the production member-detail GET followed by local status
+rejection, not a successful confirmation POST, invitation lifecycle or request
+trace. The earlier six-case 190-request/sixteen-command list proof remains a
+separate historical milestone.

@@ -7,6 +7,7 @@ use crate::{
     text_sends::{TextSendsError as Error, receipt_file, require, text, write_receipt},
     transport::TlsProxy,
 };
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -17,13 +18,32 @@ use std::{
 };
 use tempfile::TempDir;
 
-pub const COMMAND_COUNT: usize = 16;
-pub const DIRECT_HTTP_REQUEST_COUNT: usize = 17;
+pub const COMMAND_COUNT: usize = 18;
+pub const DIRECT_HTTP_REQUEST_COUNT: usize = 18;
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AlreadyConfirmedResponse {
+    success: bool,
+    message: String,
+}
+fn validate_already_confirmed(exit_code: Option<i32>, output: &[u8]) -> Result<(), Error> {
+    require(
+        exit_code == Some(1),
+        "Member confirmation preflight exit status differed",
+    )?;
+    let response: AlreadyConfirmedResponse = serde_json::from_slice(output)
+        .map_err(|_| Error("Member confirmation preflight response was malformed"))?;
+    require(
+        !response.success && response.message == "Error: User is already confirmed.",
+        "Member confirmation preflight rejection category differed",
+    )
+}
 struct Cli {
     binary: PathBuf,
     environment: BTreeMap<OsString, OsString>,
     commands: usize,
     logins: usize,
+    confirmed_checks: usize,
     direct_requests: Option<usize>,
     receipt: Option<fs::File>,
     finished: bool,
@@ -39,7 +59,7 @@ impl Cli {
     fn receipt(&mut self, status: &str) -> Result<(), Error> {
         write_receipt(
             &mut self.receipt,
-            &json!({"schemaVersion":1,"status":status,"commands":self.commands,"expectedCommands":COMMAND_COUNT,"cliVersion":"2026.10.0","cliPasswordLoginCommands":self.logins,"directPasswordLoginRequests":1,"directHttpRequests":self.direct_requests,"expectedDirectHttpRequests":DIRECT_HTTP_REQUEST_COUNT,"fixtureRegistrations":1,"fixtureRegistrationHttpRequests":2,"separateFromBaseline120":true,"clientInternalRequestsCounted":false,"capturedRouteTrace":false}),
+            &json!({"schemaVersion":1,"status":status,"commands":self.commands,"expectedCommands":COMMAND_COUNT,"cliVersion":"2026.10.0","cliPasswordLoginCommands":self.logins,"alreadyConfirmedChecks":self.confirmed_checks,"expectedAlreadyConfirmedChecks":2,"successfulConfirmationClaimed":false,"directPasswordLoginRequests":1,"directHttpRequests":self.direct_requests,"expectedDirectHttpRequests":DIRECT_HTTP_REQUEST_COUNT,"fixtureRegistrations":1,"fixtureRegistrationHttpRequests":2,"separateFromBaseline120":true,"clientInternalRequestsCounted":false,"capturedRouteTrace":false}),
         )
     }
     fn command(
@@ -47,6 +67,15 @@ impl Cli {
         args: &[&str],
         store: &Path,
         session: Option<&str>,
+    ) -> Result<String, Error> {
+        self.execute(args, store, session, false)
+    }
+    fn execute(
+        &mut self,
+        args: &[&str],
+        store: &Path,
+        session: Option<&str>,
+        already_confirmed: bool,
     ) -> Result<String, Error> {
         self.commands += 1;
         require(
@@ -66,6 +95,11 @@ impl Cli {
         } else {
             env.remove(&OsString::from("BW_SESSION"));
         }
+        if already_confirmed {
+            env.insert("BW_RESPONSE".into(), "true".into());
+            env.remove(&OsString::from("BW_QUIET"));
+            env.remove(&OsString::from("BW_CLEANEXIT"));
+        }
         let args = args
             .iter()
             .copied()
@@ -74,6 +108,12 @@ impl Cli {
             .collect::<Vec<_>>();
         let result = capture::run(&self.binary, &args, &env, Duration::from_secs(90))
             .map_err(|_| Error("Collection CLI private capture failed"))?;
+        if already_confirmed {
+            validate_already_confirmed(result.status.code(), &result.stdout)?;
+            self.confirmed_checks += 1;
+            self.receipt("running")?;
+            return Ok(String::new());
+        }
         if !result.status.success() {
             eprintln!(
                 "Collection CLI command {} failed with status {:?}",
@@ -90,6 +130,27 @@ impl Cli {
     fn json(&mut self, args: &[&str], store: &Path, session: &str) -> Result<Value, Error> {
         serde_json::from_str(&self.command(args, store, Some(session))?)
             .map_err(|_| Error("Collection CLI JSON output invalid"))
+    }
+    fn already_confirmed(
+        &mut self,
+        organization: &Organization,
+        membership: &str,
+        store: &Path,
+        session: &str,
+    ) -> Result<(), Error> {
+        self.execute(
+            &[
+                "confirm",
+                "org-member",
+                membership,
+                "--organizationid",
+                &organization.id,
+            ],
+            store,
+            Some(session),
+            true,
+        )?;
+        Ok(())
     }
     fn list(
         &mut self,
@@ -227,6 +288,7 @@ pub fn run() -> Result<(), Error> {
         environment,
         commands: 0,
         logins: 0,
+        confirmed_checks: 0,
         direct_requests: None,
         receipt: receipt_file("BW_ORGANIZATION_MEMBERS_CLI_RECEIPT")?,
         finished: false,
@@ -248,6 +310,7 @@ pub fn run() -> Result<(), Error> {
     require(session.len() > 20, "Member CLI login did not unlock")?;
     c.command(&["sync"], cache.path(), Some(&session))?;
     c.members(&organization, &expected_member, cache.path(), &session)?;
+    c.already_confirmed(&organization, &membership_id, cache.path(), &session)?;
     http.json(
         reqwest::Method::PUT,
         "/api/accounts/profile",
@@ -282,6 +345,16 @@ pub fn run() -> Result<(), Error> {
         &json!(MEMBER_NAME),
         &json!(AVATAR),
     )?;
+    let single = http.json(
+        reqwest::Method::GET,
+        &organization_members::detail_path(&organization.id, &membership_id),
+        &account.token,
+        None,
+    )?;
+    require(
+        single == full_rows[0],
+        "Member CLI single-member control differed from list member",
+    )?;
     // No intervening sync: the real command must report the fresh server name.
     // Its seven-field public output does not include avatarColor; the HTTP control above does.
     c.members(&organization, &expected_member, cache.path(), &session)?;
@@ -300,6 +373,7 @@ pub fn run() -> Result<(), Error> {
     require(session.len() > 20, "Fresh member CLI login did not unlock")?;
     c.command(&["sync"], fresh.path(), Some(&session))?;
     c.members(&organization, &expected_member, fresh.path(), &session)?;
+    c.already_confirmed(&organization, &membership_id, fresh.path(), &session)?;
     c.list(
         &organization,
         &organization.collection_id,
@@ -317,6 +391,7 @@ pub fn run() -> Result<(), Error> {
     require(
         c.commands == COMMAND_COUNT
             && c.logins == 2
+            && c.confirmed_checks == 2
             && http.logins == 1
             && http.requests == DIRECT_HTTP_REQUEST_COUNT,
         "Member CLI command or identity budget differed",
@@ -328,4 +403,27 @@ pub fn run() -> Result<(), Error> {
         "PASS organization-members CLI: {COMMAND_COUNT} commands, 2 CLI logins, 1 direct setup login"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn already_confirmed_rejection_rejects_server_failures_and_untrusted_shapes() {
+        let expected = br#"{"success":false,"message":"Error: User is already confirmed."}"#;
+        assert!(validate_already_confirmed(Some(1), expected).is_ok());
+        for code in [None, Some(0), Some(2), Some(127)] {
+            assert!(validate_already_confirmed(code, expected).is_err());
+        }
+        for output in [
+            br#"{"success":false,"message":"Server error: 500 Internal Server Error"}"#.as_slice(),
+            br#"{"success":false,"message":"Not found."}"#,
+            br#"{"success":false,"message":"User is already confirmed."}"#,
+            br#"{"success":true,"message":"Error: User is already confirmed."}"#,
+            br#"{"success":false,"message":"Error: User is already confirmed.","data":{"key":"private marker"}}"#,
+            br#"{"success":false,"success":false,"message":"Error: User is already confirmed."}"#,
+            br#"{"success":false}"#,
+            b"<html>500 Internal Server Error</html>",b"{",b"\xff",b"",
+        ] {let error=validate_already_confirmed(Some(1),output).unwrap_err();assert!(!format!("{error:?} {error}").contains("private marker"));}
+    }
 }

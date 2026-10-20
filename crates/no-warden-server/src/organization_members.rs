@@ -1,10 +1,11 @@
 //! Public organization-member discovery; no membership keys enter this cache.
 use crate::{Failure, Store, organization_collections};
 use no_warden::organization_members::{
-    OrganizationMemberCollection, OrganizationMemberGroup, OrganizationMemberListData,
-    OrganizationMemberQuery, OrganizationMemberRecord, OrganizationMemberStorage,
+    OrganizationMemberCollection, OrganizationMemberDetailQuery, OrganizationMemberDetailStorage,
+    OrganizationMemberGroup, OrganizationMemberListData, OrganizationMemberQuery,
+    OrganizationMemberRecord, OrganizationMemberStorage,
 };
-use rusqlite::params;
+use rusqlite::{Connection, params};
 
 struct Collection {
     id: String,
@@ -81,72 +82,99 @@ impl OrganizationMemberListData for Members {
 
 impl OrganizationMemberStorage for Store {
     type Members<'a> = &'a Members;
-
     fn organization_members(&mut self, organization: &str) -> rusqlite::Result<Self::Members<'_>> {
-        let mut statement = self.db.prepare(
+        self.organization_members_cache = load_members(&self.db, organization, None)?;
+        Ok(&self.organization_members_cache)
+    }
+}
+impl OrganizationMemberDetailStorage for Store {
+    fn organization_member(
+        &mut self,
+        organization: &str,
+        member: &str,
+    ) -> rusqlite::Result<Option<Self::Members<'_>>> {
+        self.organization_members_cache = load_members(&self.db, organization, Some(member))?;
+        Ok((!self.organization_members_cache.0.is_empty())
+            .then_some(&self.organization_members_cache))
+    }
+}
+fn load_members(
+    db: &Connection,
+    organization: &str,
+    selected_member: Option<&str>,
+) -> rusqlite::Result<Members> {
+    let mut statement = db.prepare(
             "SELECT m.id,m.user_id,m.organization_id,json_extract(a.document,'$.name'),a.email,
                     json_extract(a.document,'$.avatarColor'),m.status,m.role,m.access_all,a.password<>''
              FROM organization_memberships m JOIN accounts a ON a.id=m.user_id
-             WHERE m.organization_id=?1 ORDER BY m.rowid",
+             WHERE m.organization_id=?1 AND (?2 IS NULL OR m.id=?2) ORDER BY m.rowid",
         )?;
-        let mut members = statement
-            .query_map([organization], |row| {
-                Ok(Member {
-                    id: row.get(0)?,
-                    user: row.get(1)?,
-                    organization: row.get(2)?,
-                    name: row.get(3)?,
-                    email: row.get(4)?,
-                    avatar: row.get(5)?,
-                    status: row.get(6)?,
-                    role: row.get(7)?,
-                    access_all: row.get(8)?,
-                    has_password: row.get(9)?,
-                    collections: Vec::new(),
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        let mut collections = self.db.prepare(
+    let mut members = statement
+        .query_map(params![organization, selected_member], |row| {
+            Ok(Member {
+                id: row.get(0)?,
+                user: row.get(1)?,
+                organization: row.get(2)?,
+                name: row.get(3)?,
+                email: row.get(4)?,
+                avatar: row.get(5)?,
+                status: row.get(6)?,
+                role: row.get(7)?,
+                access_all: row.get(8)?,
+                has_password: row.get(9)?,
+                collections: Vec::new(),
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut collections = db.prepare(
             "SELECT c.id,c.organization_id,g.read_only,g.hide_passwords,g.manage
              FROM organization_collection_users g JOIN organization_collections c ON c.id=g.collection_id
              WHERE c.organization_id=?1 AND g.user_id=?2 ORDER BY g.rowid",
         )?;
-        for member in &mut members {
-            member.collections = collections
-                .query_map(params![organization, member.user], |row| {
-                    Ok(Collection {
-                        id: row.get(0)?,
-                        organization: row.get(1)?,
-                        read_only: row.get(2)?,
-                        hide_passwords: row.get(3)?,
-                        manage: row.get(4)?,
-                    })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-        }
-        self.organization_members_cache = Members(members);
-        Ok(&self.organization_members_cache)
+    for member in &mut members {
+        member.collections = collections
+            .query_map(params![organization, member.user], |row| {
+                Ok(Collection {
+                    id: row.get(0)?,
+                    organization: row.get(1)?,
+                    read_only: row.get(2)?,
+                    hide_passwords: row.get(3)?,
+                    manage: row.get(4)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
     }
+    Ok(Members(members))
 }
 
 // Rocket Option<bool> is infallible with a strict inner parser: malformed or
-// duplicate fields become None. The upstream handler then defaults to false.
+// duplicate fields become None. Preserve that distinction for detail defaults.
 #[derive(Default)]
 struct Flag {
     seen: bool,
-    value: bool,
+    value: Option<bool>,
 }
 impl Flag {
     fn push(&mut self, value: &str) {
-        self.value = !self.seen
-            && (value.is_empty()
-                || ["on", "yes", "true"]
-                    .iter()
-                    .any(|truth| value.eq_ignore_ascii_case(truth)));
+        let parsed = if value.is_empty()
+            || ["on", "yes", "true"]
+                .iter()
+                .any(|v| value.eq_ignore_ascii_case(v))
+        {
+            Some(true)
+        } else if ["off", "no", "false"]
+            .iter()
+            .any(|v| value.eq_ignore_ascii_case(v))
+        {
+            Some(false)
+        } else {
+            None
+        };
+        self.value = if self.seen { None } else { parsed };
         self.seen = true;
     }
 }
-pub fn query(raw: Option<&str>) -> OrganizationMemberQuery {
+pub fn detail_query(raw: Option<&str>) -> OrganizationMemberDetailQuery {
     let (mut collections, mut groups) = (Flag::default(), Flag::default());
     if let Some(raw) = raw {
         for (name, value) in url::form_urlencoded::parse(raw.as_bytes()) {
@@ -157,10 +185,41 @@ pub fn query(raw: Option<&str>) -> OrganizationMemberQuery {
             }
         }
     }
-    OrganizationMemberQuery {
+    OrganizationMemberDetailQuery {
         include_collections: collections.value,
         include_groups: groups.value,
     }
+}
+pub fn query(raw: Option<&str>) -> OrganizationMemberQuery {
+    let parsed = detail_query(raw);
+    OrganizationMemberQuery {
+        include_collections: parsed.include_collections.unwrap_or(false),
+        include_groups: parsed.include_groups.unwrap_or(false),
+    }
+}
+pub fn detail_paths(
+    store: &mut Store,
+    owner: &str,
+    raw_org: &str,
+    raw_member: &str,
+    query: Option<&str>,
+) -> Result<(String, String), Failure> {
+    let (parsed_org, selected_org) =
+        organization_collections::selected(raw_org, query, "organizationId")?;
+    no_warden::VaultService::new(&mut *store).authorize_org_member_admin(owner, &selected_org)?;
+    let org = parsed_org.map_err(|_| {
+        Failure(
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "Invalid organization ID",
+        )
+    })?;
+    let member = crate::auth_requests::path_id(raw_member).map_err(|_| {
+        Failure(
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "Invalid member ID",
+        )
+    })?;
+    Ok((org, member))
 }
 
 pub fn path(

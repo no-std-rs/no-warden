@@ -47,6 +47,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Personal file Sends: reservation, multipart upload, file-URL issuance and binary GET | Immutable encrypted metadata, exact bytes, scoped capabilities and create-only storage | Six matching HTTP cases and a separate twenty-command official CLI comparison on both servers; configured policies and full transport remain open |
 | Organization-owner creation/discovery and initial collection | Confirmed Owner membership, exact public/profile/collection projections and last-owner deletion protection | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers |
 | Organization member discovery | Actual member/account metadata, exact nineteen-field projection and current-device/full-access guards | Six matching HTTP cases and sixteen matching official CLI commands on both actual targets; imported-role/query branches have separate provider/parser tests |
+| Organization member detail | Scoped Owner/Admin read and direct nineteen-field response | Expanded six matching HTTP cases and eighteen official CLI commands on both targets, with strict local already-confirmed rejection; no successful confirmation claim |
 | Single organization-collection update/delete | Complete grant replacement, opaque names, whitespace external-ID clearing and preserved cipher data | Allocation-free core and local rollback/cascade tests; six matching HTTP cases and twenty matching official CLI commands on both actual targets |
 | Organization-scoped collection list/create/single access-details | Confirmed manager authorization, exact projections, opaque names/external IDs and reference validation | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers; atomic local provider tests |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
@@ -109,7 +110,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 676 active workspace unit tests pass: 328 core, 239 host and 109 support,
+All 692 active workspace unit tests pass: 337 core, 245 host and 110 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -1124,6 +1125,8 @@ policy, notification and transport parity remain open.
 
 ## Organization member discovery
 
+The list-only milestone below precedes the expanded [member-detail proof](protocol.md#organization-member-detail).
+
 `GET /api/organizations/{orgId}/users` lists actual joined account and membership
 metadata under current-device, confirmed-manager and full-access guards. The
 response has nineteen explicit fields per member, not an empty placeholder or
@@ -1149,3 +1152,27 @@ collections and the host has no group rows; the HTTP query matrix cannot by
 itself distinguish Boolean decoding. Parser/provider tests establish those
 branches. No invitations, arbitrary member changes, group lifecycle, sharing or
 full organization/configuration parity is claimed.
+
+## Organization member detail
+
+`GET /api/organizations/{orgId}/users/{memberId}` adds scoped individual
+discovery with confirmed Owner/Admin admission. It returns the same nineteen
+explicit member fields directly, preserves account/vault/organization state
+during successful current-authority reads and distinguishes neither valid
+missing nor foreign membership IDs: both return 400 with the source message.
+Current-device, raw path, UUID and optional-query guards remain separate from
+member state. The source and release agree; see [the protocol
+details](protocol.md#organization-member-detail).
+
+The historical member-list milestone passed six cases/190 counted HTTP
+requests and a separate sixteen-command official CLI comparison on both actual
+targets. The expanded six-case comparison passes both targets with 240 counted
+requests, two password logins and two refreshes, excluding two modern
+fixtures/four registration requests. The separate eighteen-command official
+CLI comparison also passes both, with eighteen direct HTTP requests, two CLI
+password logins and one direct setup login, excluding one registration/two
+requests. Two strict exit-one JSON checks require
+`Error: User is already confirmed.` for the current confirmed Owner after the
+production detail GET and before any public-key lookup or confirmation POST.
+It does not claim a successful member lifecycle, endpoint trace, general
+policy/group support or complete transport/error parity.

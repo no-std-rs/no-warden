@@ -1883,6 +1883,9 @@ impl core::fmt::Debug for OrganizationCreateRequest<'_> {
 pub type OrganizationMemberListResponse<L> =
     crate::organization_members::OrganizationMemberListResponse<L>;
 
+/// Single public membership response backed by the same caller-owned indexed view.
+pub type OrganizationMemberResponse<L> = crate::organization_members::OrganizationMemberResponse<L>;
+
 /// Exact ordinary organization projection, excluding wrapped/private/public key strings.
 #[derive(Debug)]
 pub struct OrganizationResponse<'a> {

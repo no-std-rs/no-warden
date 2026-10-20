@@ -51,12 +51,18 @@ Six matching HTTP cases and a separate twenty-command official CLI comparison
 verify single-collection PUT and DELETE, renamed ciphertext, fresh-cache
 decryption and removal through allocation-free mutation contracts. General
 membership, group administration and shared-cipher writes remain open.
-Six matching HTTP cases verify real organization-member discovery through an
-allocation-free provider, including fresh account names/avatar metadata and
-preserved authority. A separate sixteen-command official CLI comparison passes
-both servers, including fresh member names without an intervening sync and
-fresh-cache membership/collection reads. General membership administration
-and cipher sharing remain open.
+The member-list milestone passed six matching HTTP cases and a separate
+sixteen-command official CLI comparison on both servers, including fresh
+account names/avatar metadata, preserved authority and fresh-cache recovery.
+General membership administration and cipher sharing remain open.
+
+The member-detail extension adds authenticated organization-scoped lookup with
+Owner/Admin authority and the same nineteen-field projection. The expanded
+six-case HTTP comparison and separate eighteen-command official CLI comparison
+pass both actual targets. Two strict checks verify the existing confirmed
+Owner's local `Error: User is already confirmed.` result after lookup; this
+does not implement invitation or confirmation mutations.
+
 The remaining surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden
 replacement. Client-side vault encryption stays with the client.

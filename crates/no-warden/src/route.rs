@@ -55,6 +55,7 @@ pub enum Route<'a> {
     OrganizationCreate,
     OrganizationGet(&'a str),
     OrganizationMembers(&'a str),
+    OrganizationMember(&'a str, &'a str),
     OrganizationCollections(&'a str),
     OrganizationCollectionCreate(&'a str),
     OrganizationCollectionUpdate(&'a str, &'a str),
@@ -237,6 +238,13 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                     }
                     return match (method, action) {
                         (Get, "users") => Some(OrganizationMembers(organization)),
+                        (Get, action) if action.starts_with("users/") => {
+                            let member = action.strip_prefix("users/")?;
+                            (!member.is_empty()
+                                && !member.contains('/')
+                                && member != "mini-details")
+                                .then_some(OrganizationMember(organization, member))
+                        }
                         (Get, "collections") => Some(OrganizationCollections(organization)),
                         (Post, "collections") => Some(OrganizationCollectionCreate(organization)),
                         (Put | Delete, action) => {
@@ -491,6 +499,33 @@ mod tests {
     }
 
     #[test]
+    fn single_organization_member_route_preserves_raw_ids_but_reserves_mini_details() {
+        for org in ["org", "bad.id", "%300000000-0000-0000-0000-000000000001"] {
+            for member in ["member", "bad.id", "malformed%", "public-keys", "confirm"] {
+                let path = std::format!(
+                    "/api/organizations/{org}/users/{member}/?includeGroups=true&organizationId=owned"
+                );
+                assert_eq!(
+                    classify(Method::Get, &path),
+                    Some(Route::OrganizationMember(org, member))
+                );
+                assert!(Route::OrganizationMember(org, member).requires_authentication());
+                for method in [Method::Post, Method::Put, Method::Delete] {
+                    assert_eq!(classify(method, &path), None);
+                }
+            }
+        }
+        for path in [
+            "/api/organizations//users/member",
+            "/api/organizations/org/users/mini-details",
+            "/api/organizations/org/users/mini-details/?includeGroups=true",
+            "/api/organizations/org/users/member/details",
+        ] {
+            assert_eq!(classify(Method::Get, path), None);
+        }
+    }
+
+    #[test]
     fn organization_member_discovery_route_is_authenticated_and_preserves_guard_inputs() {
         for org in [
             "org",
@@ -512,7 +547,7 @@ mod tests {
         }
         for path in [
             "/api/organizations//users",
-            "/api/organizations/org/users/member",
+            "/api/organizations/org/users/member/unsupported",
             "/api/organizations/org/users/mini-details",
             "/api/organizations/org/users/member/details",
         ] {

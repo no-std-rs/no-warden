@@ -18,6 +18,27 @@ pub struct OrganizationMemberQuery {
     pub include_groups: bool,
 }
 
+/// Optional semantic query values for the single-member endpoint. An adapter maps
+/// absent, malformed or duplicated HTTP Option<bool> fields to None. Explicit false
+/// remains distinct: only None inherits the resolved include_groups value.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct OrganizationMemberDetailQuery {
+    pub include_collections: Option<bool>,
+    pub include_groups: Option<bool>,
+}
+impl OrganizationMemberDetailQuery {
+    pub const fn resolved(self) -> OrganizationMemberQuery {
+        let groups = matches!(self.include_groups, Some(true));
+        OrganizationMemberQuery {
+            include_groups: groups,
+            include_collections: match self.include_collections {
+                Some(value) => value,
+                None => groups,
+            },
+        }
+    }
+}
+
 /// Joined public member/account metadata. Status and role are the stored values;
 /// the explicit serializer handles revoked status and the Manager/custom wire mapping.
 /// The organization ID is an internal association and never serialized here.
@@ -142,6 +163,40 @@ impl<T: OrganizationMemberStorage + ?Sized> OrganizationMemberStorage for &mut T
     }
 }
 
+/// Opt-in single-member discovery, reusing the existing indexed response view.
+/// A successful provider result contains exactly one membership, scoped by BOTH
+/// organization and membership ID; missing/foreign members return None. Do not load
+/// or expose another organization's member metadata. Preserve the same stable-view,
+/// nested-join and read-only guarantees as OrganizationMemberStorage.
+pub trait OrganizationMemberDetailStorage: OrganizationMemberStorage {
+    fn organization_member(
+        &mut self,
+        organization: &str,
+        member: &str,
+    ) -> Result<Option<Self::Members<'_>>, Self::Error>;
+}
+impl<T: OrganizationMemberDetailStorage + ?Sized> OrganizationMemberDetailStorage for &mut T {
+    fn organization_member(
+        &mut self,
+        organization: &str,
+        member: &str,
+    ) -> Result<Option<Self::Members<'_>>, Self::Error> {
+        (**self).organization_member(organization, member)
+    }
+}
+
+/// A sealed single public membership projection, using the list's nineteen fields.
+/// It is not a list envelope and cannot authorize membership mutation.
+pub struct OrganizationMemberResponse<L> {
+    records: L,
+    query: OrganizationMemberQuery,
+}
+impl<L> core::fmt::Debug for OrganizationMemberResponse<L> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationMemberResponse([REDACTED])")
+    }
+}
+
 /// Sealed three-field list envelope, with nineteen-field public member projections.
 /// No organization/account keys or provider-only organization associations are emitted.
 pub struct OrganizationMemberListResponse<L> {
@@ -169,6 +224,119 @@ fn foreign() -> ApiError {
         "Organization member view belongs to another organization",
     )
 }
+fn validate_member<'a, L: OrganizationMemberListData + ?Sized>(
+    records: &'a L,
+    index: usize,
+    organization: &str,
+    query: OrganizationMemberQuery,
+) -> Result<OrganizationMemberRecord<'a>, ApiError> {
+    let row = records.get(index).ok_or_else(incomplete)?;
+    if row.organization_id != organization {
+        return Err(foreign());
+    }
+    if query.include_groups && records.groups_enabled() {
+        for index2 in 0..records.groups_len(index) {
+            if records
+                .group(index, index2)
+                .ok_or_else(incomplete)?
+                .organization_id
+                != organization
+            {
+                return Err(foreign());
+            }
+        }
+    }
+    if collections_visible(row, records.groups_enabled(), query) {
+        for index2 in 0..records.collections_len(index) {
+            if records
+                .collection(index, index2)
+                .ok_or_else(incomplete)?
+                .organization_id
+                != organization
+            {
+                return Err(foreign());
+            }
+        }
+    }
+    Ok(row)
+}
+fn missing_member() -> ApiError {
+    ApiError::invalid(
+        "member",
+        "The specified user isn't a member of the organization",
+    )
+}
+fn admin_required() -> ApiError {
+    ApiError::new(
+        ErrorKind::Unauthorized,
+        "You need to be Admin or Owner to call this endpoint",
+    )
+}
+impl<S: OrganizationMemberDetailStorage> VaultService<S> {
+    /// Run this request guard before adapter UUID/query guards, then retain the
+    /// authenticated lock/snapshot through get_org_member and serialization.
+    pub fn authorize_org_member_admin(
+        &mut self,
+        owner: &str,
+        organization: &str,
+    ) -> Result<(), ApiError> {
+        crate::service::require_owner(owner)?;
+        let member = self
+            .storage_mut()
+            .collection_membership(owner, organization)
+            .map_err(S::map_error)?
+            .ok_or_else(admin_required)?
+            .membership;
+        if member.user_id != owner
+            || member.organization_id != organization
+            || member.status != 2
+            || !matches!(member.role, 0 | 1)
+        {
+            return Err(admin_required());
+        }
+        Ok(())
+    }
+    pub fn get_org_member(
+        &mut self,
+        owner: &str,
+        organization: &str,
+        member: &str,
+        query: &OrganizationMemberDetailQuery,
+    ) -> Result<OrganizationMemberResponse<S::Members<'_>>, ApiError> {
+        self.authorize_org_member_admin(owner, organization)?;
+        let records = self
+            .storage_mut()
+            .organization_member(organization, member)
+            .map_err(S::map_error)?
+            .ok_or_else(missing_member)?;
+        if records.len() != 1 {
+            return Err(incomplete());
+        }
+        let row = records.get(0).ok_or_else(incomplete)?;
+        if row.membership_id != member || row.organization_id != organization {
+            return Err(missing_member());
+        }
+        let query = query.resolved();
+        validate_member(&records, 0, organization, query)?;
+        Ok(OrganizationMemberResponse { records, query })
+    }
+}
+impl<L: OrganizationMemberListData> Serialize for OrganizationMemberResponse<L> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let row = self
+            .records
+            .get(0)
+            .ok_or_else(|| serde::ser::Error::custom("Incomplete organization member view"))?;
+        Member {
+            records: &self.records,
+            index: 0,
+            row,
+            query: self.query,
+        }
+        .serialize(serializer)
+    }
+}
+
 impl<S: OrganizationMemberStorage> VaultService<S> {
     pub fn list_org_members(
         &mut self,
@@ -185,34 +353,7 @@ impl<S: OrganizationMemberStorage> VaultService<S> {
             .organization_members(organization)
             .map_err(S::map_error)?;
         for index in 0..records.len() {
-            let row = records.get(index).ok_or_else(incomplete)?;
-            if row.organization_id != organization {
-                return Err(foreign());
-            }
-            if query.include_groups && records.groups_enabled() {
-                for group in 0..records.groups_len(index) {
-                    if records
-                        .group(index, group)
-                        .ok_or_else(incomplete)?
-                        .organization_id
-                        != organization
-                    {
-                        return Err(foreign());
-                    }
-                }
-            }
-            if collections_visible(row, records.groups_enabled(), *query) {
-                for collection in 0..records.collections_len(index) {
-                    if records
-                        .collection(index, collection)
-                        .ok_or_else(incomplete)?
-                        .organization_id
-                        != organization
-                    {
-                        return Err(foreign());
-                    }
-                }
-            }
+            validate_member(&records, index, organization, *query)?;
         }
         Ok(OrganizationMemberListResponse {
             records,
@@ -516,6 +657,7 @@ mod tests {
         calls: Vec<&'static str>,
         fail: Option<&'static str>,
         persisted: [u64; 6],
+        detail_missing: bool,
     }
     impl Memory {
         fn new() -> Self {
@@ -537,6 +679,7 @@ mod tests {
                 calls: Vec::new(),
                 fail: None,
                 persisted: [2, 3, 5, 7, 11, 13],
+                detail_missing: false,
             }
         }
         fn step(&mut self, name: &'static str) -> Result<(), ()> {
@@ -688,6 +831,32 @@ mod tests {
             Ok(&self.view)
         }
     }
+    impl OrganizationMemberDetailStorage for Memory {
+        fn organization_member(
+            &mut self,
+            organization: &str,
+            member: &str,
+        ) -> Result<Option<Self::Members<'_>>, ()> {
+            self.step("member")?;
+            assert_eq!((organization, member), ("org", "member"));
+            Ok((!self.detail_missing).then_some(&self.view))
+        }
+    }
+    fn detail_query() -> OrganizationMemberDetailQuery {
+        OrganizationMemberDetailQuery {
+            include_collections: Some(true),
+            include_groups: Some(true),
+        }
+    }
+    fn single(memory: &mut Memory, query: OrganizationMemberDetailQuery) -> Value {
+        serde_json::to_value(
+            VaultService::new(memory)
+                .get_org_member("actor", "org", "member", &query)
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
     fn both() -> OrganizationMemberQuery {
         OrganizationMemberQuery {
             include_collections: true,
@@ -1031,5 +1200,230 @@ mod tests {
             std::format!("{response:?}"),
             "OrganizationMemberListResponse([REDACTED])"
         );
+    }
+    #[test]
+    fn single_member_admin_guard_accepts_owner_admin_without_access_all_and_rejects_manager() {
+        let mut memory = Memory::new();
+        assert_eq!(
+            VaultService::new(&mut memory)
+                .get_org_member("", "org", "member", &detail_query())
+                .unwrap_err()
+                .status_code(),
+            401
+        );
+        assert!(memory.calls.is_empty());
+        for role in [0, 1] {
+            let mut memory = Memory::new();
+            memory.actor.as_mut().unwrap().membership.role = role;
+            memory.actor.as_mut().unwrap().access_all = false;
+            assert_eq!(single(&mut memory, detail_query())["id"], "member");
+            assert_eq!(memory.calls, ["membership", "member"]);
+        }
+        for role in [2, 3, 4] {
+            for access_all in [false, true] {
+                let mut memory = Memory::new();
+                memory.actor.as_mut().unwrap().membership.role = role;
+                memory.actor.as_mut().unwrap().access_all = access_all;
+                let error = VaultService::new(&mut memory)
+                    .get_org_member("actor", "org", "member", &detail_query())
+                    .unwrap_err();
+                assert_eq!(
+                    (error.status_code(), error.message),
+                    (401, "You need to be Admin or Owner to call this endpoint")
+                );
+                assert_eq!(memory.calls, ["membership"]);
+            }
+        }
+    }
+    #[test]
+    fn single_member_admin_guard_binds_actor_organization_and_confirmed_status() {
+        for variant in 0..5 {
+            let mut memory = Memory::new();
+            match variant {
+                0 => memory.actor = None,
+                1 => memory.actor.as_mut().unwrap().membership.user_id = "foreign",
+                2 => memory.actor.as_mut().unwrap().membership.organization_id = "foreign",
+                3 => memory.actor.as_mut().unwrap().membership.status = 1,
+                _ => memory.actor.as_mut().unwrap().membership.status = -126,
+            }
+            assert_eq!(
+                VaultService::new(&mut memory)
+                    .authorize_org_member_admin("actor", "org")
+                    .unwrap_err()
+                    .status_code(),
+                401
+            );
+            assert!(!memory.calls.contains(&"member"));
+        }
+    }
+    #[test]
+    fn single_member_missing_foreign_and_wrong_identity_have_same_scoped_error() {
+        for variant in 0..3 {
+            let mut memory = Memory::new();
+            match variant {
+                0 => memory.detail_missing = true,
+                1 => memory.view.rows[0].organization_id = "foreign",
+                _ => memory.view.rows[0].membership_id = "wrong-member",
+            }
+            let error = VaultService::new(&mut memory)
+                .get_org_member("actor", "org", "member", &detail_query())
+                .unwrap_err();
+            assert_eq!(
+                (error.status_code(), error.message),
+                (400, "The specified user isn't a member of the organization")
+            );
+            assert_eq!(memory.calls, ["membership", "member"]);
+        }
+    }
+    #[test]
+    fn single_member_provider_must_return_one_complete_scoped_record() {
+        for count in [0, 2] {
+            let mut memory = Memory::new();
+            memory.view.rows = vec![row(); count];
+            assert_eq!(
+                VaultService::new(&mut memory)
+                    .get_org_member("actor", "org", "member", &detail_query())
+                    .unwrap_err()
+                    .status_code(),
+                500
+            );
+        }
+        for hole in 1..=3 {
+            let mut memory = Memory::new();
+            memory.view.hole = hole;
+            assert_eq!(
+                VaultService::new(&mut memory)
+                    .get_org_member("actor", "org", "member", &detail_query())
+                    .unwrap_err()
+                    .status_code(),
+                500
+            );
+        }
+        for group in [true, false] {
+            let mut memory = Memory::new();
+            if group {
+                memory.view.groups[0].organization_id = "foreign";
+            } else {
+                memory.view.collections[0].organization_id = "foreign";
+            }
+            assert_eq!(
+                VaultService::new(&mut memory)
+                    .get_org_member("actor", "org", "member", &detail_query())
+                    .unwrap_err()
+                    .status_code(),
+                401
+            );
+        }
+    }
+    #[test]
+    fn single_member_optional_collection_flag_inherits_groups_only_when_not_explicit() {
+        for groups in [None, Some(false), Some(true)] {
+            for collections in [None, Some(false), Some(true)] {
+                for enabled in [false, true] {
+                    let query = OrganizationMemberDetailQuery {
+                        include_groups: groups,
+                        include_collections: collections,
+                    };
+                    let resolved = query.resolved();
+                    let expected_groups = groups.unwrap_or(false);
+                    let expected_collections = collections.unwrap_or(expected_groups);
+                    assert_eq!(
+                        resolved,
+                        OrganizationMemberQuery {
+                            include_groups: expected_groups,
+                            include_collections: expected_collections
+                        }
+                    );
+                    let mut memory = Memory::new();
+                    memory.view.enabled = enabled;
+                    let response = single(&mut memory, query);
+                    assert_eq!(
+                        response["groups"].as_array().unwrap().len(),
+                        usize::from(enabled && expected_groups)
+                    );
+                    assert_eq!(
+                        response["collections"].as_array().unwrap().len(),
+                        usize::from(expected_collections)
+                    );
+                }
+            }
+        }
+        // Malformed/duplicate optional HTTP fields are represented as None by the adapter.
+        assert!(
+            OrganizationMemberDetailQuery {
+                include_groups: Some(true),
+                include_collections: None
+            }
+            .resolved()
+            .include_collections
+        );
+        assert!(
+            !OrganizationMemberDetailQuery {
+                include_groups: Some(true),
+                include_collections: Some(false)
+            }
+            .resolved()
+            .include_collections
+        );
+    }
+    #[test]
+    fn single_member_reuses_exact_list_projection_for_all_listed_member_statuses() {
+        for status in [-128, -127, -126, -1, 0, 1, 2] {
+            for role in [0, 2, 3, 4] {
+                let mut memory = Memory::new();
+                memory.view.rows[0].status = status;
+                memory.view.rows[0].role = role;
+                let list = serialize(&mut memory, both());
+                let response = single(&mut memory, detail_query());
+                assert_eq!(response, list["data"][0]);
+                assert_eq!(response.as_object().unwrap().len(), 19);
+                assert!(response.get("data").is_none());
+                assert!(response.get("organizationId").is_none());
+                assert!(response.get("key").is_none());
+            }
+        }
+    }
+    #[test]
+    fn single_member_provider_errors_are_typed_and_all_reads_preserve_state() {
+        for step in ["membership", "member"] {
+            let mut memory = Memory::new();
+            memory.fail = Some(step);
+            let before = memory.persisted;
+            assert_eq!(
+                VaultService::new(&mut memory)
+                    .get_org_member("actor", "org", "member", &detail_query())
+                    .unwrap_err()
+                    .status_code(),
+                409
+            );
+            assert_eq!(memory.persisted, before);
+            assert_eq!(memory.calls.last(), Some(&step));
+        }
+        let mut memory = Memory::new();
+        let before = memory.persisted;
+        single(&mut memory, OrganizationMemberDetailQuery::default());
+        assert_eq!(memory.persisted, before);
+    }
+    #[test]
+    fn single_member_sealed_response_is_redacted_and_wire_alias_preserves_direct_shape() {
+        let mut memory = Memory::new();
+        let mut service = VaultService::new(&mut memory);
+        let response: crate::wire::OrganizationMemberResponse<_> = service
+            .get_org_member(
+                "actor",
+                "org",
+                "member",
+                &OrganizationMemberDetailQuery::default(),
+            )
+            .unwrap();
+        assert_eq!(
+            std::format!("{response:?}"),
+            "OrganizationMemberResponse([REDACTED])"
+        );
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(value["id"], "member");
+        assert_eq!(value["groups"], json!([]));
+        assert_eq!(value["collections"], json!([]));
+        assert_eq!(value.as_object().unwrap().len(), 19);
     }
 }
