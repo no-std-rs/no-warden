@@ -2013,6 +2013,23 @@ impl core::fmt::Debug for OrganizationConfirmRequest<'_> {
     }
 }
 
+/// Optional caller-bounded bulk confirmation decoder. A host can use an uncapped
+/// owned vector via OrganizationBulkConfirmData instead. Root [null] is valid; [] is
+/// not. All nested entries must be decoded before any service mutation begins.
+#[derive(Deserialize)]
+pub struct OrganizationBulkConfirmRequest<'a, const N: usize> {
+    #[serde(borrow)]
+    pub keys: Option<BoundedList<OrganizationConfirmRequest<'a>, N>>,
+}
+impl<const N: usize> core::fmt::Debug for OrganizationBulkConfirmRequest<'_, N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationBulkConfirmRequest([REDACTED])")
+    }
+}
+/// Explicitly serialized ordered bulk results, borrowing caller input/output storage.
+pub type OrganizationBulkConfirmResponse<'out, 'data> =
+    crate::organization_confirmations::OrganizationBulkConfirmResponse<'out, 'data>;
+
 /// Borrowed owner creation input. Dynamic number/string decoding needs a deserializer
 /// with deserialize_any support; adapters can construct this view after owned decoding.
 #[derive(Deserialize)]

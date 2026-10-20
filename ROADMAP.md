@@ -63,8 +63,13 @@ invoke the pinned official Bitwarden CLI as an external process.
 - [x] Single-member confirmation and confirmed recipient collection reads:
   allocation-free provider, six matching actual HTTP cases and 23 matching
   official CLI commands with selective recipient decryption after login, unlock
-  and fresh-cache login. Bulk confirmation, SMTP, policy/group lifecycle and
-  shared-cipher writes remain open.
+  and fresh-cache login. Bulk confirmation is tracked separately; SMTP,
+  policy/group lifecycle and shared-cipher writes remain open.
+- [x] Bulk organization-member confirmation subset: allocation-free ordered
+  service, typed results and committed-prefix behavior, with six matching
+  actual HTTP cases and 21 matching official CLI state/decryption commands
+  after HTTP bulk setup. No CLI bulk caller, SMTP, sharing or complete
+  policy/backend-error parity is claimed.
 - [ ] Attachments, Sends, event notifications and websocket transport.
 - [ ] Two-factor authentication, passkeys, SSO and administrative APIs.
 - [ ] Full import/export compatibility, remaining formats and variants, and upstream protocol regression fixtures.

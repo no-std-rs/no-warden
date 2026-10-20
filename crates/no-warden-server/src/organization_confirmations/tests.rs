@@ -39,7 +39,7 @@ fn request() -> OrganizationConfirmRequest<'static> {
         key: Some(Secret::new("opaque\0wrapped-organization-key雪")),
     }
 }
-fn snapshot(store: &Store) -> BTreeMap<String, Vec<Vec<SqlValue>>> {
+pub(crate) fn snapshot(store: &Store) -> BTreeMap<String, Vec<Vec<SqlValue>>> {
     let mut names = store
         .db
         .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")

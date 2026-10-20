@@ -1966,3 +1966,48 @@ two direct setup logins. It performs actual confirmation and verifies selective
 recipient collection decryption after login, unlock and fresh-cache login.
 Bulk confirmation, SMTP, policy administration, groups, sharing and complete
 transport/error parity remain open.
+
+
+## Bulk organization-member confirmation
+
+The [pinned bulk handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L1302-L1352)
+and [release 1.37.4 handler](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/organizations.rs#L1300-L1350)
+agree on `POST /api/organizations/{orgId}/users/confirm`. Current-device
+Owner/Admin authority precedes organization UUID and whole-body JSON guards.
+The canonical `keys` field is optional; its entries reuse optional `id` then
+`key` fields in source order. Missing/null keys and an empty vector produce
+200 with a three-field list envelope and empty data, rather than an empty body.
+Unknown names are ignored. Raw string body IDs have no UUID parameter guard.
+
+The complete JSON document must decode before processing starts. A later
+schema error therefore causes no writes. Once decoded, entries run in order,
+without deduplication, through the single-confirmation validation and mutation.
+Each result has exactly id, error and the case-sensitive object value
+`OrganizationBulkConfirmResponseModel`. A successful row has an empty error;
+a failed item records its error and processing continues. A missing/null item
+ID instead aborts the outer request with 400, retaining earlier commits but
+returning no partial result list. An empty string ID is present and yields a
+per-item validation error. The operation is not batch-atomic.
+
+The row error uses [upstream Debug formatting](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/error.rs#L110-L141),
+not the ordinary HTTP error envelope or this core's redacted Debug output.
+Supported simple domain errors contain the message without quotes or a type
+prefix. Distinct user/log messages and sourced database/SMTP errors have other
+formats; complete backend/configuration failure parity remains open. Each
+successful recipient mutation retains its single-confirmation revision and
+collection/profile effects. Local atomicity for an individual item does not
+roll back earlier items.
+
+The [shared client bulk API](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/admin-console/src/common/organization-user/services/default-organization-user-api.service.ts#L230-L241)
+constructs this request, but the shipped CLI confirmation command calls only
+the single-member POST. Actual client key/decryption checks after direct HTTP
+bulk setup cannot establish a CLI bulk caller or captured request trace.
+Both actual targets pass six focused HTTP cases: 211 counted requests plus
+ten registration requests for five fixtures, two password logins and two
+refreshes. A separate official CLI 2026.10.0 comparison passes 21 commands on
+both, with 33 direct HTTP requests plus four registration requests, three CLI
+password logins and two direct setup logins. It verifies recipient state and
+collection decryption after HTTP bulk setup. No CLI bulk caller, internal
+request count or endpoint trace is inferred. SMTP, configured policies,
+backend diagnostic variants, remaining member/group administration and
+shared-cipher writes remain open.

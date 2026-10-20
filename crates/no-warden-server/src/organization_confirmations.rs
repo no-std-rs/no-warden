@@ -91,4 +91,4 @@ impl OrganizationConfirmationStorage for Store {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
