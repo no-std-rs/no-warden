@@ -59,6 +59,7 @@ pub enum Route<'a> {
     OrganizationMemberConfirm(&'a str, &'a str),
     OrganizationBulkConfirm(&'a str),
     OrganizationMember(&'a str, &'a str),
+    OrganizationBulkMemberDelete(&'a str),
     OrganizationMemberDelete(&'a str, &'a str),
     OrganizationCollections(&'a str),
     OrganizationCollectionCreate(&'a str),
@@ -242,6 +243,7 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                     }
                     return match (method, action) {
                         (Get, "users") => Some(OrganizationMembers(organization)),
+                        (Delete, "users") => Some(OrganizationBulkMemberDelete(organization)),
                         (Post, "users/invite") => Some(OrganizationInvite(organization)),
                         (Post, "users/confirm") => Some(OrganizationBulkConfirm(organization)),
                         (Post, action) if action.starts_with("users/") => {
@@ -453,6 +455,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn organization_bulk_member_removal_is_authenticated_delete_only_with_raw_org() {
+        for org in ["org", "bad.id", "%30org", "malformed%"] {
+            let uri = std::format!("/api/organizations/{org}/users/?organizationId=other");
+            let route = Route::OrganizationBulkMemberDelete(org);
+            assert_eq!(classify(Method::Delete, &uri), Some(route));
+            assert!(route.requires_authentication());
+            for method in [Method::Post, Method::Put, Method::Options] {
+                assert_eq!(classify(method, &uri), None);
+            }
+        }
+        assert_eq!(classify(Method::Delete, "/api/organizations//users"), None);
+        assert_eq!(
+            classify(Method::Delete, "/api/organizations/org/users/member"),
+            Some(Route::OrganizationMemberDelete("org", "member"))
+        );
+        assert_eq!(
+            classify(
+                Method::Delete,
+                "/api/organizations/org/users/member/confirm"
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn organization_member_removal_keeps_raw_dynamic_ids_and_reserves_no_delete_literals() {
         for (org, member) in [
             ("org", "member"),
@@ -471,8 +498,6 @@ mod tests {
             assert_eq!(classify(Method::Options, &path), None);
         }
         for path in [
-            "/api/organizations/org/users",
-            "/api/organizations/org/users/",
             "/api/organizations//users/member",
             "/api/organizations/org/users/member/confirm",
             "/api/organizations/org/users/member/extra",
@@ -693,7 +718,11 @@ mod tests {
                 Some(Route::OrganizationMembers(org))
             );
             assert!(Route::OrganizationMembers(org).requires_authentication());
-            for method in [Method::Post, Method::Put, Method::Delete] {
+            assert_eq!(
+                classify(Method::Delete, &path),
+                Some(Route::OrganizationBulkMemberDelete(org))
+            );
+            for method in [Method::Post, Method::Put] {
                 assert_eq!(classify(method, &path), None);
             }
         }

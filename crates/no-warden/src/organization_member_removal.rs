@@ -1,4 +1,4 @@
-//! Allocation-free single organization-member removal.
+//! Allocation-free single and ordered bulk organization-member removal.
 //!
 //! HTTP authentication/path decoding, storage, clocks and notifications remain external.
 //! This removes an organization membership, never the underlying personal account.
@@ -138,6 +138,24 @@ impl<S: OrganizationMemberRemovalStorage> VaultService<S> {
         member: &str,
     ) -> Result<(), ApiError> {
         let actor_role = self.org_member_admin_role(owner, organization)?;
+        let target = self.removal_target_with_role(organization, member, actor_role)?;
+        let remove_invitation =
+            !target.mail_enabled && target.user_exists && !target.other_invited_memberships;
+        let plan = ValidatedOrganizationMemberRemoval {
+            owner,
+            target: &target,
+            remove_invitation,
+        };
+        self.storage_mut()
+            .remove_organization_member(&plan)
+            .map_err(S::map_error)
+    }
+    fn removal_target_with_role(
+        &mut self,
+        organization: &str,
+        member: &str,
+        actor_role: i32,
+    ) -> Result<OrganizationMemberRemovalRecord<S::Id>, ApiError> {
         let target = self
             .storage_mut()
             .removal_member(organization, member)
@@ -161,16 +179,297 @@ impl<S: OrganizationMemberRemovalStorage> VaultService<S> {
         {
             return Err(invalid("Can't delete the last owner"));
         }
-        let remove_invitation =
-            !target.mail_enabled && target.user_exists && !target.other_invited_memberships;
-        let plan = ValidatedOrganizationMemberRemoval {
+        Ok(target)
+    }
+}
+
+/// Stable, completely decoded, caller-owned IDs. There is no intrinsic item limit.
+/// A host can implement this over owned strings; borrowed bounded decoding is optional.
+/// Preserve every string byte, input order and duplicates. All JSON must be decoded
+/// before entering the service, so later schema failures cannot follow earlier writes.
+pub trait OrganizationBulkMemberRemovalData {
+    fn len(&self) -> usize;
+    fn get(&self, index: usize) -> Option<&str>;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+impl<T: OrganizationBulkMemberRemovalData + ?Sized> OrganizationBulkMemberRemovalData for &T {
+    fn len(&self) -> usize {
+        (**self).len()
+    }
+    fn get(&self, index: usize) -> Option<&str> {
+        (**self).get(index)
+    }
+}
+impl<const N: usize> OrganizationBulkMemberRemovalData
+    for crate::wire::OrganizationBulkMemberRemovalRequest<'_, N>
+{
+    fn len(&self) -> usize {
+        self.ids.len()
+    }
+    fn get(&self, index: usize) -> Option<&str> {
+        self.ids.get(index).copied()
+    }
+}
+
+/// Sealed authorization for one invocation. It is neither clonable nor serializable,
+/// and no response exposes it. Providers capture the original actor membership identity
+/// in their owned Batch context rather than borrowing mutable storage through this value.
+pub struct OrganizationMemberRemovalBatchAuthority<'a> {
+    owner: &'a str,
+    organization: &'a str,
+    actor_role: i32,
+}
+impl<'a> OrganizationMemberRemovalBatchAuthority<'a> {
+    pub const fn owner(&self) -> &'a str {
+        self.owner
+    }
+    pub const fn organization(&self) -> &'a str {
+        self.organization
+    }
+    pub const fn actor_role(&self) -> i32 {
+        self.actor_role
+    }
+}
+impl core::fmt::Debug for OrganizationMemberRemovalBatchAuthority<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationMemberRemovalBatchAuthority([REDACTED])")
+    }
+}
+
+/// A batch-only write plan. Its underlying removal has the same target/count/marker
+/// rules as a single removal, but cannot be sent through the single live-actor hook.
+/// actor_removed_by_batch is set only after this invocation committed a self-removal.
+pub struct ValidatedOrganizationBulkMemberRemoval<'a, I> {
+    removal: ValidatedOrganizationMemberRemoval<'a, I>,
+    actor_role: i32,
+    actor_removed_by_batch: bool,
+}
+impl<I: AsRef<str>> ValidatedOrganizationBulkMemberRemoval<'_, I> {
+    pub const fn removal(&self) -> &ValidatedOrganizationMemberRemoval<'_, I> {
+        &self.removal
+    }
+    pub const fn actor_role(&self) -> i32 {
+        self.actor_role
+    }
+    pub const fn actor_removed_by_batch(&self) -> bool {
+        self.actor_removed_by_batch
+    }
+    pub fn removes_actor(&self) -> bool {
+        self.removal.user_id() == self.removal.owner()
+    }
+}
+impl<I> core::fmt::Debug for ValidatedOrganizationBulkMemberRemoval<'_, I> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ValidatedOrganizationBulkMemberRemoval([REDACTED])")
+    }
+}
+
+/// Optional batch capability, separate from single-operation authorization. Begin is
+/// read-only and must capture the original confirmed actor membership ID, owner, org
+/// and role. Hold a trusted operation context through the invocation. Each item has
+/// its own atomic commit; errors must not undo successful earlier items, advance the
+/// batch's self-removal state or leak provider diagnostics into public errors.
+///
+/// Before self-removal succeeds, recheck that original live actor identity/role/status.
+/// After a successful self-removal in THIS context, require both the sealed plan flag
+/// and provider's matching self-removal proof, and require that no replacement actor
+/// membership exists. Never treat unrelated disappearance, revocation or reinvitation
+/// as successful self-removal. Target identity/hierarchy, live last-confirmed-owner
+/// count, invitation decision and all scoped cleanup/revision obligations of the
+/// single removal provider still apply, using the captured actor role.
+///
+/// This deliberately preserves stronger local stale-actor/atomic-item checks than an
+/// upstream request-snapshot loop. It does not weaken the existing single write hook.
+/// Batch context must not escape this invocation or authorize another request. Build
+/// any fallible result state before committing; do not report failure after a commit.
+pub trait OrganizationBulkMemberRemovalStorage: OrganizationMemberRemovalStorage {
+    type Batch;
+    fn begin_member_removal_batch(
+        &mut self,
+        authority: &OrganizationMemberRemovalBatchAuthority<'_>,
+    ) -> Result<Self::Batch, Self::Error>;
+    fn remove_organization_member_in_batch(
+        &mut self,
+        batch: &mut Self::Batch,
+        plan: &ValidatedOrganizationBulkMemberRemoval<'_, Self::Id>,
+    ) -> Result<(), Self::Error>;
+}
+impl<T: OrganizationBulkMemberRemovalStorage + ?Sized> OrganizationBulkMemberRemovalStorage
+    for &mut T
+{
+    type Batch = T::Batch;
+    fn begin_member_removal_batch(
+        &mut self,
+        authority: &OrganizationMemberRemovalBatchAuthority<'_>,
+    ) -> Result<Self::Batch, Self::Error> {
+        (**self).begin_member_removal_batch(authority)
+    }
+    fn remove_organization_member_in_batch(
+        &mut self,
+        batch: &mut Self::Batch,
+        plan: &ValidatedOrganizationBulkMemberRemoval<'_, Self::Id>,
+    ) -> Result<(), Self::Error> {
+        (**self).remove_organization_member_in_batch(batch, plan)
+    }
+}
+
+/// Public, exact-ID outcome with only a safely mapped public error message.
+/// Storage/notification Debug causes are intentionally not reproduced.
+#[derive(Clone, Copy)]
+pub struct OrganizationBulkMemberRemovalResult<'a> {
+    id: &'a str,
+    error: Option<ApiError>,
+}
+impl<'a> OrganizationBulkMemberRemovalResult<'a> {
+    pub const fn id(&self) -> &'a str {
+        self.id
+    }
+    pub const fn error(&self) -> Option<ApiError> {
+        self.error
+    }
+}
+impl core::fmt::Debug for OrganizationBulkMemberRemovalResult<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationBulkMemberRemovalResult([REDACTED])")
+    }
+}
+impl serde::Serialize for OrganizationBulkMemberRemovalResult<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut row = serializer.serialize_map(Some(3))?;
+        row.serialize_entry("object", "OrganizationBulkConfirmResponseModel")?;
+        row.serialize_entry("id", self.id)?;
+        row.serialize_entry("error", self.error.map_or("", |error| error.message))?;
+        row.end()
+    }
+}
+/// Complete ordered response borrowing both caller input and output storage.
+/// Slots beyond the input length are not serialized.
+pub struct OrganizationBulkMemberRemovalResponse<'out, 'data> {
+    results: &'out [Option<OrganizationBulkMemberRemovalResult<'data>>],
+}
+impl<'data> OrganizationBulkMemberRemovalResponse<'_, 'data> {
+    pub const fn len(&self) -> usize {
+        self.results.len()
+    }
+    pub const fn is_empty(&self) -> bool {
+        self.results.is_empty()
+    }
+    pub fn get(&self, index: usize) -> Option<&OrganizationBulkMemberRemovalResult<'data>> {
+        self.results.get(index)?.as_ref()
+    }
+}
+impl core::fmt::Debug for OrganizationBulkMemberRemovalResponse<'_, '_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationBulkMemberRemovalResponse([REDACTED])")
+    }
+}
+impl serde::Serialize for OrganizationBulkMemberRemovalResponse<'_, '_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{SerializeMap, SerializeSeq};
+        struct Rows<'a, 'b>(&'a [Option<OrganizationBulkMemberRemovalResult<'b>>]);
+        impl serde::Serialize for Rows<'_, '_> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                let mut rows = serializer.serialize_seq(Some(self.0.len()))?;
+                for row in self.0 {
+                    rows.serialize_element(row.as_ref().ok_or_else(|| {
+                        serde::ser::Error::custom("Incomplete bulk member removal output")
+                    })?)?;
+                }
+                rows.end()
+            }
+        }
+        let mut result = serializer.serialize_map(Some(3))?;
+        result.serialize_entry("data", &Rows(self.results))?;
+        result.serialize_entry("object", "list")?;
+        result.serialize_entry("continuationToken", &Option::<&str>::None)?;
+        result.end()
+    }
+}
+impl<S: OrganizationBulkMemberRemovalStorage> VaultService<S> {
+    /// Authorize once, validate full input/output views, then commit independently in
+    /// input order. All item domain/provider errors are rows, including empty or
+    /// malformed opaque IDs; they do not abort or roll back the successful prefix.
+    /// Empty batches return a list without invoking the begin hook. Insufficient
+    /// caller scratch is a local capacity error, never an intrinsic HTTP item cap.
+    pub fn bulk_remove_org_members<'data, 'out, D: OrganizationBulkMemberRemovalData + ?Sized>(
+        &mut self,
+        owner: &str,
+        organization: &str,
+        request: &'data D,
+        scratch: &'out mut [Option<OrganizationBulkMemberRemovalResult<'data>>],
+    ) -> Result<OrganizationBulkMemberRemovalResponse<'out, 'data>, ApiError> {
+        let actor_role = self.org_member_admin_role(owner, organization)?;
+        let count = request.len();
+        if scratch.len() < count {
+            return Err(ApiError::new(
+                ErrorKind::Storage,
+                "Bulk member removal output capacity is insufficient",
+            ));
+        }
+        for index in 0..count {
+            if request.get(index).is_none() {
+                return Err(ApiError::new(
+                    ErrorKind::Storage,
+                    "Bulk member removal input view is incomplete",
+                ));
+            }
+        }
+        scratch[..count].fill(None);
+        if count == 0 {
+            return Ok(OrganizationBulkMemberRemovalResponse {
+                results: &scratch[..0],
+            });
+        }
+        let authority = OrganizationMemberRemovalBatchAuthority {
             owner,
-            target: &target,
-            remove_invitation,
+            organization,
+            actor_role,
         };
-        self.storage_mut()
-            .remove_organization_member(&plan)
-            .map_err(S::map_error)
+        let mut batch = self
+            .storage_mut()
+            .begin_member_removal_batch(&authority)
+            .map_err(S::map_error)?;
+        let mut actor_removed_by_batch = false;
+        for (index, slot) in scratch[..count].iter_mut().enumerate() {
+            let member = request.get(index).ok_or_else(|| {
+                ApiError::new(
+                    ErrorKind::Storage,
+                    "Bulk member removal input view is incomplete",
+                )
+            })?;
+            let result = (|| {
+                let target = self.removal_target_with_role(organization, member, actor_role)?;
+                let removal = ValidatedOrganizationMemberRemoval {
+                    owner,
+                    remove_invitation: !target.mail_enabled
+                        && target.user_exists
+                        && !target.other_invited_memberships,
+                    target: &target,
+                };
+                let plan = ValidatedOrganizationBulkMemberRemoval {
+                    removal,
+                    actor_role,
+                    actor_removed_by_batch,
+                };
+                self.storage_mut()
+                    .remove_organization_member_in_batch(&mut batch, &plan)
+                    .map_err(S::map_error)?;
+                if plan.removes_actor() {
+                    actor_removed_by_batch = true;
+                }
+                Ok(())
+            })();
+            *slot = Some(OrganizationBulkMemberRemovalResult {
+                id: member,
+                error: result.err(),
+            });
+        }
+        Ok(OrganizationBulkMemberRemovalResponse {
+            results: &scratch[..count],
+        })
     }
 }
 
@@ -228,6 +527,13 @@ mod tests {
         preserved: [u64; 8],
         fail: Option<&'static str>,
         stale: bool,
+        batch_targets: Option<Vec<Target>>,
+        batch_flags: Vec<bool>,
+        batch_lookups: Vec<String>,
+        batch_fail_member: Option<&'static str>,
+        batch_invalidate_at: Option<usize>,
+        batch_reinvite_at: Option<usize>,
+        actor_generation: u64,
         calls: Vec<&'static str>,
     }
     impl Memory {
@@ -261,6 +567,13 @@ mod tests {
                 preserved: [11, 22, 33, 44, 55, 66, 77, 88],
                 fail: None,
                 stale: false,
+                batch_targets: None,
+                batch_flags: Vec::new(),
+                batch_lookups: Vec::new(),
+                batch_fail_member: None,
+                batch_invalidate_at: None,
+                batch_reinvite_at: None,
+                actor_generation: 0,
                 calls: Vec::new(),
             }
         }
@@ -418,9 +731,16 @@ mod tests {
             org: &str,
             member: &str,
         ) -> Result<Option<OrganizationMemberRemovalRecord<Id>>, ()> {
-            assert_eq!((org, member), ("org", "member"));
+            assert_eq!(org, "org");
             self.step("target")?;
-            Ok(self.target.map(|row| OrganizationMemberRemovalRecord {
+            let target = if let Some(targets) = &self.batch_targets {
+                self.batch_lookups.push(member.to_string());
+                targets.iter().find(|row| row.member == member).copied()
+            } else {
+                assert_eq!(member, "member");
+                self.target
+            };
+            Ok(target.map(|row| OrganizationMemberRemovalRecord {
                 membership_id: Id(row.member.to_string()),
                 organization_id: Id(row.org.to_string()),
                 user_id: Id(row.user.to_string()),
@@ -664,5 +984,416 @@ mod tests {
         let mut service = VaultService::new(&mut storage);
         service.remove_org_member("actor", "org", "member").unwrap();
         assert!(service.storage_mut().target.is_none());
+    }
+    // The optional batch provider reuses the single-provider mock without forcing
+    // single-operation implementers to carry any batch context or behavior.
+    struct Batch {
+        actor_generation: u64,
+        actor_role: i32,
+        removed: bool,
+    }
+    impl OrganizationBulkMemberRemovalStorage for Memory {
+        type Batch = Batch;
+        fn begin_member_removal_batch(
+            &mut self,
+            authority: &OrganizationMemberRemovalBatchAuthority<'_>,
+        ) -> Result<Batch, ()> {
+            self.step("begin")?;
+            let actor = self.actor.ok_or(())?.membership;
+            if actor.user_id != authority.owner()
+                || actor.organization_id != authority.organization()
+                || actor.status != 2
+                || actor.role != authority.actor_role()
+            {
+                return Err(());
+            }
+            assert_eq!(
+                format!("{authority:?}"),
+                "OrganizationMemberRemovalBatchAuthority([REDACTED])"
+            );
+            Ok(Batch {
+                actor_generation: self.actor_generation,
+                actor_role: actor.role,
+                removed: false,
+            })
+        }
+        fn remove_organization_member_in_batch(
+            &mut self,
+            batch: &mut Batch,
+            plan: &ValidatedOrganizationBulkMemberRemoval<'_, Id>,
+        ) -> Result<(), ()> {
+            self.step("batch_commit")?;
+            self.batch_flags.push(plan.actor_removed_by_batch());
+            let attempt = self.batch_flags.len();
+            if self.batch_invalidate_at == Some(attempt) {
+                self.actor = None;
+            }
+            if self.batch_reinvite_at == Some(attempt) {
+                self.actor_generation += 1;
+                self.actor = Some(OrganizationCollectionMembership {
+                    membership: OrganizationMembership {
+                        user_id: "actor",
+                        organization_id: "org",
+                        role: 0,
+                        status: 2,
+                    },
+                    access_all: false,
+                });
+            }
+            let removal = plan.removal();
+            if batch.removed != plan.actor_removed_by_batch()
+                || batch.actor_role != plan.actor_role()
+                || removal.owner() != "actor"
+                || removal.organization() != "org"
+            {
+                return Err(());
+            }
+            if batch.removed {
+                if self.actor.is_some() {
+                    return Err(());
+                }
+            } else {
+                let actor = self.actor.ok_or(())?.membership;
+                if actor.user_id != removal.owner()
+                    || actor.organization_id != removal.organization()
+                    || actor.status != 2
+                    || actor.role != batch.actor_role
+                    || self.actor_generation != batch.actor_generation
+                {
+                    return Err(());
+                }
+            }
+            if self.batch_fail_member == Some(removal.membership_id()) {
+                return Err(());
+            }
+            let targets = self.batch_targets.as_mut().ok_or(())?;
+            let index = targets
+                .iter()
+                .position(|row| row.member == removal.membership_id())
+                .ok_or(())?;
+            let target = targets[index];
+            if target.org != removal.organization()
+                || target.user != removal.user_id()
+                || target.role != removal.role()
+                || target.status != removal.status()
+                || (target.role != 2 && batch.actor_role != 0)
+                || (removal.requires_other_confirmed_owner() && self.owners <= 1)
+                || removal.remove_invitation()
+                    != (!self.mail && self.user_exists && !self.other_invited)
+            {
+                return Err(());
+            }
+            assert_eq!(
+                format!("{plan:?}"),
+                "ValidatedOrganizationBulkMemberRemoval([REDACTED])"
+            );
+            targets.remove(index);
+            if removal.requires_other_confirmed_owner() {
+                self.owners -= 1;
+            }
+            if plan.removes_actor() {
+                self.actor = None;
+                batch.removed = true;
+            }
+            self.revision += 1;
+            Ok(())
+        }
+    }
+    struct Ids<'a>(&'a [&'a str]);
+    impl OrganizationBulkMemberRemovalData for Ids<'_> {
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+        fn get(&self, index: usize) -> Option<&str> {
+            self.0.get(index).copied()
+        }
+    }
+    fn batch_memory() -> Memory {
+        let mut m = Memory::new();
+        m.batch_targets = Some(std::vec![
+            Target {
+                member: "actor-member",
+                org: "org",
+                user: "actor",
+                role: 0,
+                status: 2
+            },
+            Target {
+                member: "other-owner",
+                org: "org",
+                user: "other-owner-user",
+                role: 0,
+                status: 2
+            },
+            Target {
+                member: "user",
+                org: "org",
+                user: "recipient",
+                role: 2,
+                status: 1
+            },
+            Target {
+                member: "later",
+                org: "org",
+                user: "later-recipient",
+                role: 2,
+                status: 0
+            },
+            Target {
+                member: "manager",
+                org: "org",
+                user: "manager-user",
+                role: 3,
+                status: 2
+            },
+            Target {
+                member: "foreign",
+                org: "elsewhere",
+                user: "foreign-user",
+                role: 2,
+                status: 2
+            },
+        ]);
+        m.owners = 2;
+        m
+    }
+    fn remaining(m: &Memory) -> Vec<&'static str> {
+        m.batch_targets
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|row| row.member)
+            .collect()
+    }
+    fn bulk_json(m: &mut Memory, ids: &[&str]) -> serde_json::Value {
+        let mut slots = std::vec![None;ids.len()+1];
+        let data = Ids(ids);
+        let response = VaultService::new(m)
+            .bulk_remove_org_members("actor", "org", &data, &mut slots)
+            .unwrap();
+        assert_eq!(response.len(), ids.len());
+        serde_json::to_value(response).unwrap()
+    }
+    #[test]
+    fn bulk_removal_self_success_continues_but_new_invocation_requires_live_actor() {
+        let mut m = batch_memory();
+        let before = m.preserved;
+        let value = bulk_json(&mut m, &["actor-member", "user", "other-owner"]);
+        assert_eq!(value["data"][0]["error"], "");
+        assert_eq!(value["data"][1]["error"], "");
+        assert_eq!(value["data"][2]["error"], "Can't delete the last owner");
+        assert_eq!(m.batch_flags, [false, true]);
+        assert_eq!(m.revision, 9);
+        assert!(remaining(&m).contains(&"other-owner"));
+        assert_eq!(m.preserved, before);
+        let mut slots = [None];
+        let error = VaultService::new(&mut m)
+            .bulk_remove_org_members("actor", "org", &Ids(&["later"]), &mut slots)
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Unauthorized);
+        assert!(remaining(&m).contains(&"later"));
+    }
+    #[test]
+    fn bulk_removal_failed_self_never_enables_absent_actor_continuation() {
+        let mut m = batch_memory();
+        m.batch_fail_member = Some("actor-member");
+        let value = bulk_json(&mut m, &["actor-member", "user"]);
+        assert_eq!(value["data"][0]["error"], "Removal provider conflict");
+        assert_eq!(value["data"][1]["error"], "");
+        assert_eq!(m.batch_flags, [false, false]);
+        assert!(m.actor.is_some());
+        assert!(remaining(&m).contains(&"actor-member"));
+        let mut m = batch_memory();
+        m.batch_invalidate_at = Some(1);
+        let value = bulk_json(&mut m, &["actor-member", "user"]);
+        assert!(
+            value["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r["error"] == "Removal provider conflict")
+        );
+        assert_eq!(m.batch_flags, [false, false]);
+        assert_eq!(m.revision, 7);
+    }
+    #[test]
+    fn bulk_removal_reinvitation_cannot_reuse_completed_self_authority() {
+        let mut m = batch_memory();
+        m.batch_reinvite_at = Some(2);
+        let value = bulk_json(&mut m, &["actor-member", "user", "later"]);
+        assert_eq!(value["data"][0]["error"], "");
+        for row in &value["data"].as_array().unwrap()[1..] {
+            assert_eq!(row["error"], "Removal provider conflict");
+        }
+        assert_eq!(m.batch_flags, [false, true, true]);
+        assert_eq!(m.revision, 8);
+        assert!(remaining(&m).contains(&"user") && remaining(&m).contains(&"later"));
+    }
+    #[test]
+    fn bulk_removal_order_duplicates_opaque_ids_and_scoped_rows_are_exact() {
+        let mut m = batch_memory();
+        let ids = ["foreign", "", "bad.id\0雪", "user", "user", "later"];
+        let value = bulk_json(&mut m, &ids);
+        assert_eq!(value.as_object().unwrap().len(), 3);
+        assert_eq!(value["object"], "list");
+        assert!(value["continuationToken"].is_null());
+        for (index, row) in value["data"].as_array().unwrap().iter().enumerate() {
+            assert_eq!(row.as_object().unwrap().len(), 3);
+            assert_eq!(row["id"], ids[index]);
+            assert_eq!(row["object"], "OrganizationBulkConfirmResponseModel");
+            assert_eq!(
+                row["error"],
+                if matches!(index, 3 | 5) {
+                    ""
+                } else {
+                    "User to delete isn't member of the organization"
+                }
+            );
+        }
+        assert_eq!(m.batch_lookups, ids);
+        assert_eq!(m.revision, 9);
+        assert!(remaining(&m).contains(&"foreign"));
+    }
+    #[test]
+    fn bulk_removal_admin_errors_continue_without_role_or_owner_count_escalation() {
+        let mut m = batch_memory();
+        m.actor.as_mut().unwrap().membership.role = 1;
+        m.batch_targets.as_mut().unwrap()[0].role = 1;
+        let value = bulk_json(
+            &mut m,
+            &["manager", "actor-member", "user", "other-owner", "later"],
+        );
+        for index in [0, 1, 3] {
+            assert_eq!(
+                value["data"][index]["error"],
+                "Only Owners can delete Admins or Owners"
+            );
+        }
+        for index in [2, 4] {
+            assert_eq!(value["data"][index]["error"], "");
+        }
+        assert!(!m.calls.contains(&"owners"));
+        assert_eq!(m.batch_flags, [false, false]);
+    }
+    #[test]
+    fn bulk_removal_empty_capacity_and_incomplete_views_have_no_begin_or_writes() {
+        let mut m = batch_memory();
+        let before = remaining(&m);
+        let response = bulk_json(&mut m, &[]);
+        assert_eq!(
+            response,
+            serde_json::json!({"data":[],"object":"list","continuationToken":null})
+        );
+        assert_eq!(m.calls, ["actor"]);
+        let mut slots = [];
+        assert!(
+            VaultService::new(&mut m)
+                .bulk_remove_org_members("actor", "org", &Ids(&["user"]), &mut slots)
+                .is_err()
+        );
+        struct Incomplete;
+        impl OrganizationBulkMemberRemovalData for Incomplete {
+            fn len(&self) -> usize {
+                2
+            }
+            fn get(&self, index: usize) -> Option<&str> {
+                (index == 0).then_some("user")
+            }
+        }
+        let mut slots = [None; 2];
+        assert!(
+            VaultService::new(&mut m)
+                .bulk_remove_org_members("actor", "org", &Incomplete, &mut slots)
+                .is_err()
+        );
+        assert!(!m.calls.contains(&"begin"));
+        assert_eq!(remaining(&m), before);
+        assert_eq!(m.revision, 7);
+        m.actor = None;
+        assert_eq!(
+            VaultService::new(&mut m)
+                .bulk_remove_org_members("actor", "org", &Ids(&[]), &mut slots)
+                .unwrap_err()
+                .kind,
+            ErrorKind::Unauthorized
+        );
+    }
+    #[test]
+    fn bulk_removal_begin_failure_is_outer_and_item_backend_failure_keeps_prefix() {
+        let mut m = batch_memory();
+        m.fail = Some("begin");
+        let before = remaining(&m);
+        let mut slots = [None];
+        let error = VaultService::new(&mut m)
+            .bulk_remove_org_members("actor", "org", &Ids(&["user"]), &mut slots)
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Conflict);
+        assert_eq!(remaining(&m), before);
+        assert_eq!(m.calls, ["actor", "begin"]);
+        let mut m = batch_memory();
+        m.batch_fail_member = Some("user");
+        let value = bulk_json(&mut m, &["manager", "user", "later"]);
+        assert_eq!(value["data"][0]["error"], "");
+        assert_eq!(value["data"][1]["error"], "Removal provider conflict");
+        assert_eq!(value["data"][2]["error"], "");
+        assert_eq!(m.revision, 9);
+        assert!(remaining(&m).contains(&"user"));
+        assert!(!remaining(&m).contains(&"manager") && !remaining(&m).contains(&"later"));
+    }
+    #[test]
+    fn bulk_removal_uncapped_dynamic_view_forwards_and_borrows_output() {
+        let mut m = batch_memory();
+        let ids = std::vec!["missing";129];
+        let view = Ids(&ids);
+        let dynamic: &dyn OrganizationBulkMemberRemovalData = &view;
+        let mut slots = std::vec![None;130];
+        let mut forwarded = &mut m;
+        let response = VaultService::new(&mut forwarded)
+            .bulk_remove_org_members("actor", "org", &dynamic, &mut slots)
+            .unwrap();
+        assert_eq!(response.len(), 129);
+        assert!(core::ptr::eq(
+            response.get(0).unwrap().id().as_ptr(),
+            ids[0].as_ptr()
+        ));
+        assert!(format!("{response:?}").contains("REDACTED"));
+        assert!(!format!("{:?}", response.get(0).unwrap()).contains("missing"));
+        assert!(response.get(129).is_none());
+        assert_eq!(
+            serde_json::to_value(&response).unwrap()["data"]
+                .as_array()
+                .unwrap()
+                .len(),
+            129
+        );
+        assert!(slots[129].is_none());
+    }
+    #[test]
+    fn bulk_removal_bounded_schema_requires_complete_string_ids_and_redacts_debug() {
+        type Input<'a> = crate::wire::OrganizationBulkMemberRemovalRequest<'a, 4>;
+        for json in [
+            r#"{"ids":[]}"#,
+            r#"[[]]"#,
+            r#"{"ids":["","bad.id","雪"],"ignored":true}"#,
+        ] {
+            let input: Input<'_> = serde_json::from_str(json).unwrap();
+            assert_eq!(
+                format!("{input:?}"),
+                "OrganizationBulkMemberRemovalRequest([REDACTED])"
+            );
+        }
+        for json in [
+            r#"{}"#,
+            r#"[]"#,
+            r#"{"ids":null}"#,
+            r#"{"ids":["user",null]}"#,
+            r#"{"ids":["user",1]}"#,
+            r#"{"Ids":[]}"#,
+            r#"{"ids":[],"ids":[]}"#,
+            r#"[[],0]"#,
+            r#"{"ids":["1","2","3","4","5"]}"#,
+        ] {
+            assert!(serde_json::from_str::<Input<'_>>(json).is_err(), "{json}");
+        }
     }
 }
