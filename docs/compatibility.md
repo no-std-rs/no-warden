@@ -1384,7 +1384,10 @@ duplicate-preserving four-field `organizationUserPublicKeyResponseModel` rows:
 membership `id`, account `userId`, nullable `key`, and `object`. Missing scoped
 memberships are omitted; an existing null-key account retains its explicit null
 row. Empty and synthetic future-format keys remain exact. An actual 1025-item
-batch passes without an intrinsic HTTP item cap.
+batch passes. The Linux host separately limits requests to 4,096 IDs while
+decoding, before allocating results or running member-key lookups. Its 422
+rejection beyond that local work budget is not claimed as upstream behavior;
+the allocation-free core itself has no intrinsic batch count cap.
 
 The actual matrix includes all four known target statuses and Owner/Admin/
 Manager/User roles. Accepted Admin, confirmed Manager/User and revoked Admin

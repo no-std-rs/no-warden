@@ -17,7 +17,7 @@ fn read(
 }
 
 #[test]
-fn public_key_owned_decoder_validates_whole_schema_and_preserves_opaque_ids_without_a_batch_cap() {
+fn public_key_owned_decoder_validates_whole_schema_and_preserves_opaque_ids_within_host_budget() {
     for valid in [br#"{"ids":[]}"#.as_slice(), b"[[]]"] {
         assert!(Input::parse(valid).is_ok());
     }
@@ -53,6 +53,28 @@ fn public_key_owned_decoder_validates_whole_schema_and_preserves_opaque_ids_with
         .unwrap_or_else(|_| panic!("Authored input"));
     assert_eq!(input.len(), 513);
     assert!(input.get(0) == Some("opaque\0雪") && input.get(512) == Some("opaque\0雪"));
+}
+
+#[test]
+fn public_key_decoder_bounds_work_before_result_allocation_and_lookup() {
+    let at_limit = serde_json::to_vec(&json!({"ids":vec!["";MAX_PUBLIC_KEY_IDS]})).unwrap();
+    let input = Input::parse(&at_limit).unwrap_or_else(|_| panic!("Host boundary rejected"));
+    assert_eq!(input.len(), MAX_PUBLIC_KEY_IDS);
+    let over_limit = serde_json::to_vec(&json!({"ids":vec!["";MAX_PUBLIC_KEY_IDS+1]})).unwrap();
+    assert!(
+        Input::parse(&over_limit)
+            .err()
+            .is_some_and(|error| error.0 == StatusCode::UNPROCESSABLE_ENTITY)
+    );
+
+    // A lazy, accurately sized five-million-entry source reproduces the review's
+    // amplification without allocating that input. Its large size hint must not
+    // cause a large reservation, and decoding must stop after one excess item.
+    let mut consumed = 0;
+    let ids = std::iter::repeat_n("", 5_000_000).inspect(|_| consumed += 1);
+    let decoder = serde::de::value::SeqDeserializer::<_, serde::de::value::Error>::new(ids);
+    assert!(deserialize_ids(decoder).is_err());
+    assert_eq!(consumed, MAX_PUBLIC_KEY_IDS + 1);
 }
 
 #[test]

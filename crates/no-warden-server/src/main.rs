@@ -747,6 +747,7 @@ async fn dispatch_with_peer(
                 .ok_or_else(unauthorized)?;
             let org = organization_invitations::path(&mut store, &owner, raw_org, uri.query())?;
             let input = organization_member_public_keys::Input::parse(&body)?;
+            // Decoding has already enforced the host's item/work budget.
             let mut scratch = Vec::with_capacity(input.len());
             scratch.resize_with(input.len(), || None);
             let response = VaultService::new(&mut *store).get_org_member_public_keys(

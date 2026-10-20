@@ -1616,6 +1616,13 @@ another owned organization or belonging to the same account. Successful rows
 retain input order and duplicates; an actual 1025-item duplicate request passes.
 An account ID never substitutes for a membership ID.
 
+The Linux host limits a request to 4,096 IDs. Decoding stops at the first excess
+entry with 422 before allocating result slots or performing member-key lookups;
+it does not reserve an untrusted sequence size hint. The local boundary/work
+regression uses a lazy five-million-entry input without allocating that input.
+This is a host resource policy, not a verified upstream count boundary. The
+allocation-free core continues to accept caller-provided indexed batches.
+
 An existing account without a public key retains its row with `key: null`.
 Portable modern registration with `keys: null` and an invited passwordless
 placeholder verify this independently of missing-row omission. The individual

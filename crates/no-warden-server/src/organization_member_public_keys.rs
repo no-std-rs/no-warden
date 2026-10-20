@@ -5,10 +5,48 @@ use no_warden::organization_member_public_keys::{
     OrganizationMemberPublicKeysData,
 };
 use rusqlite::{OptionalExtension, params};
-use serde::Deserialize;
+use serde::{
+    Deserialize, Deserializer,
+    de::{self, IgnoredAny, SeqAccess, Visitor},
+};
+
+// Host work budget, independent of the allocation-free core's indexed input.
+// Decode at most this many IDs before allocating result slots or taking lookups.
+pub const MAX_PUBLIC_KEY_IDS: usize = 4096;
+
+fn deserialize_ids<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    struct Ids;
+    impl<'de> Visitor<'de> for Ids {
+        type Value = Vec<String>;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a public-key ID list within the host item budget")
+        }
+        fn visit_seq<S: SeqAccess<'de>>(self, mut sequence: S) -> Result<Self::Value, S::Error> {
+            // Never reserve an untrusted sequence size hint.
+            let mut ids = Vec::new();
+            loop {
+                if ids.len() == MAX_PUBLIC_KEY_IDS {
+                    return if sequence.next_element::<IgnoredAny>()?.is_some() {
+                        Err(de::Error::custom(
+                            "Public-key batch exceeds the host item budget",
+                        ))
+                    } else {
+                        Ok(ids)
+                    };
+                }
+                match sequence.next_element::<String>()? {
+                    Some(id) => ids.push(id),
+                    None => return Ok(ids),
+                }
+            }
+        }
+    }
+    deserializer.deserialize_seq(Ids)
+}
 
 #[derive(Deserialize)]
 pub struct Input {
+    #[serde(deserialize_with = "deserialize_ids")]
     ids: Vec<String>,
 }
 impl Input {
