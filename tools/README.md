@@ -1064,8 +1064,8 @@ claim. Local provider tests also prove rollback/reopen and private preservation.
 The separate `--suite organization-member-status-cli` passes 31 official CLI
 2026.10.0 commands per target, with 43 direct HTTP requests plus four
 registration requests, three CLI logins and two direct setup logins. HTTP
-mutations drive sync/unlock/fresh-cache observations and a strict revoked
-confirmation preflight. No shipped mutation caller, successful confirmation,
+mutations drive login sessions, sync and fresh-cache observations and a strict
+revoked-confirmation preflight. No shipped mutation caller, successful confirmation,
 new command form, internal HTTP count or endpoint trace is inferred.
 
 `BW_ORGANIZATION_MEMBER_STATUS_RECEIPT` and

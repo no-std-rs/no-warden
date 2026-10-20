@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 815 active Rust tests: 403 core, 296 host, and 116 conformance
+The workspace has 816 active Rust tests: 403 core, 296 host, and 117 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -614,8 +614,9 @@ local SQL evidence rather than HTTP claims.
 
 `--suite organization-member-status-cli` passes 31 official CLI 2026.10.0
 commands on both, with 43 direct HTTP requests plus four registration requests,
-three CLI password logins and two direct setup logins. Recipient sync, unlock
-and fresh-cache reads decrypt personal/sibling data and recover primary
+three CLI password logins and two direct setup logins. Recipient login
+sessions, sync and fresh-cache reads decrypt personal/sibling data and recover
+primary
 collections after HTTP restore. One strict revoked-confirmation check is
 metadata observation; successful confirmation and a mutation caller are not
 claimed. Client-internal traffic, the default 104-case suite and the baseline

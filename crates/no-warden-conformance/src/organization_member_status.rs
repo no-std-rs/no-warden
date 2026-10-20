@@ -114,8 +114,19 @@ impl Reply {
     fn error(self, expected: &str) -> Result<(), Error> {
         let value = self.status(400)?.json()?;
         require(
-            value["message"] == expected,
-            "Confirmation rejection message differed",
+            value
+                == json!({
+                    "message": expected,
+                    "validationErrors": {"": [expected]},
+                    "errorModel": {"message": expected, "object": "error"},
+                    "error": "",
+                    "error_description": "",
+                    "exceptionMessage": null,
+                    "exceptionStackTrace": null,
+                    "innerExceptionMessage": null,
+                    "object": "error"
+                }),
+            "Member status rejection error envelope differed",
         )
     }
 }
@@ -708,4 +719,65 @@ pub fn run() -> Result<(), Error> {
         s.http.owner.requests
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn static_rejections_require_complete_nine_field_error_envelopes() {
+        let expected = json!({
+            "message": MISSING,
+            "validationErrors": {"": [MISSING]},
+            "errorModel": {"message": MISSING, "object": "error"},
+            "error": "",
+            "error_description": "",
+            "exceptionMessage": null,
+            "exceptionStackTrace": null,
+            "innerExceptionMessage": null,
+            "object": "error"
+        });
+        let reply = |value: &Value| Reply {
+            status: 400,
+            bytes: serde_json::to_vec(value).expect("Authored error envelope is serializable"),
+        };
+        assert!(reply(&expected).error(MISSING).is_ok());
+
+        for field in expected
+            .as_object()
+            .expect("Authored error is an object")
+            .keys()
+        {
+            let mut missing = expected.clone();
+            missing
+                .as_object_mut()
+                .expect("Authored error is an object")
+                .remove(field);
+            assert!(
+                reply(&missing).error(MISSING).is_err(),
+                "Missing error-envelope field was accepted"
+            );
+
+            let mut mutated = expected.clone();
+            mutated[field] = json!("invalid error-envelope value");
+            assert!(
+                reply(&mutated).error(MISSING).is_err(),
+                "Mutated error-envelope field was accepted"
+            );
+        }
+
+        let mut extra = expected.clone();
+        extra["access_token"] = json!("synthetic authority");
+        assert!(
+            reply(&extra).error(MISSING).is_err(),
+            "Extra authority in error envelope was accepted"
+        );
+        let mut nested = expected.clone();
+        nested["errorModel"]["message"] = json!("different nested message");
+        assert!(
+            reply(&nested).error(MISSING).is_err(),
+            "Inconsistent nested error message was accepted"
+        );
+    }
 }

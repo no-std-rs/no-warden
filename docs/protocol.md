@@ -2173,8 +2173,8 @@ CLI password logins and two direct setup logins.
 
 The [shared API](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/admin-console/src/common/organization-user/services/default-organization-user-api.service.ts#L333-L379)
 constructs revoke and restore/vnext. The shipped CLI restore command accepts
-items only. Sync/unlock/fresh-cache decryption after HTTP setup and one strict
-revoked-confirmation preflight are state observations, not mutation callers,
+items only. Login sessions, sync and fresh-cache decryption after HTTP setup
+and one strict revoked-confirmation preflight are state observations, not mutation callers,
 successful confirmation or endpoint traces. Invited no-op revision advancement
 is source/local SQL evidence; HTTP tests claim only wire status and preserved
 grants. Bulk status changes, configured policies/SMTP, events/groups, sharing

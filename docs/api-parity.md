@@ -1515,7 +1515,8 @@ refreshes. The separate official CLI 2026.10.0 comparison passes 31 commands
 on both, with 43 direct HTTP requests plus four registration requests, three
 CLI password logins and two direct setup logins.
 
-The CLI observes HTTP setup through sync, unlock and fresh-cache decryption.
+The CLI observes HTTP setup through login sessions, sync and fresh-cache
+decryption.
 One strict revoked-confirmation rejection checks fetched metadata, not a
 successful confirmation or revoke/restore caller. No endpoint trace or new
 command form is inferred. Configured 2FA fallback/SingleOrg policy effects,
