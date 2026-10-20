@@ -1747,6 +1747,8 @@ transport or full-parity claim follows.
 
 ## Organization member discovery
 
+The list-only milestone below precedes the expanded [member-detail proof](#organization-member-detail).
+
 The [pinned member-list handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L886-L927)
 and [release 1.37.4 handler](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/organizations.rs#L884-L925)
 agree on `GET /api/organizations/{orgId}/users`. It uses current-device
@@ -1806,3 +1808,47 @@ empty for every query option, so HTTP acceptance does not independently prove
 boolean decoding or non-full-access ACL projection. Source/parser/provider tests
 establish those distinctions. Sharing and general organization parity remain
 open.
+
+## Organization member detail
+
+The [pinned detail
+handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L1452-L1473)
+and [release 1.37.4
+handler](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/organizations.rs#L1450-L1471)
+agree on `GET /api/organizations/{orgId}/users/{memberId}`. Current-device
+`Headers` and confirmed Owner/Admin `AdminHeaders` precede typed UUID guards
+and query parsing. A confirmed Manager is denied even with `access_all`.
+Organization path/query selection retains the existing guard order; there is
+no target-member query fallback. Valid missing and foreign membership IDs both
+return 400 with `The specified user isn't a member of the organization`,
+because lookup is scoped to both organization and membership. GET bodies are
+ignored. The rank-one `users/mini-details` route remains a distinct
+unimplemented handler; other method-only literals do not shadow the rank-two
+GET member route.
+
+The direct response reuses all nineteen member fields and privacy rules from
+[member discovery](#organization-member-discovery), without a list envelope.
+The optional query parser is shared, but its defaults differ: absent, invalid
+or duplicate `includeGroups` means false; the same states for
+`includeCollections` inherit the effective groups value. Explicit false
+suppresses collections. Owner/full-access rows and disabled groups keep arrays
+empty, so their network acceptance matrix cannot prove non-full-access flag
+effects; separate parser and provider tests establish those branches.
+Successful current-authority reads preserve revisions, account authority,
+vaults and other organizations.
+
+The shipped
+[ConfirmCommand](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/admin-console/commands/confirm.command.ts#L46-L120)
+loads the organization key, performs this GET and validates status before user
+public-key lookup or confirmation POST. A current confirmed Owner triggers a
+local Error whose published JSON message is
+`Error: User is already confirmed.`. The expanded six-case HTTP comparison
+passes both actual targets with 240 counted requests, two password logins and
+two refreshes, excluding two modern fixtures/ four registration requests. The
+eighteen-command official CLI comparison also passes both targets, with
+eighteen direct HTTP requests, two CLI password logins and one direct setup
+login, excluding one registration/two requests. Both confirmed-Owner checks
+require exact exit-one JSON with no data/private extras; unrelated server,
+authorization, transport or malformed failures cannot pass. This
+checked-negative branch establishes no successful invitations, acceptance,
+confirmation, key delivery or captured route trace.

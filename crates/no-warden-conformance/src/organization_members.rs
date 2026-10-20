@@ -14,7 +14,7 @@ use std::{fs, io::Read};
 use uuid::Uuid;
 
 pub const CASE_COUNT: usize = 6;
-pub const HTTP_REQUEST_COUNT: usize = 190;
+pub const HTTP_REQUEST_COUNT: usize = 240;
 pub(crate) const MEMBER_NAME: &str = "Fresh owner 雪\0";
 pub(crate) const AVATAR: &str = "雪abcd";
 type Case = fn(&mut Suite) -> Result<(), Error>;
@@ -167,6 +167,9 @@ impl Http {
 pub(crate) fn path(org: &str) -> String {
     format!("/api/organizations/{org}/users")
 }
+pub(crate) fn detail_path(org: &str, member: &str) -> String {
+    format!("{}/{member}", path(org))
+}
 fn array(value: &Value) -> Result<&[Value], Error> {
     value
         .as_array()
@@ -289,6 +292,17 @@ impl Suite {
             None,
         )?;
         self.inspect(&value, org)?;
+        let member = membership_id(&self.profiles[self.owner(org)], &self.organizations[org].id)?;
+        let single = self.http.json(
+            Method::GET,
+            &detail_path(&self.organizations[org].id, member),
+            &self.accounts[self.owner(org)].token,
+            None,
+        )?;
+        require(
+            single == rows(&value)?[0],
+            "Single-member projection differed from the current list member",
+        )?;
         Ok(value)
     }
     fn authority_snapshot(&mut self) -> Result<Value, Error> {
@@ -351,8 +365,14 @@ impl Suite {
 fn guards(s: &mut Suite) -> Result<(), Error> {
     let org = s.organizations[0].id.clone();
     let own = s.accounts[0].token.clone();
+    let member = membership_id(&s.profiles[0], &org)?.to_owned();
     for bearer in [None, Some("invalid-member-bearer")] {
-        for p in [path(&org), path("bad.id")] {
+        for p in [
+            path(&org),
+            path("bad.id"),
+            detail_path(&org, &member),
+            detail_path(&org, "bad.id"),
+        ] {
             s.http
                 .raw(Method::GET, &p, bearer, Some(b"{"), None)?
                 .rejected(401)?;
@@ -382,6 +402,31 @@ fn guards(s: &mut Suite) -> Result<(), Error> {
             own.as_str(),
             401,
         ),
+        (detail_path(&org, "bad.id"), own.as_str(), 422),
+        (detail_path("bad.id", &member), own.as_str(), 401),
+        (
+            format!("{}?organizationId={org}", detail_path("bad.id", &member)),
+            own.as_str(),
+            422,
+        ),
+        (
+            detail_path(&s.organizations[1].id, "bad.id"),
+            own.as_str(),
+            401,
+        ),
+        (
+            format!("{}?memberId={member}", detail_path(&org, "bad.id")),
+            own.as_str(),
+            422,
+        ),
+        (
+            format!(
+                "{}?organizationUserId={member}",
+                detail_path(&org, "bad.id")
+            ),
+            own.as_str(),
+            422,
+        ),
     ] {
         s.http
             .raw(Method::GET, &p, Some(bearer), None, None)?
@@ -393,6 +438,29 @@ fn guards(s: &mut Suite) -> Result<(), Error> {
     let encoded = format!("%{:02X}{tail}", first.as_bytes()[0]);
     let value = s.http.json(Method::GET, &path(&encoded), &own, None)?;
     s.inspect(&value, 0)?;
+    let (first, tail) = member
+        .split_at_checked(1)
+        .ok_or(Error("Member fixture identifier empty"))?;
+    let encoded_member = format!("%{:02X}{tail}", first.as_bytes()[0]);
+    let single = s.http.json(
+        Method::GET,
+        &detail_path(&encoded, &encoded_member),
+        &own,
+        None,
+    )?;
+    require(
+        single == rows(&value)?[0],
+        "Percent-decoded single member differed from list member",
+    )?;
+    s.http
+        .raw(
+            Method::PATCH,
+            &detail_path(&org, &member),
+            Some(&own),
+            None,
+            None,
+        )?
+        .rejected(404)?;
     for method in [Method::POST, Method::PUT, Method::PATCH] {
         s.http
             .raw(method, &path(&org), Some(&own), None, None)?
@@ -421,6 +489,7 @@ fn queries(s: &mut Suite) -> Result<(), Error> {
     let baseline = s.get(0)?;
     let org = s.organizations[0].id.clone();
     let token = s.accounts[0].token.clone();
+    let member = membership_id(&s.profiles[0], &org)?.to_owned();
     // Owner accessAll and disabled groups both project []. These requests prove
     // acceptance and that projection, not observable parsing of a non-full ACL.
     for query in [
@@ -437,6 +506,8 @@ fn queries(s: &mut Suite) -> Result<(), Error> {
         "includeGroups=invalid",
         "includeGroups=true&includeGroups=false",
         "includeCollections=true&includeGroups=true",
+        "includeCollections=false&includeGroups=true",
+        "includeCollections=invalid&includeGroups=true",
         "includeCollections.foo=true",
         "%5BincludeCollections%5D=true",
         ".includeGroups=true",
@@ -452,6 +523,16 @@ fn queries(s: &mut Suite) -> Result<(), Error> {
         require(
             value == baseline,
             "Owner member query changed projection or ownership",
+        )?;
+        let single = s.http.json(
+            Method::GET,
+            &format!("{}?{query}", detail_path(&org, &member)),
+            &token,
+            None,
+        )?;
+        require(
+            single == rows(&baseline)?[0],
+            "Owner single-member query changed projection or ownership",
         )?;
     }
     let ignored = s
@@ -469,6 +550,26 @@ fn queries(s: &mut Suite) -> Result<(), Error> {
         ignored == baseline,
         "Member GET body or unrelated query changed selection",
     )?;
+    // Single GET defaults includeCollections from includeGroups when absent;
+    // Owner accessAll [] cannot expose that branch in this portable fixture.
+    let single = s
+        .http
+        .raw(
+            Method::GET,
+            &format!(
+                "{}?organizationId=foreign&memberId=ignored",
+                detail_path(&org, &member)
+            ),
+            Some(&token),
+            Some(b"not-json"),
+            Some("application/json"),
+        )?
+        .status(200)?
+        .json()?;
+    require(
+        single == rows(&baseline)?[0],
+        "Single-member GET body or unrelated query changed selection",
+    )?;
     s.readonly()
 }
 fn freshness(s: &mut Suite) -> Result<(), Error> {
@@ -482,6 +583,34 @@ fn isolation(s: &mut Suite) -> Result<(), Error> {
     let own = s.get(0)?;
     let foreign = s.get(1)?;
     let other = s.get(2)?;
+    for member in [
+        Uuid::new_v4().to_string(),
+        s.accounts[0].user_id.clone(),
+        text(&rows(&foreign)?[0]["id"])?.to_owned(),
+        text(&rows(&other)?[0]["id"])?.to_owned(),
+    ] {
+        let error = s
+            .http
+            .raw(
+                Method::GET,
+                &detail_path(&s.organizations[0].id, &member),
+                Some(&s.accounts[0].token),
+                None,
+                None,
+            )?
+            .status(400)?
+            .json()?;
+        require(
+            error["message"] == "The specified user isn't a member of the organization",
+            "Missing or wrong-organization single-member error differed",
+        )?;
+        require(
+            ["key", "privateKey", "publicKey", "access_token"]
+                .iter()
+                .all(|key| error.get(key).is_none()),
+            "Single-member error exposed private authority",
+        )?;
+    }
     require(
         rows(&own)?[0]["id"] != rows(&other)?[0]["id"]
             && rows(&own)?[0]["userId"] == rows(&other)?[0]["userId"]

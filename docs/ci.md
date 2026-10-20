@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 676 active Rust tests: 328 core, 239 host, and 109 conformance
+The workspace has 692 active Rust tests: 337 core, 245 host, and 110 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -478,7 +478,7 @@ cleanup with rollback; real-client tests do not imply those membership/sharing
 lifecycles. The allocator-free consumer links real update/delete service calls
 against fixed caller-owned state, without executing firmware.
 
-The member-discovery selections are `--suite organization-members` and
+The historical member-list milestone used `--suite organization-members` and
 `--suite organization-members-cli`, with optional private
 `BW_ORGANIZATION_MEMBERS_RECEIPT`/`BW_ORGANIZATION_MEMBERS_CLI_RECEIPT` files.
 Both actual targets pass six HTTP cases with 190 counted requests, two password
@@ -495,3 +495,17 @@ Owner/group empty arrays cannot independently reveal query decoding;
 parser/core/provider tests establish those branches. Neither fixture proves a
 captured route trace or a general membership lifecycle. The default 104-case
 HTTP and 120-command baselines retain separate receipts.
+
+The member-detail extension keeps the same six authored HTTP case names and
+existing organization-members selectors. Its expanded six-case HTTP comparison
+passes both targets with 240 counted requests, two password logins and two
+refreshes, excluding four registration requests for two modern fixtures. The
+separate eighteen-command official CLI comparison also passes both, with
+eighteen direct HTTP requests, two CLI password logins and one direct setup
+login, excluding one registration/two requests. The earlier
+six-case/190-request and sixteen-command list milestone remains historical
+evidence. Two new checks require published exit 1 with strict JSON
+`success:false` and message `Error: User is already confirmed.`, rejecting
+unrelated server, authorization, transport or malformed-output failures.
+Confirmation POST is not reached for the confirmed Owner. Client-internal
+requests remain uncounted and untraced.

@@ -1042,6 +1042,8 @@ the public Owner/full-access lifecycle and actual client evidence.
 
 ## Organization member discovery
 
+The list-only milestone below precedes the expanded [member-detail proof](protocol.md#organization-member-detail).
+
 `OrganizationMemberStorage` is a separate opt-in collection-provider extension.
 `VaultService::list_org_members` applies confirmed manager and direct-full-access
 admission before reading a stable caller-owned `OrganizationMemberListData`.
@@ -1060,3 +1062,24 @@ HTTP scope uses actual created Owner/full-access memberships. Imported roles,
 statuses and grants are provider-test inputs, not a public member lifecycle.
 This boundary introduces no invitation, enrollment, sharing or administration
 mutation and does not turn profile feature flags into implemented APIs.
+
+## Organization member detail
+
+`OrganizationMemberDetailStorage` is an opt-in extension of the existing
+member provider. Its organization-scoped lookup returns a stable one-row view,
+avoiding a global membership lookup or fixed member-count buffer.
+`VaultService::get_org_member` checks confirmed Owner/Admin authority and
+exact organization/member associations before returning a sealed
+`OrganizationMemberResponse`. It reuses the allocation-free nineteen-field
+serializer directly, without the list envelope. The semantic
+`OrganizationMemberDetailQuery` preserves optional flags so collection
+inclusion can inherit the effective group flag; HTTP parsing remains in the
+adapter.
+
+The host joins actual stored account/member rows without a persistent
+mutation. Public lifecycle coverage remains created Owner/full-access
+membership. Imported roles, status and direct grants are provider-test inputs,
+not implemented member administration. The expanded six-case HTTP and
+eighteen-command official CLI comparisons pass both targets. The client branch
+reads a confirmed member and rejects confirmation locally; successful
+confirmation, invitations or key delivery are not claimed.

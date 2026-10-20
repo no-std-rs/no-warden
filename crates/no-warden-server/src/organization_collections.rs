@@ -263,7 +263,7 @@ pub(super) fn query_root(name: &str) -> &str {
         .next()
         .unwrap_or_default()
 }
-fn selected(
+pub(super) fn selected(
     raw: &str,
     query: Option<&str>,
     key: &str,

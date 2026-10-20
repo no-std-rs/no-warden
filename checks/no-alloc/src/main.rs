@@ -22,7 +22,8 @@ use no_warden::{
         OrganizationCollectionMembership, OrganizationCollectionStorage, ValidatedCollectionCreate,
     },
     organization_members::{
-        OrganizationMemberCollection, OrganizationMemberGroup, OrganizationMemberListData,
+        OrganizationMemberCollection, OrganizationMemberDetailQuery,
+        OrganizationMemberDetailStorage, OrganizationMemberGroup, OrganizationMemberListData,
         OrganizationMemberQuery, OrganizationMemberRecord, OrganizationMemberStorage,
     },
     organizations::{
@@ -497,13 +498,21 @@ impl OrganizationCollectionMutationStorage for PurgeProbe {
         Ok(())
     }
 }
-struct OrganizationMembersProbe<'a>(&'a PurgeProbe);
+struct OrganizationMembersProbe<'a>(&'a PurgeProbe, Option<usize>);
 impl OrganizationMemberListData for OrganizationMembersProbe<'_> {
     fn len(&self) -> usize {
-        usize::from(self.0.organization_present) * 2
+        if self.0.organization_present {
+            if self.1.is_some() { 1 } else { 2 }
+        } else {
+            0
+        }
     }
     fn get(&self, index: usize) -> Option<OrganizationMemberRecord<'_>> {
-        (index < self.len()).then_some(OrganizationMemberRecord {
+        if index >= self.len() {
+            return None;
+        }
+        let index = self.1.unwrap_or(index);
+        Some(OrganizationMemberRecord {
             membership_id: if index == 0 {
                 "embedded-member"
             } else {
@@ -559,7 +568,24 @@ impl OrganizationMemberStorage for PurgeProbe {
         if org != "embedded-org" {
             return Err(());
         }
-        Ok(OrganizationMembersProbe(self))
+        Ok(OrganizationMembersProbe(self, None))
+    }
+}
+impl OrganizationMemberDetailStorage for PurgeProbe {
+    fn organization_member(
+        &mut self,
+        org: &str,
+        member: &str,
+    ) -> Result<Option<Self::Members<'_>>, ()> {
+        if org != "embedded-org" || !self.organization_present {
+            return Ok(None);
+        }
+        let index = match member {
+            "embedded-member" => 0,
+            "embedded-guest-member" => 1,
+            _ => return Ok(None),
+        };
+        Ok(Some(OrganizationMembersProbe(self, Some(index))))
     }
 }
 impl PreloginStorage for PurgeProbe {
@@ -1062,6 +1088,33 @@ pub extern "C" fn _start() -> ! {
                 ));
             }
         }
+        for query in [
+            OrganizationMemberDetailQuery::default(),
+            OrganizationMemberDetailQuery {
+                include_groups: Some(true),
+                include_collections: None,
+            },
+            OrganizationMemberDetailQuery {
+                include_groups: Some(true),
+                include_collections: Some(false),
+            },
+        ] {
+            if let Ok(response) = organization_service.get_org_member(
+                "embedded-owner",
+                "embedded-org",
+                "embedded-guest-member",
+                &query,
+            ) {
+                let _ = black_box(serde_json_core::to_slice(
+                    &response,
+                    &mut organization_output,
+                ));
+            }
+        }
+        black_box(classify(
+            Method::Get,
+            "/api/organizations/embedded-org/users/embedded-guest-member?includeGroups=true",
+        ));
         black_box(organization_output);
         for email in black_box(["bare-metal@example.com", ""]) {
             let mut discovery = VaultService::new(&mut provider);

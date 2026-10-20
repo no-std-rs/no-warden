@@ -22,6 +22,14 @@ fn document(store: &mut Store, organization: &str, raw_query: Option<&str>) -> V
     )
     .unwrap()
 }
+fn single(store: &mut Store, organization: &str, member: &str, raw_query: Option<&str>) -> Value {
+    serde_json::to_value(
+        VaultService::new(store)
+            .get_org_member("alice", organization, member, &detail_query(raw_query))
+            .unwrap(),
+    )
+    .unwrap()
+}
 fn add_bob(store: &Store, organization: &str, role: i32, status: i32, access_all: bool) {
     store.db.execute("INSERT INTO organization_memberships VALUES('bob-member',?1,'bob','opaque-org-key',?2,?3,?4)",params![organization,role,status,access_all]).unwrap();
     store.db.execute("UPDATE accounts SET document=json_set(document,'$.name','Member 雪','$.avatarColor','#123456') WHERE id='bob'",[]).unwrap();
@@ -64,6 +72,274 @@ fn member_discovery_returns_public_joined_rows_without_persisted_changes() {
             == json!({"id":"bob-member","userId":"bob","name":"Member 雪","email":"bob@example.test","externalId":null,"avatarColor":"#123456","groups":[],"collections":[],"status":2,"type":2,"twoFactorEnabled":false,"resetPasswordEnrolled":false,"hasMasterPassword":true,"permissions":null,"ssoBound":false,"claimedByOrganization":false,"usesKeyConnector":false,"accessSecretsManager":false,"object":"organizationUserUserDetails"})
     );
     assert!(snapshot(&store) == before);
+}
+
+#[test]
+fn single_member_is_the_same_public_projection_without_a_list_wrapper() {
+    let mut store = fixture(":memory:");
+    let organization = org(&store);
+    add_bob(&store, &organization, 3, -126, false);
+    assign(&store, &organization);
+    let before = snapshot(&store);
+    let list = document(
+        &mut store,
+        &organization,
+        Some("includeCollections=true&includeGroups=true"),
+    );
+    let detail = single(
+        &mut store,
+        &organization,
+        "bob-member",
+        Some("includeCollections=true&includeGroups=true"),
+    );
+    assert!(
+        detail == list["data"][1]
+            && detail.as_object().unwrap().len() == 19
+            && detail.get("data").is_none()
+    );
+    assert!(snapshot(&store) == before);
+}
+
+#[test]
+fn single_member_query_preserves_optional_collection_fallback_and_list_defaults() {
+    let mut store = fixture(":memory:");
+    let organization = org(&store);
+    add_bob(&store, &organization, 2, 2, false);
+    assign(&store, &organization);
+    for raw in [
+        "includeGroups=true",
+        "includeGroups=yes&includeCollections=invalid",
+        "includeGroups=ON&includeCollections=true&includeCollections=false",
+        "[includeGroups]=true&.includeCollections=+false+",
+    ] {
+        let detail = single(&mut store, &organization, "bob-member", Some(raw));
+        let list = document(&mut store, &organization, Some(raw));
+        assert!(
+            detail["collections"].as_array().unwrap().len() == 1 && detail["groups"] == json!([])
+        );
+        assert!(list["data"][1]["collections"] == json!([]));
+    }
+    for value in ["false", "off", "NO", "False"] {
+        let raw = format!("includeGroups=true&includeCollections={value}");
+        assert!(
+            single(&mut store, &organization, "bob-member", Some(&raw))["collections"] == json!([])
+        );
+    }
+    assert!(single(&mut store, &organization, "bob-member", None)["collections"] == json!([]));
+    let detail = single(
+        &mut store,
+        &organization,
+        "bob-member",
+        Some("includeCollections=true&includeGroups=true&includeGroups=false"),
+    );
+    assert!(detail["collections"].as_array().unwrap().len() == 1 && detail["groups"] == json!([]));
+}
+
+#[test]
+fn single_member_scoped_lookup_rejects_missing_foreign_and_account_ids_identically() {
+    let mut store = fixture(":memory:");
+    let organization = org(&store);
+    add_bob(&store, &organization, 2, 2, false);
+    let other = create_org(&mut store, "bob");
+    let foreign: String = store
+        .db
+        .query_row(
+            "SELECT id FROM organization_memberships WHERE organization_id=?1",
+            [other],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(single(&mut store, &organization, "bob-member", None)["userId"] == "bob");
+    let before = snapshot(&store);
+    for member in ["does-not-exist", "alice", "bob", foreign.as_str()] {
+        let error = VaultService::new(&mut store)
+            .get_org_member(
+                "alice",
+                &organization,
+                member,
+                &OrganizationMemberDetailQuery::default(),
+            )
+            .unwrap_err();
+        assert!(
+            error.status_code() == 400
+                && error.message == "The specified user isn't a member of the organization"
+        );
+        assert!(store.organization_members_cache.0.is_empty());
+    }
+    assert!(single(&mut store, &organization, "bob-member", None)["userId"] == "bob");
+    assert!(snapshot(&store) == before);
+}
+
+#[test]
+fn single_member_requester_must_be_admin_or_owner_even_when_manager_has_full_access() {
+    let mut store = fixture(":memory:");
+    let organization = org(&store);
+    add_bob(&store, &organization, 2, 2, false);
+    for (role, status, access_all, expected) in [
+        (0, 2, false, 200),
+        (1, 2, false, 200),
+        (3, 2, true, 401),
+        (3, 2, false, 401),
+        (2, 2, true, 401),
+        (0, 1, true, 401),
+        (1, -126, true, 401),
+    ] {
+        store.db.execute("UPDATE organization_memberships SET role=?1,status=?2,access_all=?3 WHERE user_id='alice'",params![role,status,access_all]).unwrap();
+        let before = snapshot(&store);
+        let mut service = VaultService::new(&mut store);
+        match service.get_org_member(
+            "alice",
+            &organization,
+            "bob-member",
+            &OrganizationMemberDetailQuery::default(),
+        ) {
+            Ok(response) => assert!(
+                expected == 200 && serde_json::to_value(response).unwrap()["userId"] == "bob"
+            ),
+            Err(error) => assert!(error.status_code() == expected),
+        }
+        assert!(snapshot(&store) == before);
+    }
+}
+
+#[test]
+fn single_member_refreshes_profile_avatar_flags_without_revisions_or_authority_changes() {
+    let mut store = fixture(":memory:");
+    let organization = org(&store);
+    add_bob(&store, &organization, 2, 2, false);
+    assert!(single(&mut store, &organization, "bob-member", None)["name"] == "Member 雪");
+    VaultService::new(&mut store)
+        .update_profile(
+            "bob",
+            &ProfileUpdateRequest {
+                name: "Changed 雪"
+            },
+        )
+        .unwrap();
+    VaultService::new(&mut store)
+        .update_avatar(
+            "bob",
+            &AvatarUpdateRequest {
+                avatar_color: Some("#abcdef"),
+            },
+        )
+        .unwrap();
+    store
+        .db
+        .execute("UPDATE accounts SET password='' WHERE id='bob'", [])
+        .unwrap();
+    let before = snapshot(&store);
+    let response = single(&mut store, &organization, "bob-member", None);
+    assert!(
+        response["name"] == "Changed 雪"
+            && response["avatarColor"] == "#abcdef"
+            && response["hasMasterPassword"] == false
+    );
+    assert!(snapshot(&store) == before);
+}
+
+#[tokio::test]
+async fn single_member_dispatch_keeps_admin_before_uuid_guards_and_ignores_target_query_fallback() {
+    let mut store = fixture(":memory:");
+    let organization = org(&store);
+    let other = create_org(&mut store, "bob");
+    let member: String = store
+        .db
+        .query_row(
+            "SELECT id FROM organization_memberships WHERE organization_id=?1",
+            [&organization],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let foreign: String = store
+        .db
+        .query_row(
+            "SELECT id FROM organization_memberships WHERE organization_id=?1",
+            [&other],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let app = App {
+        store: Arc::new(Mutex::new(store)),
+        base: "http://127.0.0.1:8000".into(),
+        signing_key: [7; 32],
+    };
+    let valid = format!("/api/organizations/{organization}/users/{member}");
+    let before = snapshot(&app.store.lock().unwrap());
+    for (path, token, status) in [
+        (valid.clone(), None, 401),
+        (
+            format!("/api/organizations/{other}/users/{foreign}"),
+            Some("collection-fixture-access"),
+            401,
+        ),
+        (
+            format!("/api/organizations/invalid/users/{member}"),
+            Some("collection-fixture-access"),
+            401,
+        ),
+        (
+            format!("/api/organizations/invalid/users/invalid?organizationId={organization}"),
+            Some("collection-fixture-access"),
+            422,
+        ),
+        (
+            format!("/api/organizations/{organization}/users/invalid?memberId={member}"),
+            Some("collection-fixture-access"),
+            422,
+        ),
+        (
+            format!("/api/organizations/{organization}/users/{foreign}"),
+            Some("collection-fixture-access"),
+            400,
+        ),
+        (
+            format!("{valid}/?includeGroups=true&includeCollections=invalid"),
+            Some("collection-fixture-access"),
+            200,
+        ),
+    ] {
+        let response = request(&app, &path, token, b"{invalid ignored body").await;
+        assert!(response.status().as_u16() == status);
+    }
+    assert!(snapshot(&app.store.lock().unwrap()) == before);
+    app.store
+        .lock()
+        .unwrap()
+        .db
+        .execute(
+            "UPDATE organization_memberships SET role=3,access_all=1 WHERE user_id='alice'",
+            [],
+        )
+        .unwrap();
+    let path = format!("/api/organizations/{organization}/users/invalid");
+    assert!(
+        request(&app, &path, Some("collection-fixture-access"), b"")
+            .await
+            .status()
+            == StatusCode::UNAUTHORIZED
+    );
+    app.store
+        .lock()
+        .unwrap()
+        .db
+        .execute(
+            "UPDATE organization_memberships SET role=0 WHERE user_id='alice'",
+            [],
+        )
+        .unwrap();
+    app.store
+        .lock()
+        .unwrap()
+        .db
+        .execute("DELETE FROM session_devices", [])
+        .unwrap();
+    assert!(
+        request(&app, &valid, Some("collection-fixture-access"), b"")
+            .await
+            .status()
+            == StatusCode::UNAUTHORIZED
+    );
 }
 
 #[test]

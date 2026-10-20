@@ -99,6 +99,7 @@ impl IntoResponse for Failure {
             || self.1 == "Organization not found"
             || self.1 == "User not allowed to create organizations"
             || organization_collections::is_collection_error(self.1)
+            || self.1 == "The specified user isn't a member of the organization"
         {
             return password_login::error_response(self.0, self.1);
         }
@@ -716,6 +717,22 @@ async fn dispatch_with_peer(
                     col.as_deref().expect("Collection path"),
                 )?)
                 .into_response(),
+            )
+        }
+        Route::OrganizationMember(raw_org, raw_member) => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let (org, member) = organization_members::detail_paths(
+                &mut store,
+                &owner,
+                raw_org,
+                raw_member,
+                uri.query(),
+            )?;
+            let query = organization_members::detail_query(uri.query());
+            Ok(
+                Json(VaultService::new(&mut *store).get_org_member(&owner, &org, &member, &query)?)
+                    .into_response(),
             )
         }
         Route::OrganizationMembers(raw) => {
