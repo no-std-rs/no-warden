@@ -74,12 +74,15 @@ jobs:
         env:
           BW_CLIENTS_BUILD_LOCK: ${{ runner.temp }}/clients-build-package-lock.json
           BW_SDK_SOURCE_ROOT: ${{ runner.temp }}/sdk-source
-      - run: cargo build -p no-warden-server -p no-warden-conformance --locked
+      - run: cargo build --profile conformance -p no-warden-server -p no-warden-conformance --locked
       - name: Real client and authorization checks
         shell: bash
+        env:
+          NO_WARDEN_BIN: ${{ github.workspace }}/target/conformance/no-warden-server
+          NO_WARDEN_CONFORMANCE_PROFILE: conformance
         run: |
           set -euo pipefail
-          NO_WARDEN_DB="$RUNNER_TEMP/no-warden.db" target/debug/no-warden-server > "$RUNNER_TEMP/no-warden.log" 2>&1 &
+          NO_WARDEN_DB="$RUNNER_TEMP/no-warden.db" target/conformance/no-warden-server > "$RUNNER_TEMP/no-warden.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true; cat "$RUNNER_TEMP/no-warden.log"' EXIT
           for attempt in $(seq 1 100); do
@@ -89,43 +92,43 @@ jobs:
           curl -fsS http://127.0.0.1:8000/health
           node --test tools/server-tests.mjs
           node tools/persistence.mjs
-          target/debug/no-warden-http-conformance
-          target/debug/no-warden-http-conformance --suite webauthn-credentials
-          target/debug/no-warden-http-conformance --suite personal-vault-purge
-          target/debug/no-warden-http-conformance --suite account-deletion
-          target/debug/no-warden-http-conformance --suite cipher-reads
-          target/debug/no-warden-http-conformance --suite password-grants
-          target/debug/no-warden-http-conformance --suite refresh-grants
-          target/debug/no-warden-http-conformance --suite text-sends
-          target/debug/no-warden-http-conformance --suite text-sends-cli
-          target/debug/no-warden-http-conformance --suite file-sends
-          target/debug/no-warden-http-conformance --suite file-sends-cli
-          target/debug/no-warden-http-conformance --suite user-key-id
-          target/debug/no-warden-http-conformance --suite user-key-id-cli
-          target/debug/no-warden-http-conformance --suite prelogin
-          target/debug/no-warden-http-conformance --suite prelogin-cli
-          target/debug/no-warden-http-conformance --suite organization-owner
-          target/debug/no-warden-http-conformance --suite organization-owner-cli
-          target/debug/no-warden-http-conformance --suite organization-collections
-          target/debug/no-warden-http-conformance --suite organization-collections-cli
-          target/debug/no-warden-http-conformance --suite organization-collection-mutations
-          target/debug/no-warden-http-conformance --suite organization-collection-mutations-cli
-          target/debug/no-warden-http-conformance --suite organization-members
-          target/debug/no-warden-http-conformance --suite organization-members-cli
-          target/debug/no-warden-http-conformance --suite organization-invites
-          target/debug/no-warden-http-conformance --suite organization-invites-cli
-          target/debug/no-warden-http-conformance --suite organization-confirmation
-          target/debug/no-warden-http-conformance --suite organization-confirmation-cli
-          target/debug/no-warden-http-conformance --suite organization-bulk-confirmation
-          target/debug/no-warden-http-conformance --suite organization-bulk-confirmation-cli
-          target/debug/no-warden-http-conformance --suite organization-member-removal
-          target/debug/no-warden-http-conformance --suite organization-member-removal-cli
-          target/debug/no-warden-http-conformance --suite organization-bulk-member-removal
-          target/debug/no-warden-http-conformance --suite organization-bulk-member-removal-cli
-          target/debug/no-warden-http-conformance --suite organization-member-status
-          target/debug/no-warden-http-conformance --suite organization-member-status-cli
-          target/debug/no-warden-http-conformance --suite organization-bulk-member-status
-          target/debug/no-warden-http-conformance --suite organization-bulk-member-status-cli
-          target/debug/no-warden-http-conformance --suite account-kdf-cli
-          target/debug/no-warden-http-conformance --suite account-password-cli
+          target/conformance/no-warden-http-conformance
+          target/conformance/no-warden-http-conformance --suite webauthn-credentials
+          target/conformance/no-warden-http-conformance --suite personal-vault-purge
+          target/conformance/no-warden-http-conformance --suite account-deletion
+          target/conformance/no-warden-http-conformance --suite cipher-reads
+          target/conformance/no-warden-http-conformance --suite password-grants
+          target/conformance/no-warden-http-conformance --suite refresh-grants
+          target/conformance/no-warden-http-conformance --suite text-sends
+          target/conformance/no-warden-http-conformance --suite text-sends-cli
+          target/conformance/no-warden-http-conformance --suite file-sends
+          target/conformance/no-warden-http-conformance --suite file-sends-cli
+          target/conformance/no-warden-http-conformance --suite user-key-id
+          target/conformance/no-warden-http-conformance --suite user-key-id-cli
+          target/conformance/no-warden-http-conformance --suite prelogin
+          target/conformance/no-warden-http-conformance --suite prelogin-cli
+          target/conformance/no-warden-http-conformance --suite organization-owner
+          target/conformance/no-warden-http-conformance --suite organization-owner-cli
+          target/conformance/no-warden-http-conformance --suite organization-collections
+          target/conformance/no-warden-http-conformance --suite organization-collections-cli
+          target/conformance/no-warden-http-conformance --suite organization-collection-mutations
+          target/conformance/no-warden-http-conformance --suite organization-collection-mutations-cli
+          target/conformance/no-warden-http-conformance --suite organization-members
+          target/conformance/no-warden-http-conformance --suite organization-members-cli
+          target/conformance/no-warden-http-conformance --suite organization-invites
+          target/conformance/no-warden-http-conformance --suite organization-invites-cli
+          target/conformance/no-warden-http-conformance --suite organization-confirmation
+          target/conformance/no-warden-http-conformance --suite organization-confirmation-cli
+          target/conformance/no-warden-http-conformance --suite organization-bulk-confirmation
+          target/conformance/no-warden-http-conformance --suite organization-bulk-confirmation-cli
+          target/conformance/no-warden-http-conformance --suite organization-member-removal
+          target/conformance/no-warden-http-conformance --suite organization-member-removal-cli
+          target/conformance/no-warden-http-conformance --suite organization-bulk-member-removal
+          target/conformance/no-warden-http-conformance --suite organization-bulk-member-removal-cli
+          target/conformance/no-warden-http-conformance --suite organization-member-status
+          target/conformance/no-warden-http-conformance --suite organization-member-status-cli
+          target/conformance/no-warden-http-conformance --suite organization-bulk-member-status
+          target/conformance/no-warden-http-conformance --suite organization-bulk-member-status-cli
+          target/conformance/no-warden-http-conformance --suite account-kdf-cli
+          target/conformance/no-warden-http-conformance --suite account-password-cli
           bash tools/e2e.sh

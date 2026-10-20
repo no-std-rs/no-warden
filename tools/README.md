@@ -1074,3 +1074,40 @@ separate from credentials, keys and private bodies. The default 104-case and
 baseline 120-command suites retain separate evidence. Atomic local writes and
 live checks are stronger than source timing; configured 2FA/SingleOrg policies,
 SMTP/events/groups, bulk status changes and sharing remain open.
+
+
+## Real web-client smoke
+
+The [pinned browser harness](web-compat/README.md) compares real password login,
+initial authenticated sync and profile retrieval against no-warden and the
+Vaultwarden-distributed Bitwarden Web 2026.7.0 client. Its separate Linux x64
+setup verifies the official Chromium archive and immutable reference image,
+uses disposable databases, and suppresses sensitive diagnostics. The dedicated
+web-client CI job also checks paired vault lock/unlock and reload, including
+the reference's ordinary onboarding Skip controls. This smoke does not establish
+unmodified official Web, other item types, notification or complete web parity.
+Both browsers create/read/edit a personal login, decrypt the saved edit after
+unlock and move it to trash. The single-cipher PUT trash response now matches
+the reference's empty200; the Rust read-fixture setup requires that exact status
+and empty body rather than accepting any successful status.
+
+
+## Fixture build profile
+
+The `conformance` Cargo profile inherits development checks and explicitly keeps
+debug assertions and overflow checks. It optimizes only the host conformance
+crate and its SHA-256 dependency, since 600,000-iteration PBKDF2 fixture derivation
+otherwise costs several seconds per call. The real-client CI builds its server
+and runners with this profile and runs every existing case and client command.
+The ordinary workspace unit tests still use their normal test profile.
+
+```sh
+NO_WARDEN_CONFORMANCE_PROFILE=conformance bash tools/e2e.sh
+```
+
+A same-source local comparison measured about 3.8 seconds per derivation in the
+default development build and 0.07 seconds with the two package overrides.
+Both outputs matched Node crypto, and runtime debug/overflow checks remained
+enabled. This is a fixture microbenchmark; total CI runtime also includes real
+client processes and HTTP/server work. KDF parameters and security policies are
+unchanged.

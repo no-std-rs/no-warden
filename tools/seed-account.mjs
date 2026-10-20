@@ -56,6 +56,7 @@ export async function seedAccount(server, email, password) {
   const body = registration(email, password);
   let response = await fetch(`${base}/api/accounts/register`, {
     method: "POST",
+    redirect: "error",
     signal: AbortSignal.timeout(15_000),
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -65,6 +66,7 @@ export async function seedAccount(server, email, password) {
   if (response.status === 404) {
     const verification = await fetch(`${base}/identity/accounts/register/send-verification-email`, {
       method: "POST",
+      redirect: "error",
       signal: AbortSignal.timeout(15_000),
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({ email: body.email, name: body.name, receiveMarketingEmails: false }),
@@ -78,6 +80,7 @@ export async function seedAccount(server, email, password) {
     }
     response = await fetch(`${base}/identity/accounts/register/finish`, {
       method: "POST",
+      redirect: "error",
       signal: AbortSignal.timeout(15_000),
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ ...body, emailVerificationToken }),

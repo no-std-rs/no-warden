@@ -1,9 +1,65 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { coveragePath, multilineRouteArm, sourceHashes, validateCoverage } from "./check-api-coverage.mjs";
 
 const snapshot = JSON.parse(readFileSync(coveragePath, "utf8"));
+
+for (const field of ["runner", "setup", "pins", "ci_workflow"]) {
+  test(`rejects a substituted web evidence ${field}`, () => {
+    const data = structuredClone(snapshot);
+    data.web_client_evidence_sources[field] = "unverified-source";
+    assert.throws(() => validateCoverage(data), /Web evidence .* executable source/);
+  });
+}
+
+for (const field of ["client_distribution", "client_version", "reference_version", "reference_image_index", "reference_manifest_sha256", "web_layer", "chromium_version", "chromium_archive_sha256", "chromium_executable_sha256", "playwright_version"]) {
+  test(`rejects web evidence drift in ${field}`, () => {
+    const data = structuredClone(snapshot);
+    data.web_client_evidence_sources[field] = "unverified-artifact";
+    assert.throws(() => validateCoverage(data), /Web evidence pin differs/);
+  });
+}
+
+test("web pins and workflow bytes are bound to the audited sources", () => {
+  for (const file of ["tools/web-compat/pins.json", ".github/workflows/web-client.yml"]) {
+    const hashes = sourceHashes();
+    assert(Object.hasOwn(hashes, file));
+    hashes[file] = "0".repeat(64);
+    assert.throws(() => validateCoverage(snapshot, hashes), /sources changed/);
+  }
+});
+
+test("changing an executable pin requires new matching recorded evidence", () => {
+  const file = "tools/web-compat/pins.json";
+  const pins = JSON.parse(readFileSync(new URL(`../${file}`, import.meta.url), "utf8"));
+  pins.reference.version = "unverified-reference";
+  const changed = JSON.stringify(pins);
+  const hashes = sourceHashes();
+  const data = structuredClone(snapshot);
+  hashes[file] = data.source_sha256[file] = createHash("sha256").update(changed).digest("hex");
+  const readSource = path => path === file ? changed : readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+  assert.throws(() => validateCoverage(data, hashes, readSource), /Web evidence pin differs: reference_version/);
+});
+
+for (const [label, mutate] of [
+  ["missing invocation", text => text.replace("run: bash tools/web-compat.sh", "run: echo disabled")],
+  ["skipped browser step", text => text.replace("run: bash tools/web-compat.sh", "if: false\n        run: bash tools/web-compat.sh")],
+  ["ignored browser failure", text => text.replace("run: bash tools/web-compat.sh", "continue-on-error: true\n        run: bash tools/web-compat.sh")],
+]) {
+  test(`rejects ${label} even after workflow hashes are refreshed`, () => {
+    const file = ".github/workflows/web-client.yml";
+    const original = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+    const changed = mutate(original);
+    assert.notEqual(changed, original);
+    const hashes = sourceHashes();
+    const data = structuredClone(snapshot);
+    hashes[file] = data.source_sha256[file] = createHash("sha256").update(changed).digest("hex");
+    const readSource = path => path === file ? changed : readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+    assert.throws(() => validateCoverage(data, hashes, readSource), /Web comparison workflow/);
+  });
+}
 
 test("multiline route alternatives cite the arrow on the final adjacent pattern", () => {
   const source = "    Route::MemberRestore(org, member)\n    | Route::MemberRestoreLegacy(org, member)\n    | Route::MemberRestoreVNext(org, member) => {\n        restore();\n    }";
