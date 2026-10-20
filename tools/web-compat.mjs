@@ -22,16 +22,7 @@ if (verboseEnvironment.some((name) => process.env[name])) {
   process.exit(child.status ?? 1);
 }
 
-const CLIENT = {
-  distribution: "Vaultwarden Web",
-  version: "2026.7.0",
-  layerSha256: "d7b6e37be08b53480724fb772207fdfc1d75a2d150580c41348a82e7fa52403b",
-  scripts: {
-    "/app/main.a46e2355765814789865.js": "fdabe9950b6d9b3c3b2f0ed3fda84d70958e109575c7f2d12a98328790296719",
-    "/app/vendor.33eb90af298c6fbb7f03.js": "8df26dcae9aaf64086165d0488be95fa68eb0d7ccce5e8e6c84a66663194079e",
-    "/app/polyfills.17d66214ebf3b773befe.js": "ee9e6d5320fbfce55055d9ef4482acdead6ca455064684d5bea722925744fc7e",
-  },
-};
+let CLIENT;
 const ROUTES = new Set([
   "/api/config", "/identity/accounts/prelogin/password", "/api/devices/knowndevice",
   "/identity/connect/token", "/api/sync", "/api/accounts/profile",
@@ -187,6 +178,7 @@ async function run(label, backend, origin, strictVault) {
       await page.waitForURL((url) => url.hash.startsWith("#/lock"));
       await page.locator("input[type=password]:visible").fill(password);
       await Promise.all([
+        responseFor(page, "POST", "/identity/connect/token"),
         responseFor(page, "GET", "/api/sync"),
         page.getByRole("button", { name: "Unlock", exact: true }).click(),
       ]);
@@ -226,11 +218,14 @@ async function run(label, backend, origin, strictVault) {
 }
 
 try {
+  const pins = JSON.parse(await readFile(new URL("./web-compat/pins.json", import.meta.url), "utf8"));
+  CLIENT = pins.client;
   const reference = endpoint("BW_WEB_REFERENCE_BASE", "http://127.0.0.1:18181", "http:");
   const target = endpoint("BW_WEB_TARGET_BASE", "http://127.0.0.1:18182", "http:");
   const referenceOrigin = endpoint("BW_WEB_REFERENCE_ORIGIN", "https://127.0.0.1:18184", "https:");
   const targetOrigin = endpoint("BW_WEB_TARGET_ORIGIN", "https://127.0.0.1:18185", "https:");
   assert.notEqual(referenceOrigin.port, targetOrigin.port);
+  assert.notEqual(reference.origin, target.origin, "Comparison backends must differ");
   assert.ok(process.env.BW_WEB_CHROMIUM, "Set BW_WEB_CHROMIUM to the pinned Chromium executable");
   stage = "pinned web-client artifact verification";
   await artifact(reference);
@@ -245,16 +240,16 @@ try {
   stage = "pinned Chromium artifact verification";
   const chromiumDigest = createHash("sha256");
   for await (const chunk of createReadStream(process.env.BW_WEB_CHROMIUM)) chromiumDigest.update(chunk);
-  assert.equal(chromiumDigest.digest("hex"), "2d18db9d8608b052b6a552ee00ec1e830f93692e928b65ecc67d693bd33fe801");
+  assert.equal(chromiumDigest.digest("hex"), pins.chromium.executableSha256);
   stage = "pinned Chromium launch";
   const module = process.env.BW_WEB_PLAYWRIGHT_MODULE
     ? pathToFileURL(process.env.BW_WEB_PLAYWRIGHT_MODULE).href
     : new URL("./web-compat/node_modules/playwright-core/index.mjs", import.meta.url).href;
   const driver = JSON.parse(await readFile(new URL("./package.json", module), "utf8"));
-  assert.equal(driver.version, "1.64.1");
+  assert.equal(driver.version, pins.playwrightVersion);
   const { chromium } = await import(module);
   browser = await chromium.launch({ executablePath: process.env.BW_WEB_CHROMIUM, headless: true });
-  assert.equal(browser.version(), "149.0.7827.55");
+  assert.equal(browser.version(), pins.chromium.version);
   // Catch broken host fontconfig before it makes the client's input appear empty.
   const readiness = await browser.newPage();
   await readiness.goto("data:text/html,<p>font and input readiness</p><input>");

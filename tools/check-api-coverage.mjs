@@ -34,7 +34,7 @@ export function sourceHashes(root = repositoryRoot) {
     }
   }
   for (const directory of ["crates", "checks"]) walk(join(root, directory));
-  for (const file of ["Cargo.toml", "Cargo.lock", "tools/web-compat/package.json", "tools/web-compat/package-lock.json"]) paths.push(join(root, file));
+  for (const file of ["Cargo.toml", "Cargo.lock", "tools/web-compat/package.json", "tools/web-compat/package-lock.json", "tools/web-compat/pins.json", ".github/workflows/web-client.yml"]) paths.push(join(root, file));
   // Include helpers and subprocess entry points as well as the test entry points.
   for (const entry of readdirSync(join(root, "tools"), { withFileTypes: true })) {
     if (entry.isFile() && (entry.name.endsWith(".mjs") || entry.name.endsWith(".sh") || ["package.json", "package-lock.json"].includes(entry.name))) {
@@ -209,12 +209,23 @@ export function validateCoverage(coverage, hashes = sourceHashes(), readSource =
   assert.deepEqual(coverage.counts, counts, "Coverage counts must describe the records");
   const web = coverage.web_client_evidence_sources;
   assert(web && typeof web === "object", "Web evidence sources must be explicit");
-  for (const source of [web.runner, web.setup, "tools/web-compat/package.json", "tools/web-compat/package-lock.json"]) {
+  for (const [field, path] of Object.entries({ runner: "tools/web-compat.mjs", setup: "tools/web-compat.sh", pins: "tools/web-compat/pins.json", ci_workflow: ".github/workflows/web-client.yml" })) {
+    assert.equal(web[field], path, `Web evidence ${field} must identify its executable source`);
+  }
+  for (const source of [web.runner, web.setup, web.pins, web.ci_workflow, "tools/web-compat/package.json", "tools/web-compat/package-lock.json"]) {
     assert(Object.hasOwn(hashes, source), `Unaudited web evidence source: ${source}`);
   }
-  const webRunner = readSource(web.runner);
-  assert.equal(web.client_distribution, "Vaultwarden Web");
-  assert(webRunner.includes(`version: "${web.client_version}"`), "Web client version differs from the tested artifact");
+  const pins = JSON.parse(readSource(web.pins));
+  for (const [field, expected] of Object.entries({
+    client_distribution: pins.client.distribution, client_version: pins.client.version,
+    reference_version: pins.reference.version, reference_image_index: pins.reference.imageIndex,
+    reference_manifest_sha256: pins.reference.manifestSha256, web_layer: `sha256:${pins.client.layerSha256}`,
+    chromium_version: pins.chromium.version, chromium_archive_sha256: pins.chromium.archiveSha256,
+    chromium_executable_sha256: pins.chromium.executableSha256, playwright_version: pins.playwrightVersion,
+  })) assert.equal(web[field], expected, `Web evidence pin differs: ${field}`);
+  const workflow = readSource(web.ci_workflow);
+  assert(/^\s*run:\s*bash tools\/web-compat\.sh\s*$/m.test(workflow), "Web comparison workflow must invoke its executable setup");
+  assert(!/^\s*(?:if|continue-on-error)\s*:/m.test(workflow), "Web comparison workflow must execute unconditionally and fail on error");
   assert.equal(web.playwright_version, JSON.parse(readSource("tools/web-compat/package-lock.json")).packages["node_modules/playwright-core"].version);
   assert.equal(web.playwright_version, JSON.parse(readSource("tools/web-compat/package.json")).dependencies["playwright-core"]);
   assert.deepEqual(web.paired_checks, ["passwordLogin", "initialSync", "authenticatedProfile", "vaultNavigation", "lock", "passwordUnlockAndSync", "reloadLocksVault", "itemRoundtrip"]);

@@ -1,7 +1,7 @@
 {
 "schema_version": 1,
 "repository": "no-std-rs/no-warden",
-"snapshot_commit": "4647403c2c7328359d09aad2636f997b9d4433fb",
+"snapshot_commit": "e183da463c2261bacb2768bd209492dbd0911f22",
 "audit_kind": "Default no-SMTP organization invitations and same-ID placeholder completion: one additional partial POST uses an opt-in allocation-free provider and ordered per-email commits. All six focused HTTP cases and the separate twenty-four-command official CLI comparison pass both actual targets. Existing modern registration initializes passwordless accounts and accepts their pending memberships without confirmation. No CLI invitation/registration caller, confirmation success, sharing, full-parity or captured-trace claim.",
 "coverage_semantics": {
 "routed": "Classifier recognizes a method/path shape. This alone is not a semantic implementation, especially reserved names shadowed by {id}.",
@@ -902,6 +902,7 @@
 
 },
 "source_sha256": {
+".github/workflows/web-client.yml": "8fdec98f50580844f41c9890ae1b4385ff50c2c73b30ece4637d8a513e9f5679",
 "Cargo.lock": "7d907b21772efbd91957044e37246c19810af95378fee7b4cd0da6bb39e89e3f",
 "Cargo.toml": "394479d0b38a5c95418458fbe5c31ae8d7cc1887965380677539d951220a7e6a",
 "checks/embedded-vault/Cargo.lock": "fcbd67803b8c425ba294fd28182e0e7ea50751b275f31c577403b1c735e58e01",
@@ -1058,8 +1059,8 @@
 "crates/no-warden/src/service.rs": "cd100498a56cea65afa10383d3210c77a93e6d3825f3a1cdf017671a980c47ff",
 "crates/no-warden/src/validation.rs": "16978772dec7ce528bfbd61598638727472e956cb0b2af7fddf1ea2b8ded3c45",
 "crates/no-warden/src/wire.rs": "338631b3f3b71d80d8668b096436305bf10d4c4255fa745a2453fc4171a9852d",
-"tools/api-coverage.test.mjs": "ea4c5dbe34ff2c216c551f4fa4ae87c9a88b4616065029431e5651b869eee991",
-"tools/check-api-coverage.mjs": "3c79c3ba3f42d29317f0983b2eeb93a900f9616195d13b43ae386c507d6638ac",
+"tools/api-coverage.test.mjs": "4f48261b6dee336217cea53cee36a8f6794dcc3424db2711491bba207470ac30",
+"tools/check-api-coverage.mjs": "d1337219f87745938601c05b792ff6fc0bf62c81bf77ab299b7e156e34b8c1ae",
 "tools/check-cli-inventory.mjs": "ee9101b057e862acffca44accc23295ea4ed95e6119e8f0c4b85e8d78834a031",
 "tools/cli-inventory.test.mjs": "6282eb84ca5a5989c029c2b0902fb3b6eb0c79a300e27198e151a07330ffbb1e",
 "tools/discover-cli-requests.mjs": "db38517b99011051c706b63c8c28e662a3df63472b4c321c0febfe43d9097b4f",
@@ -1072,10 +1073,12 @@
 "tools/seed-account.test.mjs": "bbd0dc4a5648df13f721bb7da4a9b9cb10ea036bd83ef0e869cb392aba856e45",
 "tools/server-tests.mjs": "efdcfdd860694ecdddafd7c5bc4b309d48c67299e63647de183bfcd7e21f8006",
 "tools/verify-repository-policy.mjs": "e0d946dbfbdc349cc7efef0f978847a2a394a378ddc8dcd557e6c737676e52c2",
-"tools/web-compat.mjs": "720e7de3997b42ecec53d0ce398537cc758ca9d8696932cbbac94b8e69933dca",
-"tools/web-compat.sh": "5f32eb0662d4d1bf385a8734ee2149730129c5e2f7a3edce6439376a52c85a02",
+"tools/web-compat.mjs": "634785a6c2be9f1721784bdcc961c9d0405b9ffaa1da7c3108eb424a1ed66dc6",
+"tools/web-compat.sh": "e2f35d5d9b62edd4ab613519a25f13c1b306b533334f4173351be2c8a0ed7547",
+"tools/web-compat.test.mjs": "909749e9eb6ba2813dfe796c4f176abcd723e0179267e7506698d002b446590d",
 "tools/web-compat/package-lock.json": "b0e46e90af8bf7c94e831b0d146678125f0c4665daeb3f1e664bf05e59dda08a",
-"tools/web-compat/package.json": "c03ee8bac51df49f0866b527368a23cb32c0f8a42f1b6763d408b11239436760"
+"tools/web-compat/package.json": "c03ee8bac51df49f0866b527368a23cb32c0f8a42f1b6763d408b11239436760",
+"tools/web-compat/pins.json": "778d700b0de1f07d8af0a224e1ddab75c0834c7345919820d11b5e3ca6c2a249"
 },
 "recommended_next_parity_chunk": {
 "name": "Actual web-vault client verification, then remaining organization lifecycle or sharing groundwork",
@@ -1097,6 +1100,9 @@
 "no_warden_only_checks": [],
 "paired_browser_http_shapes": ["GET /api/config","POST /identity/accounts/prelogin/password","GET /api/devices/knowndevice","POST /identity/connect/token","GET /api/sync","GET /api/accounts/profile","POST /api/ciphers","PUT /api/ciphers/{id}","PUT /api/ciphers/{id}/delete"],
 "reference_post_login_view": "extension-onboarding dismissed through Add it later, Skip to web app, then welcome-tour Skip",
-"important_limits": ["Pinned Vaultwarden-distributed Web, not the unmodified official Bitwarden Web artifact.","HTTP registration is setup and is not counted as browser evidence.","Only method/path/status/count are captured; no headers, query values, bodies, console, screenshots, traces or decrypted items.","Only personal login-item create/read/edit/read-after-unlock/trash is covered; other item types, restore/permanent delete, notifications and broader web/API parity remain open.","Browser observation does not create a CLI caller/trace, a new HTTP test-case count or full-parity evidence."]
+"important_limits": ["Pinned Vaultwarden-distributed Web, not the unmodified official Bitwarden Web artifact.","HTTP registration is setup and is not counted as browser evidence.","Only method/path/status/count are captured; no headers, query values, bodies, console, screenshots, traces or decrypted items.","Only personal login-item create/read/edit/read-after-unlock/trash is covered; other item types, restore/permanent delete, notifications and broader web/API parity remain open.","Browser observation does not create a CLI caller/trace, a new HTTP test-case count or full-parity evidence."],
+"pins": "tools/web-compat/pins.json",
+"reference_manifest_sha256": "2bb2e0344616c62a6d76ea10558497499f8ed3f731400e143dc7bf17b757b5b9",
+"chromium_executable_sha256": "2d18db9d8608b052b6a552ee00ec1e830f93692e928b65ecc67d693bd33fe801"
 }
 }

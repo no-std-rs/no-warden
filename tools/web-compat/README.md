@@ -19,6 +19,11 @@ not count HTTP fixture registration as browser evidence.
 
 ## Pinned inputs
 
+The executable runner and setup consume the shared [pins](pins.json). Coverage
+validation binds every recorded version/digest to those inputs, hashes this CI
+workflow, and rejects disabled or missing comparison steps. The setup verifies
+the reference binary version and the web layer's presence in the manifest.
+
 - Vaultwarden `1.37.4`, source revision
   `7c188967e7a467b19b2757bc3326f9cf3ccae327`, from the official image
   `sha256:efb3cde962015fcc036b2ea625242248611943b27212ebf4392841fb30fad055`
@@ -119,7 +124,10 @@ BW_WEB_VAULT_MODE=both node tools/web-compat.mjs
 
 The four URL overrides are `BW_WEB_REFERENCE_BASE`, `BW_WEB_TARGET_BASE`,
 `BW_WEB_REFERENCE_ORIGIN`, and `BW_WEB_TARGET_ORIGIN`; their defaults are the
-ports above. All must use `127.0.0.1`. If Playwright is installed elsewhere,
+ports above. All must use `127.0.0.1`, and the two backend origins must differ.
+Readiness requires the spawned target process and its private post-bind marker;
+an older server occupying the port cannot supply evidence for the checkout.
+If Playwright is installed elsewhere,
 `BW_WEB_PLAYWRIGHT_MODULE` accepts the absolute `playwright-core/index.mjs` path.
 
 The smoke uses ordinary generated test accounts. Stop both disposable server

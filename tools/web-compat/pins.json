@@ -1,0 +1,24 @@
+{
+  "client": {
+    "distribution": "Vaultwarden Web",
+    "version": "2026.7.0",
+    "layerSha256": "d7b6e37be08b53480724fb772207fdfc1d75a2d150580c41348a82e7fa52403b",
+    "scripts": {
+      "/app/main.a46e2355765814789865.js": "fdabe9950b6d9b3c3b2f0ed3fda84d70958e109575c7f2d12a98328790296719",
+      "/app/vendor.33eb90af298c6fbb7f03.js": "8df26dcae9aaf64086165d0488be95fa68eb0d7ccce5e8e6c84a66663194079e",
+      "/app/polyfills.17d66214ebf3b773befe.js": "ee9e6d5320fbfce55055d9ef4482acdead6ca455064684d5bea722925744fc7e"
+    }
+  },
+  "reference": {
+    "version": "1.37.4",
+    "imageIndex": "sha256:efb3cde962015fcc036b2ea625242248611943b27212ebf4392841fb30fad055",
+    "manifestSha256": "2bb2e0344616c62a6d76ea10558497499f8ed3f731400e143dc7bf17b757b5b9"
+  },
+  "chromium": {
+    "version": "149.0.7827.55",
+    "archiveUrl": "https://cdn.playwright.dev/builds/cft/149.0.7827.55/linux64/chrome-linux64.zip",
+    "archiveSha256": "13113b963ac22fffdad898a677591028e4397c46c1daa9e61811258eed6e35b5",
+    "executableSha256": "2d18db9d8608b052b6a552ee00ec1e830f93692e928b65ecc67d693bd33fe801"
+  },
+  "playwrightVersion": "1.64.1"
+}
