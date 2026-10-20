@@ -32,6 +32,7 @@ pub mod organization_collection_mutations;
 pub mod organization_collections;
 pub mod organization_confirmations;
 pub mod organization_invitations;
+pub mod organization_member_removal;
 pub mod organization_members;
 pub mod organizations;
 pub mod password_login;

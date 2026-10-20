@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 758 active Rust tests: 371 core, 274 host, and 113 conformance
+The workspace has 776 active Rust tests: 381 core, 281 host, and 114 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -554,3 +554,22 @@ logins and two direct setup logins. The CLI observes recipient state and
 collection decryption after HTTP bulk setup; there is no CLI bulk caller or
 captured request trace. Client-internal traffic is uncounted, and default
 104-case and baseline 120-command suites retain separate receipts.
+
+## Member removal comparison
+
+`--suite organization-member-removal` and
+`--suite organization-member-removal-cli` pass against both actual targets.
+The HTTP selection has six cases with 212 counted requests plus eight
+registration requests for four fixtures, two password logins and two
+refreshes. It checks guards, hierarchy/last-owner protection, live membership
+access loss, stale-grant-free rejoin and retained account/session authority.
+
+The separate official CLI 2026.10.0 comparison passes 25 commands on both,
+with 40 direct HTTP requests plus four registration requests, three CLI
+password logins and two direct setup logins. The CLI observes sync/fresh-cache
+membership loss and retained personal/sibling decryption after HTTP removal;
+there is no member-removal caller or endpoint trace. Client-internal traffic,
+the default 104-case suite and the baseline 120-command runs remain separate.
+`BW_ORGANIZATION_MEMBER_REMOVAL_RECEIPT` and
+`BW_ORGANIZATION_MEMBER_REMOVAL_CLI_RECEIPT` contain authored status/counters,
+without credentials, keys or private response content.

@@ -1173,3 +1173,31 @@ official CLI recipient state/decryption comparison. Bulk mutation is HTTP
 setup, not a CLI caller. Complete upstream backend/SMTP Debug formatting,
 configured policies, sharing and remaining member administration are not
 supplied. No endpoint trace or full-parity claim is inferred.
+
+## Single-member removal boundary
+
+`OrganizationMemberRemovalStorage` extends the collection provider with an
+owned scoped target, confirmed-owner counting and a sealed
+`ValidatedOrganizationMemberRemoval` commit. `VaultService::remove_org_member`
+checks current Owner/Admin authority, target association, hierarchy and the
+last-confirmed-owner safeguard. Trusted mail/user/other-Invited metadata
+selects conditional global invitation cleanup. No body DTO, allocator, HTTP,
+crypto or clock enters the core.
+
+The SQLite adapter rechecks mutable actor/target/owner-count and invitation
+state inside one savepoint. It deletes all direct user/org grants, inviter
+metadata, the selected membership and the global marker only when permitted,
+then advances the retained account revision once. Errors roll back all local
+writes, including marker failures; this strengthens upstream sequential
+cleanup, ignored marker-take errors and two revision updates. Group rows and
+notifications remain outside this adapter.
+
+Account credentials, device/access/refresh authority, personal vault,
+organization definitions and foreign membership/grant state remain. Removal
+ends live membership authorization but cannot erase previously cached
+organization keys or plaintext.
+
+Both actual targets pass six focused HTTP cases and the separate 25-command
+official CLI state/decryption comparison after HTTP setup. Private marker and
+rollback guarantees remain local SQL evidence. Bulk removal and sharing are
+not implemented here.

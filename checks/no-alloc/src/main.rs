@@ -29,6 +29,10 @@ use no_warden::{
         InvitationPolicy, InvitationTarget, InviteCommit, OrganizationInvitationStorage,
         OrganizationInviteData, ValidatedOrganizationInvite,
     },
+    organization_member_removal::{
+        OrganizationMemberRemovalRecord, OrganizationMemberRemovalStorage,
+        ValidatedOrganizationMemberRemoval,
+    },
     organization_members::{
         OrganizationMemberCollection, OrganizationMemberDetailQuery,
         OrganizationMemberDetailStorage, OrganizationMemberGroup, OrganizationMemberListData,
@@ -106,6 +110,7 @@ struct PurgeProbe {
     confirmed: bool,
     confirmed_key: [u8; 96],
     confirmed_key_len: usize,
+    member_removed: bool,
 }
 impl PurgeProbe {
     fn organization_record(&self) -> OrganizationRecord<'_> {
@@ -468,6 +473,55 @@ impl core::fmt::Write for InvitationMessageBuffer {
         let destination = self.bytes.get_mut(self.len..end).ok_or(core::fmt::Error)?;
         destination.copy_from_slice(text.as_bytes());
         self.len = end;
+        Ok(())
+    }
+}
+impl OrganizationMemberRemovalStorage for PurgeProbe {
+    type Id = &'static str;
+    fn removal_member(
+        &mut self,
+        org: &str,
+        member: &str,
+    ) -> Result<Option<OrganizationMemberRemovalRecord<Self::Id>>, ()> {
+        Ok((org == "embedded-org"
+            && member == "embedded-invited-member"
+            && self.invited[0]
+            && !self.member_removed)
+            .then_some(OrganizationMemberRemovalRecord {
+                membership_id: "embedded-invited-member",
+                organization_id: "embedded-org",
+                user_id: "existing-account",
+                role: 2,
+                status: if self.confirmed { 2 } else { 1 },
+                mail_enabled: false,
+                user_exists: true,
+                other_invited_memberships: false,
+            }))
+    }
+    fn confirmed_owner_count(&mut self, _: &str) -> Result<u64, ()> {
+        Ok(1)
+    }
+    fn remove_organization_member(
+        &mut self,
+        plan: &ValidatedOrganizationMemberRemoval<'_, Self::Id>,
+    ) -> Result<(), ()> {
+        if !self.invited[0]
+            || self.member_removed
+            || plan.owner() != "embedded-owner"
+            || plan.organization() != "embedded-org"
+            || plan.membership_id() != "embedded-invited-member"
+            || plan.user_id() != "existing-account"
+            || plan.role() != 2
+            || plan.status() != if self.confirmed { 2 } else { 1 }
+            || !plan.remove_invitation()
+        {
+            return Err(());
+        }
+        self.invited[0] = false;
+        self.confirmed = false;
+        self.confirmed_key_len = 0;
+        self.member_removed = true;
+        self.revision += 1;
         Ok(())
     }
 }
@@ -1138,6 +1192,7 @@ pub extern "C" fn _start() -> ! {
             confirmed: false,
             confirmed_key: [0; 96],
             confirmed_key_len: 0,
+            member_removed: false,
         };
         let organization = OrganizationCreateRequest {
             billing_email: "owner@example.com",
@@ -1383,6 +1438,30 @@ pub extern "C" fn _start() -> ! {
         black_box(classify(
             Method::Post,
             "/api/organizations/embedded-org/users/embedded-invited-member/confirm",
+        ));
+        // Single-member removal uses the same stack-owned provider. Personal
+        // account and vault state survive; only the selected membership is removed.
+        let _ = black_box(organization_service.remove_org_member(
+            "embedded-owner",
+            "embedded-org",
+            "embedded-invited-member",
+        ));
+        let _ = black_box(organization_service.remove_org_member(
+            "embedded-owner",
+            "embedded-org",
+            "embedded-invited-member",
+        ));
+        let state = organization_service.storage_mut();
+        black_box((
+            state.member_removed,
+            state.account_present,
+            state.personal_items,
+            state.invited,
+            state.revision,
+        ));
+        black_box(classify(
+            Method::Delete,
+            "/api/organizations/embedded-org/users/embedded-invited-member",
         ));
         black_box(organization_output);
         for email in black_box(["bare-metal@example.com", ""]) {

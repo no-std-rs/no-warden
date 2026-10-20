@@ -51,6 +51,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Organization member detail | Scoped Owner/Admin read and direct nineteen-field response | Expanded six matching HTTP cases and eighteen official CLI commands on both targets, with strict local already-confirmed rejection; no successful confirmation claim |
 | Single-member confirmation and recipient reads | Accepted-to-Confirmed key delivery, current-device Owner/Admin guards and selective collection/sync projection | Six matching HTTP cases and 23 matching official CLI commands on both targets, including actual confirmation and recipient decryption; no bulk/SMTP/sharing or trace claim |
 | Bulk member confirmation | Ordered item results, continued errors and committed-prefix abort with whole-body schema validation | Six matching HTTP cases and 21 matching official CLI state/decryption commands on both targets after HTTP bulk setup; no CLI bulk caller or trace |
+| Single member removal | Scoped membership/grant cleanup and last-owner protection with retained account authority | Six matching HTTP cases and 25 matching official CLI state/decryption commands after HTTP setup on both targets; no removal caller, trace or offline erasure claim |
 | Single organization-collection update/delete | Complete grant replacement, opaque names, whitespace external-ID clearing and preserved cipher data | Allocation-free core and local rollback/cascade tests; six matching HTTP cases and twenty matching official CLI commands on both actual targets |
 | Organization-scoped collection list/create/single access-details | Confirmed manager authorization, exact projections, opaque names/external IDs and reference validation | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers; atomic local provider tests |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
@@ -113,7 +114,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 758 active workspace unit tests pass: 371 core, 274 host and 113 support,
+All 776 active workspace unit tests pass: 381 core, 281 host and 114 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -1242,3 +1243,27 @@ client traffic remains uncounted and untraced.
 
 Complete error/backend/configuration parity, SMTP, sharing and remaining
 member/group administration remain open.
+
+## Single organization-member removal
+
+The single DELETE removes a scoped membership and its direct collection
+grants with current-device Owner/Admin authority, hierarchy and last-owner
+protection. It accepts no body authority and returns empty 200. The account
+and access/refresh/device authority survive, while subsequent profile/sync
+reads lose the removed membership. Reinvitation can create a new membership
+under the same account without restoring old unselected grants.
+
+Both actual targets pass six focused HTTP cases: 212 counted requests plus
+eight registration requests for four fixtures, two password logins and two
+refreshes. The separate official CLI 2026.10.0 comparison passes 25 commands
+on both, with 40 direct HTTP requests plus four registration requests, three
+CLI password logins and two direct setup logins. Recipient sync and
+fresh-cache reads lose primary membership while retained sibling and personal
+data decrypts. Private marker state remains local SQL evidence.
+
+The shipped CLI has no member-delete command. Removal does not rotate the
+organization key or erase offline cached data. Local atomic
+rollback, marker-failure handling and one revision update strengthen/differ
+from upstream sequential cleanup and two revision saves. Bulk deletion,
+SMTP/groups/notifications, sharing and full failure/transport parity remain
+open.

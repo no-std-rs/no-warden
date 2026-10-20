@@ -39,13 +39,13 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 112 routed patterns, 59 with typed requests, 105 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 113 routed patterns, 59 with typed requests, 106 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 109 partial and 185 unimplemented. Query/rank/configuration
+status: 110 partial and 184 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
@@ -56,8 +56,8 @@ responses, and attachment responses. Bulk cipher lists use the generic `ListResp
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 106 patterns, negative
-HTTP evidence for 105, 269 named HTTP cases, and 53 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 107 patterns, negative
+HTTP evidence for 106, 275 named HTTP cases, and 53 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -1435,3 +1435,24 @@ state and collection decryption after HTTP bulk setup; the shipped CLI has no
 bulk-confirmation caller. No distinct command form, captured trace or full
 parity follows. SMTP, policy/backend diagnostic variants, remaining
 member/group administration and shared-cipher writes remain open.
+
+## Single organization-member removal subset
+
+The single DELETE adds a reusable allocation-free removal service with scoped
+target authority, role hierarchy and last-confirmed-owner protection. There is
+no request DTO or typed response: body bytes are ignored and success is empty
+200. The provider removes scoped grants, inviter metadata and membership,
+conditionally consumes the pending invitation marker and advances recipient
+revision while retaining account, session and personal-vault authority.
+
+Both actual targets pass six focused HTTP cases: 212 counted requests plus
+eight registration requests for four fixtures, two password logins and two
+refreshes. The separate official CLI 2026.10.0 comparison passes 25 commands
+on both, with 40 direct HTTP requests plus four registration requests, three
+CLI password logins and two direct setup logins.
+
+There is no shipped CLI member-removal command; HTTP setup followed by sync is
+observation, not a removal caller or endpoint trace. Strong local rollback and
+one revision update differ from upstream sequential cleanup and repeated
+revision saves. Bulk deletion, group/SMTP/notification variants, shared-cipher
+writes and complete failure/transport parity remain open.

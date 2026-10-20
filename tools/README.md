@@ -994,3 +994,27 @@ counters without credentials, keys or response bodies. Client-internal traffic,
 the default 104-case suite and the baseline 120-command run remain separate.
 SMTP, configured policy/backend diagnostic variants, sharing and complete
 member/group administration remain open.
+
+## Member removal and retained account state
+
+`--suite organization-member-removal` passes six HTTP cases on both actual
+targets: 212 counted requests plus eight registration requests for four
+fixtures, two password logins and two refreshes. It checks current-device/path
+and bodyless behavior, scoped errors, hierarchy/last-owner protection,
+confirmed access loss, retained account authority and rejoin without stale
+grants. Private invitation-marker and rollback effects use local SQL tests.
+
+The separate `--suite organization-member-removal-cli` passes 25 official CLI
+2026.10.0 commands on both, with 40 direct HTTP requests plus four registration
+requests, three CLI password logins and two direct setup logins. Sync, unlock
+and fresh-cache reads observe removed primary membership while sibling
+collection and personal-note decryption survive. Removal is direct HTTP setup;
+the shipped CLI has no member-delete command or captured route trace.
+
+`BW_ORGANIZATION_MEMBER_REMOVAL_RECEIPT` and
+`BW_ORGANIZATION_MEMBER_REMOVAL_CLI_RECEIPT` record authored status/counters
+without credentials, keys or response bodies. Client-internal traffic and the
+default 104-case/baseline 120-command suites retain separate evidence.
+Account sessions and previously cached keys are not revoked or erased. Bulk
+removal, groups/notifications and full transport/configuration parity remain
+open.
