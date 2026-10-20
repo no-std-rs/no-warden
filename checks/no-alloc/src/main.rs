@@ -73,7 +73,8 @@ use no_warden::{
         DomainSettingsUpdateResponse, FileSendRequest, FolderRequest, ImportRequest,
         InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
         MasterPasswordPolicy, MasterPasswordPolicyResponse, OrganizationBulkConfirmRequest,
-        OrganizationBulkMemberRemovalRequest, OrganizationCollectionCreateRequest,
+        OrganizationBulkMemberRemovalRequest, OrganizationBulkMemberRestoreRequest,
+        OrganizationBulkMemberRevokeRequest, OrganizationCollectionCreateRequest,
         OrganizationConfirmRequest, OrganizationCreateRequest, OrganizationInviteCollection,
         OrganizationInvitePermissions, OrganizationInviteRequest, OrganizationPlanType,
         PasswordLoginRequest, PasswordOrOtpRequest, PreloginKdfSettings, PreloginRequest,
@@ -1559,6 +1560,50 @@ pub extern "C" fn _start() -> ! {
             "embedded-org",
             "embedded-invited-member",
         ));
+        // Both bulk status DTOs and streamed ordered results are used by this
+        // bare-metal link probe, with no allocator supplied by the adapter.
+        let revoke = serde_json_core::from_slice::<OrganizationBulkMemberRevokeRequest<'_, 3>>(
+            black_box(br#"{"ids":["bad.id","embedded-invited-member","embedded-invited-member"]}"#),
+        );
+        if let Ok((request, _)) = revoke {
+            let mut slots = [None; 3];
+            if let Ok(response) = organization_service.bulk_revoke_org_members(
+                "embedded-owner",
+                "embedded-org",
+                &request,
+                &mut slots,
+            ) {
+                let _ = black_box(serde_json_core::to_slice(
+                    &response,
+                    &mut organization_output,
+                ));
+                black_box((response.len(), response.get(2).and_then(|row| row.error())));
+            }
+        }
+        let restore = serde_json_core::from_slice::<OrganizationBulkMemberRestoreRequest<'_, 2>>(
+            black_box(br#"{"ids":["embedded-invited-member","embedded-invited-member"]}"#),
+        );
+        if let Ok((request, _)) = restore {
+            let mut slots = [None; 2];
+            if let Ok(response) = organization_service.bulk_restore_org_members(
+                "embedded-owner",
+                "embedded-org",
+                &request,
+                &mut slots,
+            ) {
+                let _ = black_box(serde_json_core::to_slice(
+                    &response,
+                    &mut organization_output,
+                ));
+                black_box((response.is_empty(), response.get(0).map(|row| row.id())));
+            }
+        }
+        for path in [
+            "/api/organizations/embedded-org/users/revoke",
+            "/api/organizations/embedded-org/users/restore",
+        ] {
+            black_box(classify(Method::Put, path));
+        }
         let state = organization_service.storage_mut();
         black_box((
             state.member_status,

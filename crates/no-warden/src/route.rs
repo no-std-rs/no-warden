@@ -62,7 +62,9 @@ pub enum Route<'a> {
     OrganizationBulkMemberDelete(&'a str),
     OrganizationMemberDelete(&'a str, &'a str),
     OrganizationMemberRevoke(&'a str, &'a str),
+    OrganizationBulkMemberRevoke(&'a str),
     OrganizationMemberRestore(&'a str, &'a str),
+    OrganizationBulkMemberRestore(&'a str),
     OrganizationMemberRestoreVNext(&'a str, &'a str),
     OrganizationCollections(&'a str),
     OrganizationCollectionCreate(&'a str),
@@ -249,6 +251,8 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                         (Delete, "users") => Some(OrganizationBulkMemberDelete(organization)),
                         (Post, "users/invite") => Some(OrganizationInvite(organization)),
                         (Post, "users/confirm") => Some(OrganizationBulkConfirm(organization)),
+                        (Put, "users/revoke") => Some(OrganizationBulkMemberRevoke(organization)),
+                        (Put, "users/restore") => Some(OrganizationBulkMemberRestore(organization)),
                         (Post, action) if action.starts_with("users/") => {
                             let member = action.strip_prefix("users/")?.strip_suffix("/confirm")?;
                             (!member.is_empty() && !member.contains('/'))
@@ -504,8 +508,6 @@ mod tests {
         }
         for path in [
             "/api/organizations//users/member/revoke",
-            "/api/organizations/org/users/revoke",
-            "/api/organizations/org/users/restore",
             "/api/organizations/org/users/restore/vnext",
             "/api/organizations/org/users/member/revoke/extra",
         ] {
@@ -536,6 +538,39 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn organization_bulk_member_status_routes_are_put_only_and_keep_raw_org() {
+        for org in ["org", "bad.id", "%30org", "malformed%"] {
+            for (suffix, route) in [
+                ("revoke", Route::OrganizationBulkMemberRevoke(org)),
+                ("restore", Route::OrganizationBulkMemberRestore(org)),
+            ] {
+                let uri = std::format!("/api/organizations/{org}/users/{suffix}/?ids=ignored");
+                assert_eq!(classify(Method::Put, &uri), Some(route));
+                assert!(route.requires_authentication());
+                for method in [Method::Post, Method::Options] {
+                    assert_eq!(classify(method, &uri), None);
+                }
+                // Existing raw single-ID GET/DELETE routing remains available.
+                assert_eq!(
+                    classify(Method::Get, &uri),
+                    Some(Route::OrganizationMember(org, suffix))
+                );
+                assert_eq!(
+                    classify(Method::Delete, &uri),
+                    Some(Route::OrganizationMemberDelete(org, suffix))
+                );
+            }
+        }
+        for path in [
+            "/api/organizations//users/revoke",
+            "/api/organizations/org/users/revoke/extra",
+            "/api/organizations/org/users/restore/vnext",
+        ] {
+            assert_eq!(classify(Method::Put, path), None);
+        }
     }
 
     #[test]

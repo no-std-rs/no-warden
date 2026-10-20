@@ -1,9 +1,9 @@
 //! Independently authored actual CLI observation of direct HTTP revoke/restore.
 //! Calls are established by pinned source; this runner captures no HTTP trace.
 use crate::{
-    capture, organization_collections, organization_confirmations as confirmation,
-    organization_invites, organization_member_removal as removal,
-    organization_member_status as status,
+    capture, organization_bulk_member_status as bulk_status, organization_collections,
+    organization_confirmations as confirmation, organization_invites,
+    organization_member_removal as removal, organization_member_status as status,
     organization_owner::{self, Http, Organization},
     text_sends::{TextSendsError as Error, receipt_file, require, text, write_receipt},
     transport::TlsProxy,
@@ -21,6 +21,48 @@ use tempfile::TempDir;
 
 pub const COMMAND_COUNT: usize = 31;
 pub const DIRECT_HTTP_REQUEST_COUNT: usize = 43;
+#[derive(Clone, Copy)]
+pub(crate) enum StatusMode {
+    Single,
+    Bulk,
+}
+impl StatusMode {
+    fn receipt_environment(self) -> &'static str {
+        match self {
+            Self::Single => "BW_ORGANIZATION_MEMBER_STATUS_CLI_RECEIPT",
+            Self::Bulk => "BW_ORGANIZATION_BULK_MEMBER_STATUS_CLI_RECEIPT",
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Single => "organization-member-status",
+            Self::Bulk => "organization-bulk-member-status",
+        }
+    }
+    fn put_fixture_status(
+        self,
+        http: &mut Http,
+        org: &str,
+        member: &str,
+        action: &str,
+        actor: &str,
+    ) -> Result<(), Error> {
+        match self {
+            Self::Single => status::put_fixture_status(http, org, member, action, actor),
+            Self::Bulk => bulk_status::put_fixture_status(
+                http,
+                org,
+                member,
+                if action == "restore/vnext" {
+                    "restore"
+                } else {
+                    action
+                },
+                actor,
+            ),
+        }
+    }
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RevokedResponse {
@@ -37,6 +79,7 @@ fn validate_revoked(code: Option<i32>, bytes: &[u8]) -> Result<(), Error> {
     )
 }
 struct Cli {
+    mode: StatusMode,
     binary: PathBuf,
     environment: BTreeMap<OsString, OsString>,
     commands: usize,
@@ -55,10 +98,12 @@ impl Drop for Cli {
 }
 impl Cli {
     fn receipt(&mut self, state: &str) -> Result<(), Error> {
-        write_receipt(
-            &mut self.receipt,
-            &json!({"schemaVersion":1,"status":state,"commands":self.commands,"expectedCommands":COMMAND_COUNT,"cliVersion":"2026.10.0","cliPasswordLoginCommands":self.logins,"directPasswordLoginRequests":2,"directHttpRequests":self.direct_requests,"expectedDirectHttpRequests":DIRECT_HTTP_REQUEST_COUNT,"fixtureRegistrations":2,"fixtureRegistrationHttpRequests":4,"directHttpStatusMutations":2,"revokedConfirmationChecks":self.rejections,"expectedRevokedConfirmationChecks":1,"cliMutationCallerClaimed":false,"successfulConfirmationClaimed":false,"capturedRouteTrace":false,"clientInternalRequestsCounted":false,"separateFromBaseline120":true}),
-        )
+        let mut value = json!({"schemaVersion":1,"status":state,"commands":self.commands,"expectedCommands":COMMAND_COUNT,"cliVersion":"2026.10.0","cliPasswordLoginCommands":self.logins,"directPasswordLoginRequests":2,"directHttpRequests":self.direct_requests,"expectedDirectHttpRequests":DIRECT_HTTP_REQUEST_COUNT,"fixtureRegistrations":2,"fixtureRegistrationHttpRequests":4,"directHttpStatusMutations":2,"revokedConfirmationChecks":self.rejections,"expectedRevokedConfirmationChecks":1,"cliMutationCallerClaimed":false,"successfulConfirmationClaimed":false,"capturedRouteTrace":false,"clientInternalRequestsCounted":false,"separateFromBaseline120":true});
+        if matches!(self.mode, StatusMode::Bulk) {
+            value["cliBulkStatusCallerClaimed"] = json!(false);
+            value["configuredPolicies"] = json!(false);
+        }
+        write_receipt(&mut self.receipt, &value)
     }
     fn execute(
         &mut self,
@@ -221,6 +266,9 @@ fn normalize_cli(mut value: Value) -> Result<Value, Error> {
     Ok(value)
 }
 pub fn run() -> Result<(), Error> {
+    run_mode(StatusMode::Single)
+}
+pub(crate) fn run_mode(mode: StatusMode) -> Result<(), Error> {
     let owner_cache = private_dir("no-warden-status-owner-cli-")?;
     let recipient_cache = private_dir("no-warden-status-recipient-cli-")?;
     let fresh = private_dir("no-warden-status-fresh-cli-")?;
@@ -337,13 +385,14 @@ pub fn run() -> Result<(), Error> {
         );
     }
     let mut c = Cli {
+        mode,
         binary,
         environment,
         commands: 0,
         logins: 0,
         rejections: 0,
         direct_requests: None,
-        receipt: receipt_file("BW_ORGANIZATION_MEMBER_STATUS_CLI_RECEIPT")?,
+        receipt: receipt_file(mode.receipt_environment())?,
         finished: false,
     };
     c.receipt("running")?;
@@ -384,7 +433,7 @@ pub fn run() -> Result<(), Error> {
     c.collections(&org, true, recipient_cache.path(), &session)?;
     c.collections(&sibling, true, recipient_cache.path(), &session)?;
     c.note(&recipient.cipher_id, recipient_cache.path(), &session)?;
-    status::put_fixture_status(
+    mode.put_fixture_status(
         &mut http,
         &org.id,
         text(&row["id"])?,
@@ -440,7 +489,7 @@ pub fn run() -> Result<(), Error> {
     c.collections(&org, false, fresh.path(), &session)?;
     c.collections(&sibling, true, fresh.path(), &session)?;
     c.note(&recipient.cipher_id, fresh.path(), &session)?;
-    status::put_fixture_status(
+    mode.put_fixture_status(
         &mut http,
         &org.id,
         text(&row["id"])?,
@@ -498,7 +547,8 @@ pub fn run() -> Result<(), Error> {
     c.receipt("passed")?;
     c.finished = true;
     println!(
-        "PASS organization-member-status CLI: {COMMAND_COUNT} commands, 3 CLI logins, 2 direct setup logins"
+        "PASS {} CLI: {COMMAND_COUNT} commands, 3 CLI logins, 2 direct setup logins",
+        mode.label()
     );
     Ok(())
 }

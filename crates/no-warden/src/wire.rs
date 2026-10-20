@@ -2029,6 +2029,34 @@ impl<const N: usize> core::fmt::Debug for OrganizationBulkMemberRemovalRequest<'
 pub type OrganizationBulkMemberRemovalResponse<'out, 'data> =
     crate::organization_member_removal::OrganizationBulkMemberRemovalResponse<'out, 'data>;
 
+/// Optional caller-bounded revoke IDs. Omitted/null IDs mean an empty batch;
+/// there is no intrinsic HTTP item cap. Adapters may use an owned indexed view.
+#[derive(Deserialize)]
+pub struct OrganizationBulkMemberRevokeRequest<'a, const N: usize> {
+    #[serde(borrow)]
+    pub ids: Option<BoundedList<&'a str, N>>,
+}
+impl<const N: usize> core::fmt::Debug for OrganizationBulkMemberRevokeRequest<'_, N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationBulkMemberRevokeRequest([REDACTED])")
+    }
+}
+
+/// Caller-bounded required restore IDs. Decode all items before invoking a batch.
+#[derive(Deserialize)]
+pub struct OrganizationBulkMemberRestoreRequest<'a, const N: usize> {
+    #[serde(borrow)]
+    pub ids: BoundedList<&'a str, N>,
+}
+impl<const N: usize> core::fmt::Debug for OrganizationBulkMemberRestoreRequest<'_, N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationBulkMemberRestoreRequest([REDACTED])")
+    }
+}
+/// Explicit projection for both ordered status operations, borrowing caller slots.
+pub type OrganizationBulkMemberStatusResponse<'out, 'data> =
+    crate::organization_bulk_member_status::OrganizationBulkMemberStatusResponse<'out, 'data>;
+
 /// Optional caller-bounded bulk confirmation decoder. A host can use an uncapped
 /// owned vector via OrganizationBulkConfirmData instead. Root [null] is valid; [] is
 /// not. All nested entries must be decoded before any service mutation begins.

@@ -204,6 +204,18 @@ impl<S: OrganizationMemberStatusStorage> VaultService<S> {
         operation: OrganizationMemberStatusOperation,
     ) -> Result<(), ApiError> {
         let actor_role = self.org_member_admin_role(owner, organization)?;
+        self.change_org_member_status_with_role(owner, organization, member, operation, actor_role)
+    }
+    /// Shared item validation for an already authorized invocation. The storage
+    /// commit still checks the live actor and target for each individual write.
+    pub(crate) fn change_org_member_status_with_role(
+        &mut self,
+        owner: &str,
+        organization: &str,
+        member: &str,
+        operation: OrganizationMemberStatusOperation,
+        actor_role: i32,
+    ) -> Result<(), ApiError> {
         let target = self
             .storage_mut()
             .status_member(organization, member)
@@ -279,6 +291,7 @@ mod tests {
     use super::*;
     use crate::{
         Storage,
+        organization_bulk_member_status::OrganizationBulkMemberStatusData,
         organization_collections::{
             CollectionAccessData, CollectionAccessEntry, CollectionCreateData,
             OrganizationCollectionMembership, ValidatedCollectionCreate,
@@ -315,11 +328,13 @@ mod tests {
     struct Memory {
         actor: Option<OrganizationCollectionMembership<'static>>,
         target: Option<Target>,
+        second_target: Option<Target>,
         owners: u64,
         policy: Policy,
         policy_status: Option<i32>,
         fail: Option<&'static str>,
         stale: bool,
+        revoke_actor_after_commit: bool,
         calls: Vec<&'static str>,
         revision: u64,
         preserved: [u64; 10],
@@ -343,11 +358,13 @@ mod tests {
                     role: 2,
                     status: 2,
                 }),
+                second_target: None,
                 owners: 2,
                 policy: Policy::Allowed,
                 policy_status: None,
                 fail: None,
                 stale: false,
+                revoke_actor_after_commit: false,
                 calls: Vec::new(),
                 revision: 7,
                 preserved: [11, 22, 33, 44, 55, 66, 77, 88, 99, 111],
@@ -499,9 +516,14 @@ mod tests {
             org: &str,
             member: &str,
         ) -> Result<Option<OrganizationMemberStatusRecord<Id>>, ()> {
-            assert_eq!((org, member), ("org", "member"));
+            assert_eq!(org, "org");
             self.step("target")?;
-            Ok(self.target.map(|t| OrganizationMemberStatusRecord {
+            let target = match member {
+                "member" => self.target,
+                "member2" => self.second_target,
+                _ => None,
+            };
+            Ok(target.map(|t| OrganizationMemberStatusRecord {
                 membership_id: Id(t.member.to_string()),
                 organization_id: Id(t.org.to_string()),
                 user_id: Id(t.user.to_string()),
@@ -530,7 +552,12 @@ mod tests {
         ) -> Result<(), ()> {
             self.step("commit")?;
             let actor = self.actor.ok_or(())?.membership;
-            let t = self.target.ok_or(())?;
+            let target = if plan.membership_id() == "member2" {
+                &mut self.second_target
+            } else {
+                &mut self.target
+            };
+            let t = target.ok_or(())?;
             let expected = match plan.operation() {
                 Operation::Revoke if t.status >= 0 => t.status - 128,
                 Operation::Restore if t.status < 0 => t.status + 128,
@@ -559,8 +586,18 @@ mod tests {
                 format!("{plan:?}"),
                 "ValidatedOrganizationMemberStatus([REDACTED])"
             );
-            self.target.as_mut().unwrap().status = plan.status();
+            target.as_mut().unwrap().status = plan.status();
+            if t.role == 0 {
+                if t.status == 2 && plan.status() != 2 {
+                    self.owners -= 1;
+                } else if t.status != 2 && plan.status() == 2 {
+                    self.owners += 1;
+                }
+            }
             self.revision += 1;
+            if self.revoke_actor_after_commit {
+                self.actor.as_mut().unwrap().membership.status = -126;
+            }
             Ok(())
         }
     }
@@ -868,5 +905,230 @@ mod tests {
         for (policy, message) in markers {
             assert_eq!(policy.error().unwrap().message, message);
         }
+    }
+
+    #[test]
+    fn bulk_status_preserves_exact_ids_order_duplicates_and_successful_item_commits() {
+        let mut m = Memory::new();
+        let before = m.preserved;
+        let ids = ["bad.id", "member", "member", "", "MiXeD%30"];
+        let mut slots = [None; 6];
+        let response = VaultService::new(&mut m)
+            .bulk_revoke_org_members("actor", "org", ids.as_slice(), &mut slots)
+            .unwrap();
+        assert_eq!(response.len(), 5);
+        assert!(!response.is_empty());
+        assert!(response.get(5).is_none());
+        for (index, id) in ids.iter().enumerate() {
+            assert_eq!(response.get(index).unwrap().id(), *id);
+        }
+        assert!(response.get(1).unwrap().error().is_none());
+        assert_eq!(
+            response.get(2).unwrap().error().unwrap().message,
+            "User is already revoked"
+        );
+        let encoded = serde_json::to_value(&response).unwrap();
+        assert_eq!(encoded["object"], "list");
+        assert_eq!(encoded["continuationToken"], serde_json::Value::Null);
+        assert_eq!(encoded["data"].as_array().unwrap().len(), 5);
+        assert_eq!(encoded["data"][1]["error"], "");
+        assert_eq!(encoded["data"][2]["error"], "User is already revoked");
+        for row in encoded["data"].as_array().unwrap() {
+            assert_eq!(row["object"], "OrganizationUserBulkResponseModel");
+            assert_eq!(row.as_object().unwrap().len(), 3);
+        }
+        assert_eq!(m.revision, 8);
+        assert_eq!(m.target.unwrap().status, -126);
+        assert_eq!(m.preserved, before);
+        assert_eq!(m.calls.iter().filter(|&&c| c == "actor").count(), 1);
+
+        let mut slots = [None; 3];
+        let response = VaultService::new(&mut m)
+            .bulk_restore_org_members("actor", "org", &ids[1..3], &mut slots)
+            .unwrap();
+        assert!(response.get(0).unwrap().error().is_none());
+        assert_eq!(
+            response.get(1).unwrap().error().unwrap().message,
+            "User is already active"
+        );
+        assert_eq!(m.target.unwrap().status, 2);
+        assert_eq!(m.revision, 9);
+        assert_eq!(m.preserved, before);
+    }
+
+    #[test]
+    fn bulk_status_repeated_invited_restore_succeeds_and_updates_revision_each_time() {
+        let mut m = Memory::new();
+        m.target.as_mut().unwrap().status = 0;
+        m.policy = Policy::TwoFactorRequired;
+        let ids = ["member", "member", "member"];
+        let mut slots = [None; 3];
+        let response = VaultService::new(&mut m)
+            .bulk_restore_org_members("actor", "org", ids.as_slice(), &mut slots)
+            .unwrap();
+        for index in 0..3 {
+            assert!(response.get(index).unwrap().error().is_none());
+        }
+        assert_eq!(m.target.unwrap().status, 0);
+        assert_eq!(m.revision, 10);
+        assert!(!m.calls.contains(&"policy"));
+    }
+
+    #[test]
+    fn bulk_status_preflight_rejects_auth_capacity_and_incomplete_view_before_any_item() {
+        struct Hole;
+        impl OrganizationBulkMemberStatusData for Hole {
+            fn len(&self) -> usize {
+                2
+            }
+            fn get(&self, index: usize) -> Option<&str> {
+                (index == 0).then_some("member")
+            }
+        }
+        let ids = ["member", "member"];
+        let mut slots = [None; 2];
+        let mut m = Memory::new();
+        m.actor.as_mut().unwrap().membership.role = 2;
+        let before = m.state();
+        assert_eq!(
+            VaultService::new(&mut m)
+                .bulk_revoke_org_members("actor", "org", ids.as_slice(), &mut [])
+                .unwrap_err()
+                .kind,
+            ErrorKind::Unauthorized
+        );
+        assert_eq!(m.calls, ["actor"]);
+        assert_eq!(m.state(), before);
+        let mut m = Memory::new();
+        for incomplete in [false, true] {
+            let result = if incomplete {
+                VaultService::new(&mut m)
+                    .bulk_restore_org_members("actor", "org", &Hole, &mut slots)
+                    .unwrap_err()
+            } else {
+                VaultService::new(&mut m)
+                    .bulk_revoke_org_members("actor", "org", ids.as_slice(), &mut slots[..1])
+                    .unwrap_err()
+            };
+            assert_eq!(result.kind, ErrorKind::Storage);
+            assert!(m.calls.iter().all(|&c| c == "actor"));
+            assert_eq!(m.revision, 7);
+        }
+    }
+
+    #[test]
+    fn bulk_status_item_policy_and_provider_failures_do_not_abort_later_rows() {
+        let ids = ["member", "missing", "member"];
+        for stage in ["target", "policy", "commit"] {
+            let mut m = Memory::new();
+            m.target.as_mut().unwrap().status = -126;
+            m.fail = Some(stage);
+            let before = m.state();
+            let mut slots = [None; 3];
+            let response = VaultService::new(&mut m)
+                .bulk_restore_org_members("actor", "org", ids.as_slice(), &mut slots)
+                .unwrap();
+            assert_eq!(response.len(), 3);
+            assert_eq!(
+                response.get(0).unwrap().error().unwrap().message,
+                "Member status provider conflict"
+            );
+            assert!(response.get(2).unwrap().error().is_some());
+            assert_eq!(m.state(), before);
+            assert_eq!(m.calls.iter().filter(|&&c| c == "target").count(), 3);
+        }
+        let mut m = Memory::new();
+        m.target.as_mut().unwrap().status = -126;
+        m.policy = Policy::OtherOrganizationPolicy;
+        let mut slots = [None; 3];
+        let response = VaultService::new(&mut m)
+            .bulk_restore_org_members("actor", "org", ids.as_slice(), &mut slots)
+            .unwrap();
+        assert_eq!(response.get(0).unwrap().error(), m.policy.error());
+        assert_eq!(response.get(2).unwrap().error(), m.policy.error());
+        assert_eq!(m.revision, 7);
+        assert!(!m.calls.contains(&"commit"));
+    }
+
+    #[test]
+    fn bulk_status_empty_optional_revoke_still_authenticates_without_target_lookup() {
+        use crate::wire::OrganizationBulkMemberRevokeRequest;
+        for input in ["{}", r#"{"ids":null}"#, r#"{"ids":[]}"#, "[null]"] {
+            let request: OrganizationBulkMemberRevokeRequest<'_, 0> =
+                serde_json::from_str(input).unwrap();
+            let mut m = Memory::new();
+            let response = VaultService::new(&mut m)
+                .bulk_revoke_org_members("actor", "org", &request, &mut [])
+                .unwrap();
+            assert!(response.is_empty());
+            assert_eq!(
+                serde_json::to_value(&response).unwrap(),
+                serde_json::json!({"data": [], "object": "list", "continuationToken": null})
+            );
+            assert_eq!(m.calls, ["actor"]);
+            assert_eq!(m.revision, 7);
+        }
+    }
+
+    #[test]
+    fn bulk_status_owner_revoke_checks_count_again_after_each_success() {
+        let mut m = Memory::new();
+        m.target.as_mut().unwrap().role = 0;
+        m.second_target = Some(Target {
+            member: "member2",
+            org: "org",
+            user: "recipient2",
+            role: 0,
+            status: 0,
+        });
+        let ids = ["member", "member2"];
+        let mut slots = [None; 2];
+        let response = VaultService::new(&mut m)
+            .bulk_revoke_org_members("actor", "org", ids.as_slice(), &mut slots)
+            .unwrap();
+        assert!(response.get(0).unwrap().error().is_none());
+        assert_eq!(
+            response.get(1).unwrap().error().unwrap().message,
+            "Organization must have at least one confirmed owner"
+        );
+        assert_eq!(m.owners, 1);
+        assert_eq!(m.target.unwrap().status, -126);
+        assert_eq!(m.second_target.unwrap().status, 0);
+        assert_eq!(m.calls.iter().filter(|&&c| c == "owners").count(), 2);
+        assert_eq!(m.revision, 8);
+    }
+
+    #[test]
+    fn bulk_status_commit_rechecks_live_actor_after_prior_item_success() {
+        let mut m = Memory::new();
+        m.target.as_mut().unwrap().status = 0;
+        m.revoke_actor_after_commit = true;
+        let ids = ["member", "member"];
+        let mut slots = [None; 2];
+        let response = VaultService::new(&mut m)
+            .bulk_restore_org_members("actor", "org", ids.as_slice(), &mut slots)
+            .unwrap();
+        assert!(response.get(0).unwrap().error().is_none());
+        assert_eq!(
+            response.get(1).unwrap().error().unwrap().kind,
+            ErrorKind::Conflict
+        );
+        assert_eq!(m.calls.iter().filter(|&&c| c == "actor").count(), 1);
+        assert_eq!(m.calls.iter().filter(|&&c| c == "commit").count(), 2);
+        assert_eq!(m.revision, 8);
+    }
+
+    #[test]
+    fn bulk_status_indexed_host_view_has_no_intrinsic_batch_limit() {
+        let mut m = Memory::new();
+        m.target.as_mut().unwrap().status = 0;
+        let ids = std::vec!["member"; 513];
+        let mut slots = std::vec![None; ids.len()];
+        let response = VaultService::new(&mut m)
+            .bulk_restore_org_members("actor", "org", ids.as_slice(), &mut slots)
+            .unwrap();
+        assert_eq!(response.len(), 513);
+        assert!(response.get(512).unwrap().error().is_none());
+        assert_eq!(m.revision, 520);
     }
 }
