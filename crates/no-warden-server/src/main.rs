@@ -11,6 +11,7 @@ mod auth_requests;
 mod cipher_reads;
 mod devices;
 mod domains;
+mod organization_bulk_confirmations;
 mod organization_collections;
 mod organization_confirmations;
 mod organization_invitations;
@@ -103,6 +104,7 @@ impl IntoResponse for Failure {
             || organization_collections::is_collection_error(self.1)
             || organization_confirmations::is_confirmation_error(self.1)
             || self.1 == "The specified user isn't a member of the organization"
+            || self.1 == "Member id is required"
         {
             return password_login::error_response(self.0, self.1);
         }
@@ -730,6 +732,23 @@ async fn dispatch_with_peer(
             match VaultService::new(&mut *store).invite_org_members(&owner, &org, &input) {
                 Ok(_) => Ok(StatusCode::OK.into_response()),
                 Err(error) => Ok(organization_invitations::error_response(error)),
+            }
+        }
+        Route::OrganizationBulkConfirm(raw_org) => {
+            use no_warden::organization_confirmations::OrganizationBulkConfirmData;
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let org = organization_invitations::path(&mut store, &owner, raw_org, uri.query())?;
+            let input = organization_bulk_confirmations::Input::parse(&body)?;
+            let mut scratch = vec![None; input.len()];
+            match VaultService::new(&mut *store).bulk_confirm_org_members(
+                &owner,
+                &org,
+                &input,
+                &mut scratch,
+            ) {
+                Ok(response) => Ok(Json(response).into_response()),
+                Err(error) => Err(error.cause().into()),
             }
         }
         Route::OrganizationMemberConfirm(raw_org, raw_member) => {

@@ -75,8 +75,15 @@ Single-member confirmation now adds an allocation-free provider, opaque
 organization-key delivery and confirmed recipient collection reads. Six
 matching HTTP cases and a separate 23-command official CLI comparison pass
 both actual servers, including selective collection decryption after recipient
-login, unlock and fresh-cache login. Bulk confirmation, SMTP, policy/group
-administration and cipher sharing remain open.
+login, unlock and fresh-cache login. The single-member milestone did not cover
+bulk confirmation. SMTP, policy/group administration and cipher sharing remain
+open.
+
+Bulk organization-member confirmation adds ordered item results and retains
+successful earlier commits when a later item fails or omits its ID. Whole-body
+schema errors reject before processing. Six matching HTTP cases and a separate
+21-command official CLI state/decryption comparison pass both actual targets.
+Bulk mutation is HTTP setup; no CLI bulk caller or endpoint trace is claimed.
 
 The remaining surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden

@@ -4,8 +4,10 @@
 //! HTTP/path decoding, crypto, clocks, persistence, SMTP and notifications stay external.
 
 use crate::{
-    ApiError, ErrorKind, VaultService, identity::Secret,
-    organization_collections::OrganizationCollectionStorage, wire::OrganizationConfirmRequest,
+    ApiError, ErrorKind, VaultService,
+    identity::Secret,
+    organization_collections::OrganizationCollectionStorage,
+    wire::{OrganizationBulkConfirmRequest, OrganizationConfirmRequest},
 };
 
 /// Owned provider metadata, independent of a mutable storage borrow. Identifiers may
@@ -167,6 +169,16 @@ impl<S: OrganizationConfirmationStorage> VaultService<S> {
         request: &OrganizationConfirmRequest<'_>,
     ) -> Result<(), ApiError> {
         let actor_role = self.org_member_admin_role(owner, organization)?;
+        self.confirm_org_member_with_role(owner, organization, member, request, actor_role)
+    }
+    fn confirm_org_member_with_role(
+        &mut self,
+        owner: &str,
+        organization: &str,
+        member: &str,
+        request: &OrganizationConfirmRequest<'_>,
+        actor_role: i32,
+    ) -> Result<(), ApiError> {
         let key = request
             .key
             .as_ref()
@@ -207,6 +219,247 @@ impl<S: OrganizationConfirmationStorage> VaultService<S> {
         self.storage_mut()
             .confirm_organization_member(&plan)
             .map_err(S::map_error)
+    }
+}
+
+/// Stable, fully decoded, uncapped bulk input. Preserve order and duplicates. Every
+/// index below len exists, and each returned string borrows this view through the
+/// operation/response. Adapters must decode the ENTIRE JSON body before calling: a
+/// later schema failure must never occur after an earlier confirmation was committed.
+pub trait OrganizationBulkConfirmData {
+    fn len(&self) -> usize;
+    fn get(&self, index: usize) -> Option<OrganizationConfirmRequest<'_>>;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+impl<T: OrganizationBulkConfirmData + ?Sized> OrganizationBulkConfirmData for &T {
+    fn len(&self) -> usize {
+        (**self).len()
+    }
+    fn get(&self, index: usize) -> Option<OrganizationConfirmRequest<'_>> {
+        (**self).get(index)
+    }
+}
+impl<const N: usize> OrganizationBulkConfirmData for OrganizationBulkConfirmRequest<'_, N> {
+    fn len(&self) -> usize {
+        self.keys.as_ref().map_or(0, |keys| keys.len())
+    }
+    fn get(&self, index: usize) -> Option<OrganizationConfirmRequest<'_>> {
+        let row = self.keys.as_ref()?.get(index)?;
+        Some(OrganizationConfirmRequest {
+            id: row.id,
+            key: row.key.as_ref().map(|key| Secret::new(key.expose_secret())),
+        })
+    }
+}
+
+/// Safe per-item outcome: no wrapped key/provider diagnostic is retained. Public
+/// IDs remain exact opaque strings. Only the explicit serializer exposes them.
+#[derive(Clone, Copy)]
+pub struct OrganizationBulkConfirmResult<'a> {
+    id: &'a str,
+    error: Option<ApiError>,
+}
+impl<'a> OrganizationBulkConfirmResult<'a> {
+    pub const fn id(&self) -> &'a str {
+        self.id
+    }
+    pub const fn error(&self) -> Option<ApiError> {
+        self.error
+    }
+}
+impl core::fmt::Debug for OrganizationBulkConfirmResult<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationBulkConfirmResult([REDACTED])")
+    }
+}
+struct BulkErrorText<'a> {
+    id: &'a str,
+    error: Option<ApiError>,
+}
+impl core::fmt::Display for BulkErrorText<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if let Some(error) = self.error {
+            f.write_str(error.message)?;
+            if error.field == Some("confirmationPolicy") {
+                write!(f, " (membership {})", self.id)?;
+            }
+        }
+        Ok(())
+    }
+}
+impl serde::Serialize for BulkErrorText<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+impl serde::Serialize for OrganizationBulkConfirmResult<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut row = serializer.serialize_map(Some(3))?;
+        row.serialize_entry("object", "OrganizationBulkConfirmResponseModel")?;
+        row.serialize_entry("id", self.id)?;
+        row.serialize_entry(
+            "error",
+            &BulkErrorText {
+                id: self.id,
+                error: self.error,
+            },
+        )?;
+        row.end()
+    }
+}
+
+/// A complete response borrowing caller-provided output slots and the decoded input.
+/// No intrinsic item cap is imposed. Slots beyond len are never serialized.
+pub struct OrganizationBulkConfirmResponse<'out, 'data> {
+    results: &'out [Option<OrganizationBulkConfirmResult<'data>>],
+}
+impl<'data> OrganizationBulkConfirmResponse<'_, 'data> {
+    pub const fn len(&self) -> usize {
+        self.results.len()
+    }
+    pub const fn is_empty(&self) -> bool {
+        self.results.is_empty()
+    }
+    pub fn get(&self, index: usize) -> Option<&OrganizationBulkConfirmResult<'data>> {
+        self.results.get(index)?.as_ref()
+    }
+}
+impl core::fmt::Debug for OrganizationBulkConfirmResponse<'_, '_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationBulkConfirmResponse([REDACTED])")
+    }
+}
+impl serde::Serialize for OrganizationBulkConfirmResponse<'_, '_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{SerializeMap, SerializeSeq};
+        struct Rows<'a, 'b>(&'a [Option<OrganizationBulkConfirmResult<'b>>]);
+        impl serde::Serialize for Rows<'_, '_> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                let mut rows = serializer.serialize_seq(Some(self.0.len()))?;
+                for row in self.0 {
+                    rows.serialize_element(row.as_ref().ok_or_else(|| {
+                        serde::ser::Error::custom("Incomplete bulk confirmation output")
+                    })?)?;
+                }
+                rows.end()
+            }
+        }
+        let mut result = serializer.serialize_map(Some(3))?;
+        result.serialize_entry("data", &Rows(self.results))?;
+        result.serialize_entry("object", "list")?;
+        result.serialize_entry("continuationToken", &Option::<&str>::None)?;
+        result.end()
+    }
+}
+
+/// Outer failure, distinct from captured per-item outcomes. A missing ID discards
+/// the HTTP response prefix but does NOT undo previously committed confirmations.
+#[derive(Clone, Copy)]
+pub struct OrganizationBulkConfirmError {
+    cause: ApiError,
+    processed: usize,
+    index: Option<usize>,
+}
+impl OrganizationBulkConfirmError {
+    pub const fn cause(&self) -> ApiError {
+        self.cause
+    }
+    pub const fn processed(&self) -> usize {
+        self.processed
+    }
+    pub const fn index(&self) -> Option<usize> {
+        self.index
+    }
+}
+impl core::fmt::Debug for OrganizationBulkConfirmError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationBulkConfirmError([REDACTED])")
+    }
+}
+impl core::fmt::Display for OrganizationBulkConfirmError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.cause.message)
+    }
+}
+impl core::error::Error for OrganizationBulkConfirmError {}
+
+impl<S: OrganizationConfirmationStorage> VaultService<S> {
+    /// Authorize once, then process ordered items using the shared sealed single
+    /// transition. Each provider commit retains its own rollback boundary: successful
+    /// earlier items survive subsequent row errors, missing IDs and provider failures.
+    /// Missing/null keys list becomes an empty list. A present empty ID is a row error;
+    /// an absent ID aborts the outer operation after the already processed prefix.
+    ///
+    /// Supply a slot for EVERY input item, including duplicates. Insufficient scratch
+    /// or an incomplete indexed view fails before any target reads/writes; this is an
+    /// embedding capacity error, not a protocol request-size limit. A whole-body JSON
+    /// decoder must run before this service. No batch transaction may roll back prior
+    /// commits. Backend messages are safely mapped ApiErrors, never raw source/SQL/SMTP
+    /// Debug diagnostics; matching such diagnostic causes is outside this wire subset.
+    pub fn bulk_confirm_org_members<'data, 'out, D: OrganizationBulkConfirmData + ?Sized>(
+        &mut self,
+        owner: &str,
+        organization: &str,
+        request: &'data D,
+        scratch: &'out mut [Option<OrganizationBulkConfirmResult<'data>>],
+    ) -> Result<OrganizationBulkConfirmResponse<'out, 'data>, OrganizationBulkConfirmError> {
+        let outer = |cause, processed, index| OrganizationBulkConfirmError {
+            cause,
+            processed,
+            index,
+        };
+        let actor_role = self
+            .org_member_admin_role(owner, organization)
+            .map_err(|error| outer(error, 0, None))?;
+        let count = request.len();
+        if scratch.len() < count {
+            return Err(outer(
+                ApiError::new(
+                    ErrorKind::Storage,
+                    "Bulk confirmation output capacity is insufficient",
+                ),
+                0,
+                None,
+            ));
+        }
+        for index in 0..count {
+            if request.get(index).is_none() {
+                return Err(outer(
+                    ApiError::new(
+                        ErrorKind::Storage,
+                        "Bulk confirmation input view is incomplete",
+                    ),
+                    0,
+                    Some(index),
+                ));
+            }
+        }
+        scratch[..count].fill(None);
+        for (index, slot) in scratch[..count].iter_mut().enumerate() {
+            let item = request.get(index).ok_or_else(|| {
+                outer(
+                    ApiError::new(
+                        ErrorKind::Storage,
+                        "Bulk confirmation input view is incomplete",
+                    ),
+                    index,
+                    Some(index),
+                )
+            })?;
+            let member = item
+                .id
+                .ok_or_else(|| outer(invalid("Member id is required"), index, Some(index)))?;
+            let error = self
+                .confirm_org_member_with_role(owner, organization, member, &item, actor_role)
+                .err();
+            *slot = Some(OrganizationBulkConfirmResult { id: member, error });
+        }
+        Ok(OrganizationBulkConfirmResponse {
+            results: &scratch[..count],
+        })
     }
 }
 
@@ -255,6 +508,7 @@ mod tests {
         key: String,
         policy: OrganizationConfirmationPolicy,
         fail: Option<&'static str>,
+        fail_once: bool,
         stale: bool,
         calls: Vec<&'static str>,
         revision: u64,
@@ -282,6 +536,7 @@ mod tests {
                 key: "prior-key".to_string(),
                 policy: OrganizationConfirmationPolicy::Allowed,
                 fail: None,
+                fail_once: false,
                 stale: false,
                 calls: Vec::new(),
                 revision: 7,
@@ -291,6 +546,9 @@ mod tests {
         fn step(&mut self, name: &'static str) -> Result<(), ()> {
             self.calls.push(name);
             if self.fail == Some(name) {
+                if self.fail_once {
+                    self.fail = None;
+                }
                 Err(())
             } else {
                 Ok(())
@@ -431,8 +689,11 @@ mod tests {
             org: &str,
             member: &str,
         ) -> Result<Option<OrganizationConfirmationRecord<Id>>, ()> {
-            assert_eq!((org, member), ("org", "member"));
+            assert_eq!(org, "org");
             self.step("target")?;
+            if member != "member" {
+                return Ok(None);
+            }
             Ok(self.target.map(|row| OrganizationConfirmationRecord {
                 membership_id: Id(row.member.to_string()),
                 organization_id: Id(row.org.to_string()),
@@ -774,5 +1035,314 @@ mod tests {
             serde_json::from_str(r#"{"ID":1,"Key":1,"unknown":[],"key":"x"}"#).unwrap();
         assert!(input.id.is_none());
         assert_eq!(input.key.unwrap().expose_secret(), "x");
+    }
+    fn bulk_input(json: &str) -> OrganizationBulkConfirmRequest<'_, 8> {
+        serde_json::from_str(json).unwrap()
+    }
+    #[test]
+    fn bulk_confirmation_authorizes_once_and_missing_null_empty_keys_return_exact_empty_list() {
+        for body in [
+            r#"{}"#,
+            r#"{"keys":null}"#,
+            r#"{"keys":[]}"#,
+            r#"[null]"#,
+            r#"[[]]"#,
+            r#"{"Keys":[{}]}"#,
+        ] {
+            let input = bulk_input(body);
+            let mut memory = Memory::new();
+            let mut scratch = [];
+            let value = serde_json::to_value(
+                VaultService::new(&mut memory)
+                    .bulk_confirm_org_members("actor", "org", &input, &mut scratch)
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                value,
+                serde_json::json!({"data":[],"object":"list","continuationToken":null})
+            );
+            assert_eq!(memory.calls, ["actor"]);
+            assert_eq!(memory.revision, 7);
+        }
+        let input = bulk_input(r#"{"keys":[{"id":"member","key":"x"}]}"#);
+        let mut memory = Memory::new();
+        let mut scratch = [None];
+        let error = VaultService::new(&mut memory)
+            .bulk_confirm_org_members("", "org", &input, &mut scratch)
+            .unwrap_err();
+        assert_eq!(error.cause().status_code(), 401);
+        assert!(memory.calls.is_empty());
+        assert!(scratch[0].is_none());
+        memory.actor.as_mut().unwrap().membership.role = 3;
+        let error = VaultService::new(&mut memory)
+            .bulk_confirm_org_members("actor", "org", &input, &mut scratch)
+            .unwrap_err();
+        assert_eq!(error.cause().status_code(), 401);
+        assert_eq!(memory.calls, ["actor"]);
+    }
+
+    #[test]
+    fn bulk_confirmation_preserves_order_duplicates_and_plain_error_strings_while_continuing() {
+        let input = bulk_input(
+            r#"{"keys":[{"id":"missing","key":"x"},{"id":"member","key":"first"},{"id":"member","key":"replacement"},{"id":"","key":"x"},{"id":"member"}]}"#,
+        );
+        let mut memory = Memory::new();
+        let mut scratch = [None; 7];
+        let response = VaultService::new(&mut memory)
+            .bulk_confirm_org_members("actor", "org", &input, &mut scratch)
+            .unwrap();
+        assert_eq!(response.len(), 5);
+        assert!(!response.is_empty());
+        assert_eq!(response.get(1).unwrap().id(), "member");
+        assert!(response.get(1).unwrap().error().is_none());
+        let value = serde_json::to_value(&response).unwrap();
+        let rows = value["data"].as_array().unwrap();
+        for (index, (id, message)) in [
+            (
+                "missing",
+                "The specified user isn't a member of the organization",
+            ),
+            ("member", ""),
+            ("member", "User in invalid state"),
+            ("", "Key or UserId is not set, unable to process request"),
+            (
+                "member",
+                "Key or UserId is not set, unable to process request",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(
+                rows[index],
+                serde_json::json!({"object":"OrganizationBulkConfirmResponseModel","id":id,"error":message})
+            );
+        }
+        assert_eq!(memory.key, "first");
+        assert_eq!(memory.revision, 8);
+        assert_eq!(memory.calls.iter().filter(|&&c| c == "actor").count(), 1);
+        assert!(scratch[5..].iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn bulk_confirmation_absent_id_aborts_outer_response_after_committed_prefix_without_suffix() {
+        let input = bulk_input(
+            r#"{"keys":[{"id":"member","key":"committed"},{"key":"missing-id"},{"id":"member","key":"ignored"}]}"#,
+        );
+        let mut memory = Memory::new();
+        let mut scratch = [None; 3];
+        let error = VaultService::new(&mut memory)
+            .bulk_confirm_org_members("actor", "org", &input, &mut scratch)
+            .unwrap_err();
+        assert_eq!(error.cause().message, "Member id is required");
+        assert_eq!(error.cause().status_code(), 400);
+        assert_eq!((error.processed(), error.index()), (1, Some(1)));
+        assert_eq!(memory.key, "committed");
+        assert_eq!(memory.revision, 8);
+        assert!(scratch[0].is_some());
+        assert!(scratch[1..].iter().all(Option::is_none));
+        let input = bulk_input(r#"{"keys":[{"id":null,"key":"x"}]}"#);
+        let mut memory = Memory::new();
+        let error = VaultService::new(&mut memory)
+            .bulk_confirm_org_members("actor", "org", &input, &mut scratch)
+            .unwrap_err();
+        assert_eq!(error.processed(), 0);
+        assert_eq!(memory.calls, ["actor"]);
+        assert_eq!(memory.revision, 7);
+    }
+
+    #[test]
+    fn bulk_confirmation_provider_failures_are_safe_rows_and_later_items_can_commit() {
+        let input = bulk_input(
+            r#"{"keys":[{"id":"member","key":"failed"},{"id":"member","key":"committed"}]}"#,
+        );
+        let mut memory = Memory::new();
+        memory.fail = Some("commit");
+        memory.fail_once = true;
+        let mut scratch = [None; 2];
+        let value = serde_json::to_value(
+            VaultService::new(&mut memory)
+                .bulk_confirm_org_members("actor", "org", &input, &mut scratch)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value["data"][0]["error"], "Confirmation provider conflict");
+        assert_eq!(value["data"][1]["error"], "");
+        assert_eq!(memory.key, "committed");
+        assert_eq!(memory.revision, 8);
+        assert_eq!(memory.preserved, [11, 22, 33, 44, 55, 66, 77, 88]);
+    }
+
+    #[test]
+    fn bulk_confirmation_output_capacity_and_incomplete_input_are_preflighted_without_mutation() {
+        let input = bulk_input(r#"{"keys":[{"id":"member","key":"x"},{"id":"member","key":"y"}]}"#);
+        let mut memory = Memory::new();
+        let mut scratch = [None];
+        let error = VaultService::new(&mut memory)
+            .bulk_confirm_org_members("actor", "org", &input, &mut scratch)
+            .unwrap_err();
+        assert_eq!(error.cause().kind, ErrorKind::Storage);
+        assert_eq!(error.processed(), 0);
+        assert_eq!(memory.calls, ["actor"]);
+        assert_eq!(memory.key, "prior-key");
+        struct Incomplete;
+        impl OrganizationBulkConfirmData for Incomplete {
+            fn len(&self) -> usize {
+                2
+            }
+            fn get(&self, index: usize) -> Option<OrganizationConfirmRequest<'_>> {
+                (index == 0).then(|| OrganizationConfirmRequest {
+                    id: Some("member"),
+                    key: Some(Secret::new("x")),
+                })
+            }
+        }
+        let mut memory = Memory::new();
+        let mut scratch = [None; 2];
+        let error = VaultService::new(&mut memory)
+            .bulk_confirm_org_members("actor", "org", &Incomplete, &mut scratch)
+            .unwrap_err();
+        assert_eq!(error.cause().kind, ErrorKind::Storage);
+        assert_eq!((error.processed(), error.index()), (0, Some(1)));
+        assert_eq!(memory.calls, ["actor"]);
+        assert_eq!(memory.revision, 7);
+    }
+
+    #[test]
+    fn bulk_confirmation_reuses_single_hierarchy_policy_and_exact_opaque_key_rules() {
+        let input = bulk_input(r#"{"keys":[{"id":"member","key":"opaque"}]}"#);
+        let mut memory = Memory::new();
+        memory.actor.as_mut().unwrap().membership.role = 1;
+        memory.target.as_mut().unwrap().role = 3;
+        let mut scratch = [None];
+        let value = serde_json::to_value(
+            VaultService::new(&mut memory)
+                .bulk_confirm_org_members("actor", "org", &input, &mut scratch)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            value["data"][0]["error"],
+            "Only Owners can confirm Managers, Admins or Owners"
+        );
+        assert_eq!(memory.revision, 7);
+        let mut memory = Memory::new();
+        memory.policy = OrganizationConfirmationPolicy::TwoFactorRequired;
+        let value = serde_json::to_value(
+            VaultService::new(&mut memory)
+                .bulk_confirm_org_members("actor", "org", &input, &mut scratch)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            value["data"][0]["error"],
+            "Cannot confirm because 2FA is required (membership member)"
+        );
+        let mut keys = crate::bounded::BoundedList::<_, 1>::new();
+        let raw = " \0opaque Ω ";
+        keys.push(OrganizationConfirmRequest {
+            id: Some("member"),
+            key: Some(Secret::new(raw)),
+        })
+        .unwrap();
+        let input = OrganizationBulkConfirmRequest { keys: Some(keys) };
+        let mut memory = Memory::new();
+        VaultService::new(&mut memory)
+            .bulk_confirm_org_members("actor", "org", &input, &mut scratch)
+            .unwrap();
+        assert_eq!(memory.key, raw);
+    }
+
+    #[test]
+    fn bulk_confirmation_serialization_escapes_raw_ids_once_and_redacts_debug_metadata() {
+        let row = OrganizationBulkConfirmResult {
+            id: "member\"\n\0Ω",
+            error: OrganizationConfirmationPolicy::TwoFactorRequired.error(),
+        };
+        let scratch = [Some(row)];
+        let response = OrganizationBulkConfirmResponse { results: &scratch };
+        let value = serde_json::to_value(&response).unwrap();
+        assert_eq!(value["data"][0]["id"], row.id());
+        assert_eq!(
+            value["data"][0]["error"],
+            format!(
+                "Cannot confirm because 2FA is required (membership {})",
+                row.id()
+            )
+        );
+        let json = serde_json::to_string(&response).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&json).unwrap(),
+            value
+        );
+        assert!(format!("{row:?} {response:?}").contains("REDACTED"));
+        assert!(!format!("{row:?} {response:?}").contains("member"));
+        let error = OrganizationBulkConfirmError {
+            cause: invalid("Member id is required"),
+            processed: 2,
+            index: Some(2),
+        };
+        assert_eq!(format!("{error}"), "Member id is required");
+        assert!(format!("{error:?}").contains("REDACTED"));
+    }
+
+    #[test]
+    fn bulk_confirmation_wire_fully_checks_later_entries_and_capacity_before_service() {
+        type Input<'a> = OrganizationBulkConfirmRequest<'a, 2>;
+        for body in [
+            r#"[]"#,
+            r#"[null,0]"#,
+            r#"{"keys":[[]]}"#,
+            r#"{"keys":[["member"]]}"#,
+            r#"{"keys":[["member","x",0]]}"#,
+            r#"{"keys":[{"id":"member","key":"x"},{"id":false,"key":"y"}]}"#,
+            r#"{"keys":[{"id":"a"},{"id":"b"},{"id":"c"}]}"#,
+            r#"{"keys":false}"#,
+            r#"{"keys":null,"keys":[]}"#,
+        ] {
+            assert!(serde_json::from_str::<Input<'_>>(body).is_err(), "{body}");
+        }
+        let input: Input<'_> =
+            serde_json::from_str(r#"[[["member",null],{"Id":"ignored","Key":true}]]"#).unwrap();
+        assert_eq!(input.len(), 2);
+        assert_eq!(input.get(0).unwrap().id, Some("member"));
+        assert!(input.get(0).unwrap().key.is_none());
+        assert!(input.get(1).unwrap().id.is_none());
+        assert!(format!("{input:?}").contains("REDACTED"));
+    }
+
+    #[test]
+    fn bulk_confirmation_forwarded_uncapped_borrowed_views_have_no_intrinsic_batch_limit() {
+        struct Repeated<'a>(&'a str);
+        impl OrganizationBulkConfirmData for Repeated<'_> {
+            fn len(&self) -> usize {
+                32
+            }
+            fn get(&self, index: usize) -> Option<OrganizationConfirmRequest<'_>> {
+                (index < 32).then_some(OrganizationConfirmRequest {
+                    id: Some(self.0),
+                    key: None,
+                })
+            }
+        }
+        let raw = "opaque/Ω\0".repeat(2048);
+        let input = Repeated(&raw);
+        let view: &dyn OrganizationBulkConfirmData = &input;
+        let mut memory = Memory::new();
+        let mut forwarded = &mut memory;
+        let mut scratch = [None; 32];
+        let response = VaultService::new(&mut forwarded)
+            .bulk_confirm_org_members("actor", "org", &view, &mut scratch)
+            .unwrap();
+        assert_eq!(response.len(), 32);
+        assert!(response.get(32).is_none());
+        assert_eq!(response.get(31).unwrap().id(), raw);
+        assert_eq!(
+            response.get(31).unwrap().error().unwrap().status_code(),
+            400
+        );
+        assert_eq!(memory.calls, ["actor"]);
+        assert_eq!(memory.revision, 7);
     }
 }

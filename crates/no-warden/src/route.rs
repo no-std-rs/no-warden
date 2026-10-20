@@ -57,6 +57,7 @@ pub enum Route<'a> {
     OrganizationMembers(&'a str),
     OrganizationInvite(&'a str),
     OrganizationMemberConfirm(&'a str, &'a str),
+    OrganizationBulkConfirm(&'a str),
     OrganizationMember(&'a str, &'a str),
     OrganizationCollections(&'a str),
     OrganizationCollectionCreate(&'a str),
@@ -241,6 +242,7 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                     return match (method, action) {
                         (Get, "users") => Some(OrganizationMembers(organization)),
                         (Post, "users/invite") => Some(OrganizationInvite(organization)),
+                        (Post, "users/confirm") => Some(OrganizationBulkConfirm(organization)),
                         (Post, action) if action.starts_with("users/") => {
                             let member = action.strip_prefix("users/")?.strip_suffix("/confirm")?;
                             (!member.is_empty() && !member.contains('/'))
@@ -445,6 +447,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn organization_bulk_confirmation_is_distinct_authenticated_post_and_keeps_raw_org() {
+        for org in ["org", "bad.id", "%30org"] {
+            let uri = std::format!("/api/organizations/{org}/users/confirm/?ignored=true");
+            let route = classify(Method::Post, &uri).unwrap();
+            assert_eq!(route, Route::OrganizationBulkConfirm(org));
+            assert!(route.requires_authentication());
+            assert_eq!(
+                classify(Method::Get, &uri),
+                Some(Route::OrganizationMember(org, "confirm"))
+            );
+            for method in [Method::Put, Method::Delete, Method::Options] {
+                assert_eq!(classify(method, &uri), None);
+            }
+        }
+        assert_eq!(
+            classify(Method::Post, "/api/organizations/org/users/member/confirm"),
+            Some(Route::OrganizationMemberConfirm("org", "member"))
+        );
+        assert_eq!(
+            classify(Method::Post, "/api/organizations//users/confirm"),
+            None
+        );
+        assert_eq!(
+            classify(Method::Post, "/api/organizations/org/users/confirm/extra"),
+            None
+        );
+    }
+
+    #[test]
     fn organization_confirmation_is_single_authenticated_post_with_raw_ids_and_no_bulk_alias() {
         for (org, member) in [
             ("org", "member"),
@@ -462,7 +493,6 @@ mod tests {
             }
         }
         for uri in [
-            "/api/organizations/org/users/confirm",
             "/api/organizations//users/member/confirm",
             "/api/organizations/org/users//confirm",
             "/api/organizations/org/users/member/confirm/extra",
@@ -575,7 +605,9 @@ mod tests {
                 );
                 assert!(Route::OrganizationMember(org, member).requires_authentication());
                 for method in [Method::Post, Method::Put, Method::Delete] {
-                    assert_eq!(classify(method, &path), None);
+                    let expected = (method == Method::Post && member == "confirm")
+                        .then_some(Route::OrganizationBulkConfirm(org));
+                    assert_eq!(classify(method, &path), expected);
                 }
             }
         }

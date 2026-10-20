@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 740 active Rust tests: 361 core, 267 host, and 112 conformance
+The workspace has 758 active Rust tests: 371 core, 274 host, and 113 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -536,3 +536,21 @@ counters without keys, credentials, private URLs or response bodies. Direct
 HTTP setup and client-internal traffic remain separately counted and untraced.
 The default 104-case and baseline 120-command receipts stay separate; no
 combined total, bulk confirmation, SMTP or complete policy lifecycle follows.
+
+## Bulk confirmation comparison
+
+`--suite organization-bulk-confirmation` and
+`--suite organization-bulk-confirmation-cli` write separate private receipts,
+`BW_ORGANIZATION_BULK_CONFIRMATION_RECEIPT` and
+`BW_ORGANIZATION_BULK_CONFIRMATION_CLI_RECEIPT`. Both actual targets pass six
+HTTP cases with 211 counted requests plus ten registration requests for five
+fixtures, two password logins and two refreshes. Checks distinguish
+whole-schema rejection from missing-ID partial commits and compare exact
+ordered row/list projections.
+
+The separate official CLI 2026.10.0 comparison passes 21 commands on both,
+with 33 direct HTTP requests plus four registration requests, three CLI password
+logins and two direct setup logins. The CLI observes recipient state and
+collection decryption after HTTP bulk setup; there is no CLI bulk caller or
+captured request trace. Client-internal traffic is uncounted, and default
+104-case and baseline 120-command suites retain separate receipts.

@@ -1150,3 +1150,26 @@ login. Private rollback/CAS evidence remains in local provider tests; no
 captured request trace, bulk confirmation, SMTP or sharing is inferred. The
 historical invitation-only and checked-negative milestones retain their
 narrower meaning.
+
+## Ordered bulk confirmation
+
+`OrganizationBulkConfirmData` provides an uncapped stable decoded view;
+`OrganizationBulkConfirmRequest<N>` offers an optional caller-bounded decoder.
+`VaultService::bulk_confirm_org_members` authorizes once, preflights a result
+slot for every input item including duplicates, then reuses the sealed
+single-member transition. Adapter decoding covers the whole JSON body before
+entry. Capacity and incomplete-view failures occur before writes and are
+embedding boundaries, not protocol batch limits.
+
+`OrganizationBulkConfirmResponse` serializes caller-owned results without
+allocation. Supported domain errors become explicit strings; keys and raw
+provider diagnostics are absent from result/debug state. Missing IDs return an
+outer `OrganizationBulkConfirmError` with no response prefix; earlier commits
+remain. The host uses one transaction per successful item, preserving the
+single-item atomic guarantee without wrapping the batch in a transaction.
+
+Both actual targets pass six focused HTTP cases and a separate 21-command
+official CLI recipient state/decryption comparison. Bulk mutation is HTTP
+setup, not a CLI caller. Complete upstream backend/SMTP Debug formatting,
+configured policies, sharing and remaining member administration are not
+supplied. No endpoint trace or full-parity claim is inferred.

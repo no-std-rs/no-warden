@@ -971,3 +971,26 @@ counters. Direct setup and client-internal requests remain distinct; no
 captured trace, bulk confirmation, SMTP, policy/group administration or
 shared-cipher write is claimed. The default 104-case and baseline 120-command
 suites remain separate.
+
+## Bulk confirmation and recipient state
+
+`--suite organization-bulk-confirmation` passes six HTTP cases against both
+actual servers: 211 counted requests plus ten registration requests for five
+fixtures, two password logins and two refreshes. It compares exact ordered
+errors, whole-body schema rejection, continued processing and missing-ID
+committed-prefix behavior while preserving supported unrelated state.
+
+The separate `--suite organization-bulk-confirmation-cli` comparison passes
+21 official CLI 2026.10.0 commands on both targets, with 33 direct HTTP requests
+plus four registration requests, three CLI password logins and two direct
+setup logins. Recipient login, unlock and fresh-cache reads decrypt assigned
+collections and exclude unassigned rows after direct HTTP bulk setup. The
+pinned CLI has no bulk-confirmation caller; this is observation of resulting
+state, not a new command form or endpoint trace.
+
+`BW_ORGANIZATION_BULK_CONFIRMATION_RECEIPT` and
+`BW_ORGANIZATION_BULK_CONFIRMATION_CLI_RECEIPT` contain authored status and
+counters without credentials, keys or response bodies. Client-internal traffic,
+the default 104-case suite and the baseline 120-command run remain separate.
+SMTP, configured policy/backend diagnostic variants, sharing and complete
+member/group administration remain open.

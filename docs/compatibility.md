@@ -50,6 +50,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Default no-SMTP organization invitations and placeholder completion | Ordered per-email commits, real Invited/Accepted states and same-ID modern registration | Six matching HTTP cases and twenty-four matching official CLI result checks on both targets; invitation/registration setup is HTTP, not a CLI caller or confirmation claim |
 | Organization member detail | Scoped Owner/Admin read and direct nineteen-field response | Expanded six matching HTTP cases and eighteen official CLI commands on both targets, with strict local already-confirmed rejection; no successful confirmation claim |
 | Single-member confirmation and recipient reads | Accepted-to-Confirmed key delivery, current-device Owner/Admin guards and selective collection/sync projection | Six matching HTTP cases and 23 matching official CLI commands on both targets, including actual confirmation and recipient decryption; no bulk/SMTP/sharing or trace claim |
+| Bulk member confirmation | Ordered item results, continued errors and committed-prefix abort with whole-body schema validation | Six matching HTTP cases and 21 matching official CLI state/decryption commands on both targets after HTTP bulk setup; no CLI bulk caller or trace |
 | Single organization-collection update/delete | Complete grant replacement, opaque names, whitespace external-ID clearing and preserved cipher data | Allocation-free core and local rollback/cascade tests; six matching HTTP cases and twenty matching official CLI commands on both actual targets |
 | Organization-scoped collection list/create/single access-details | Confirmed manager authorization, exact projections, opaque names/external IDs and reference validation | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers; atomic local provider tests |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
@@ -112,7 +113,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 740 active workspace unit tests pass: 361 core, 267 host and 112 support,
+All 758 active workspace unit tests pass: 371 core, 274 host and 113 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -1221,3 +1222,23 @@ distinct, without a captured route trace.
 The historical already-confirmed CLI rejections and invitation-only results
 remain separate milestones. Bulk confirmation, SMTP, policy/group lifecycle,
 cipher sharing and complete failure/transport variants remain open.
+
+## Bulk organization-member confirmation
+
+The bulk route has a typed ordered list response and shares the single-member
+confirmation guards and transition. Missing/null keys return an empty list.
+Per-item failures continue, while a missing ID aborts with committed prefix
+retained and no partial response. A schema error anywhere in the body rejects
+before writes. Raw string IDs and opaque keys retain their exact values.
+
+Both actual targets pass six HTTP cases with 211 counted requests plus ten
+registration requests for five fixtures, two password logins and two
+refreshes. The separate official CLI 2026.10.0 comparison passes 21 commands on
+both, with 33 direct HTTP requests plus four registration requests, three CLI
+password logins and two direct setup logins. Recipient assigned collection
+names decrypt after login, unlock and fresh-cache login; unassigned rows stay
+absent. Bulk confirmation is HTTP setup, not a CLI bulk caller. Internal
+client traffic remains uncounted and untraced.
+
+Complete error/backend/configuration parity, SMTP, sharing and remaining
+member/group administration remain open.

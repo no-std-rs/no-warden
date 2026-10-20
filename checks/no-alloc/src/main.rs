@@ -62,16 +62,16 @@ use no_warden::{
         DeviceResponse, DomainSettingsRequest, DomainSettingsResponse,
         DomainSettingsUpdateResponse, FileSendRequest, FolderRequest, ImportRequest,
         InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
-        MasterPasswordPolicy, MasterPasswordPolicyResponse, OrganizationCollectionCreateRequest,
-        OrganizationConfirmRequest, OrganizationCreateRequest, OrganizationInviteCollection,
-        OrganizationInvitePermissions, OrganizationInviteRequest, OrganizationPlanType,
-        PasswordLoginRequest, PasswordOrOtpRequest, PreloginKdfSettings, PreloginRequest,
-        PreloginResponse, ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest,
-        RegistrationAuthentication, RegistrationCredentials, RegistrationFinishRequest,
-        RegistrationFinishResponse, RegistrationUnlock, RegistrationVerificationRequest,
-        RegistrationVerificationToken, SecretVerificationRequest, SendAccessTokenRequest,
-        SendFileData, TextSendRequest, UserKeyIdRequest, UserPublicKeyResponse,
-        WebAuthnCredentialsResponse,
+        MasterPasswordPolicy, MasterPasswordPolicyResponse, OrganizationBulkConfirmRequest,
+        OrganizationCollectionCreateRequest, OrganizationConfirmRequest, OrganizationCreateRequest,
+        OrganizationInviteCollection, OrganizationInvitePermissions, OrganizationInviteRequest,
+        OrganizationPlanType, PasswordLoginRequest, PasswordOrOtpRequest, PreloginKdfSettings,
+        PreloginRequest, PreloginResponse, ProfileUpdateRequest, RefreshTokenRequest,
+        RegisterRequest, RegistrationAuthentication, RegistrationCredentials,
+        RegistrationFinishRequest, RegistrationFinishResponse, RegistrationUnlock,
+        RegistrationVerificationRequest, RegistrationVerificationToken, SecretVerificationRequest,
+        SendAccessTokenRequest, SendFileData, TextSendRequest, UserKeyIdRequest,
+        UserPublicKeyResponse, WebAuthnCredentialsResponse,
     },
 };
 
@@ -1307,6 +1307,55 @@ pub extern "C" fn _start() -> ! {
         black_box(classify(
             Method::Post,
             "/api/organizations/embedded-org/users/invite",
+        ));
+        // The adapter/caller chooses both decoder and output capacities. This real
+        // service call preserves order, commits one target, then reports its duplicate.
+        let bulk = serde_json_core::from_slice::<OrganizationBulkConfirmRequest<'_, 3>>(black_box(
+            br#"{"keys":[{"id":"","key":"ignored"},{"id":"embedded-invited-member","key":"opaque-bulk-key"},{"id":"embedded-invited-member","key":"repeat"}]}"#,
+        ));
+        if let Ok((request, _)) = bulk {
+            let mut slots = [None; 3];
+            match organization_service.bulk_confirm_org_members(
+                "embedded-owner",
+                "embedded-org",
+                &request,
+                &mut slots,
+            ) {
+                Ok(response) => {
+                    let _ = black_box(serde_json_core::to_slice(
+                        &response,
+                        &mut organization_output,
+                    ));
+                    black_box((
+                        response.len(),
+                        response.get(0).and_then(|row| row.error()),
+                        response.get(1).map(|row| row.id()),
+                    ));
+                }
+                Err(error) => {
+                    black_box((error.cause(), error.processed(), error.index()));
+                }
+            }
+        }
+        // A missing item ID aborts after the processed prefix, without serializing
+        // a partial response. No borrowed key is retained in output scratch.
+        let bulk = serde_json_core::from_slice::<OrganizationBulkConfirmRequest<'_, 2>>(black_box(
+            br#"{"keys":[{"id":"","key":null},{"key":"missing-id"}]}"#,
+        ));
+        if let Ok((request, _)) = bulk {
+            let mut slots = [None; 2];
+            if let Err(error) = organization_service.bulk_confirm_org_members(
+                "embedded-owner",
+                "embedded-org",
+                &request,
+                &mut slots,
+            ) {
+                black_box((error.cause(), error.processed(), error.index()));
+            }
+        }
+        black_box(classify(
+            Method::Post,
+            "/api/organizations/embedded-org/users/confirm",
         ));
         let confirmation = serde_json_core::from_slice::<OrganizationConfirmRequest<'_>>(
             black_box(br#"{"id":"ignored-body-id","key":"opaque-wrapped-org-key"}"#),
