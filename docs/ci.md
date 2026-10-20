@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 692 active Rust tests: 337 core, 245 host, and 110 conformance
+The workspace has 720 active Rust tests: 349 core, 260 host, and 111 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -77,7 +77,8 @@ CLI `2026.10.0` separately passed 120 commands against each server.
 The registration selection checks token transport and purpose, exact claim authority,
 legacy/nested credentials, signed KDF fields, deferred email validation, guards,
 retry and duplicate-account isolation. It uses direct per-case loopback peers
-without changing reference limits. SMTP and invitation variants remain open.
+without changing reference limits. SMTP and invite-JWT variants remain open; the separate no-SMTP invitation
+selection below covers placeholder completion.
 The existing HTTP, restart-persistence, and client-inventory orchestration still
 uses JavaScript, so the broader migration
 remains unfinished.
@@ -509,3 +510,17 @@ evidence. Two new checks require published exit 1 with strict JSON
 unrelated server, authorization, transport or malformed-output failures.
 Confirmation POST is not reached for the confirmed Owner. Client-internal
 requests remain uncounted and untraced.
+
+The explicit selections `--suite organization-invites` and
+`--suite organization-invites-cli` write private
+`BW_ORGANIZATION_INVITES_RECEIPT`/`BW_ORGANIZATION_INVITES_CLI_RECEIPT`
+counters. Both actual targets pass six HTTP cases with 211 counted requests
+plus eight modern registration requests, three password attempts (two
+successful and one rejected placeholder), and two refreshes. The separate
+official CLI 2026.10.0 selection also passes both targets: twenty-four
+commands, sixteen direct HTTP requests plus four registration requests, three
+CLI password attempts and one direct attempt. Separate fresh reference
+processes retain unchanged limits. The default 104-case and baseline
+120-command runs retain separate receipts; no combined total, internal-request
+count, invitation/registration CLI caller, confirmation success or trace
+follows.

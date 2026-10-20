@@ -223,6 +223,7 @@ impl Store {
         db.execute_batch(crate::sends::SCHEMA)?;
         db.execute_batch(crate::organizations::SCHEMA)?;
         db.execute_batch(crate::organization_collections::SCHEMA)?;
+        db.execute_batch(crate::organization_invitations::SCHEMA)?;
         crate::sends::signing_key(&db)?;
         crate::prelogin::initialize(&db)?;
         // SQLite inherits the private database mode for new sidecars. Also
@@ -881,8 +882,9 @@ impl AccountSecurityStorage for Store {
 impl RegistrationStorage for Store {
     type Token = String;
     type Claims = crate::registration::Claims;
-    fn registration_verification_allowed(&mut self, _email: &str) -> rusqlite::Result<bool> {
-        Ok(self.registration_policy.signups_allowed)
+    fn registration_verification_allowed(&mut self, email: &str) -> rusqlite::Result<bool> {
+        Ok(self.registration_policy.signups_allowed
+            || crate::registration::invitation_exists(&self.db, email)?)
     }
     fn issue_registration_token(
         &mut self,
@@ -911,60 +913,25 @@ impl RegistrationStorage for Store {
         ))
     }
     fn registration_state(&mut self, email: &str) -> rusqlite::Result<RegistrationState> {
-        // Existing host accounts are initialized. Invitation/placeholder
-        // completion is a separate, currently unsupported adapter capability.
-        let exists = self.db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM accounts WHERE email=?1)",
-            [email],
-            |row| row.get(0),
-        )?;
+        let has_password = self
+            .db
+            .query_row(
+                "SELECT password<>'' FROM accounts WHERE email=?1",
+                [email],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(false);
         Ok(RegistrationState {
-            registration_allowed: self.registration_policy.signups_allowed,
-            has_password: exists,
+            registration_allowed: self.registration_policy.signups_allowed
+                || crate::registration::invitation_exists(&self.db, email)?,
+            has_password,
             password_hints_allowed: self.registration_policy.password_hints_allowed,
             email_valid: crate::registration::valid_storage_email(email),
         })
     }
     fn finish_registration(&mut self, plan: &ValidatedRegistration<'_>) -> rusqlite::Result<()> {
-        if !self.registration_policy.signups_allowed
-            || (!self.registration_policy.password_hints_allowed
-                && plan.master_password_hint().is_some())
-        {
-            return Err(rusqlite::Error::InvalidQuery);
-        }
-        let salt = SaltString::generate(&mut OsRng);
-        let verifier = Argon2::default()
-            .hash_password(
-                plan.master_password_hash().expose_secret().as_bytes(),
-                &salt,
-            )
-            .map_err(|_| rusqlite::Error::InvalidQuery)?
-            .to_string();
-        let id = uuid::Uuid::new_v4().to_string();
-        let revision = now();
-        let kdf = plan.kdf();
-        let keys=plan.keys().map(|keys|json!({"publicKey":keys.public_key,"encryptedPrivateKey":keys.encrypted_private_key}));
-        // Store only canonical account fields. The raw token, client hash,
-        // nested proof document and untrusted extensions never enter this JSON.
-        let document = json!({"id":id,"email":plan.email(),"name":plan.name().unwrap_or(plan.email()),"key":plan.key().expose_secret(),"keys":keys,"masterPasswordHint":plan.master_password_hint(),"kdf":kdf.kdf,"kdfIterations":kdf.kdf_iterations,"kdfMemory":kdf.kdf_memory,"kdfParallelism":kdf.kdf_parallelism,"avatarColor":null,"userKeyId":null,"creationDate":revision,"revisionDate":revision});
-        let tx = self.db.savepoint()?;
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM accounts WHERE email=?1)",
-            [plan.email()],
-            |row| row.get(0),
-        )?;
-        if exists {
-            return Err(rusqlite::Error::InvalidQuery);
-        }
-        tx.execute(
-            "INSERT INTO accounts(id,email,document,password,revision) VALUES(?1,?2,?3,?4,?5)",
-            params![id, plan.email(), document.to_string(), verifier, revision],
-        )?;
-        tx.execute(
-            "INSERT INTO registration_metadata(owner,email_verified) VALUES(?1,?2)",
-            params![id, plan.email_verified()],
-        )?;
-        tx.commit()
+        crate::registration::finish_account(&mut self.db, &self.registration_policy, plan)
     }
 }
 

@@ -47,12 +47,17 @@ invoke the pinned official Bitwarden CLI as an external process.
 - [x] Organization-owner creation/discovery subset: allocation-free policy/provider and typed membership/collection projections, six matching actual HTTP cases and nineteen matching official CLI commands with collection decryption. General administration and sharing remain open.
 - [x] Organization collection create/list/single-detail subset: allocation-free opt-in provider and typed 7/10/13-field projections, six matching actual HTTP cases and nineteen matching official CLI commands with encrypted-name decryption and fresh-cache reads. General ACL/group lifecycle and sharing remain open.
 - [x] Organization collection single update/delete subset: allocation-free mutation provider and sealed plans, six matching actual HTTP cases and twenty matching official CLI commands with encrypted rename, fresh-cache reads and deletion. Bulk mutations, membership/group lifecycle and sharing remain open.
-- [x] Organization member discovery subset: allocation-free real membership/account projections, six matching actual HTTP cases and sixteen matching official CLI commands with fresh server names and fresh-cache recovery. Invitations, member/group administration and sharing remain open.
+- [x] Organization member discovery subset: allocation-free real membership/account projections, six matching actual HTTP cases and sixteen matching official CLI commands with fresh server names and fresh-cache recovery. SMTP/invite-JWT variants, confirmation, broader member/group administration and sharing remain open.
 - [x] Organization member detail subset: allocation-free scoped Owner/Admin
   lookup and direct nineteen-field response, with six matching expanded HTTP
   cases and eighteen matching official CLI commands, including two strict
   already-confirmed local rejections. Invitation/confirmation mutations,
   broader member/group administration and sharing remain open.
+- [x] Default no-SMTP organization invitations and same-ID passwordless-account
+  completion: allocation-free provider and ordered partial writes implemented;
+  six matching HTTP cases and twenty-four matching official CLI commands after
+  direct HTTP setup.
+  Confirmation, SMTP, broader policy/member lifecycle and sharing remain open.
 - [ ] Attachments, Sends, event notifications and websocket transport.
 - [ ] Two-factor authentication, passkeys, SSO and administrative APIs.
 - [ ] Full import/export compatibility, remaining formats and variants, and upstream protocol regression fixtures.

@@ -272,7 +272,7 @@ fn admin_required() -> ApiError {
         "You need to be Admin or Owner to call this endpoint",
     )
 }
-impl<S: OrganizationMemberDetailStorage> VaultService<S> {
+impl<S: OrganizationCollectionStorage> VaultService<S> {
     /// Run this request guard before adapter UUID/query guards, then retain the
     /// authenticated lock/snapshot through get_org_member and serialization.
     pub fn authorize_org_member_admin(
@@ -280,6 +280,13 @@ impl<S: OrganizationMemberDetailStorage> VaultService<S> {
         owner: &str,
         organization: &str,
     ) -> Result<(), ApiError> {
+        self.org_member_admin_role(owner, organization).map(|_| ())
+    }
+    pub(crate) fn org_member_admin_role(
+        &mut self,
+        owner: &str,
+        organization: &str,
+    ) -> Result<i32, ApiError> {
         crate::service::require_owner(owner)?;
         let member = self
             .storage_mut()
@@ -294,8 +301,10 @@ impl<S: OrganizationMemberDetailStorage> VaultService<S> {
         {
             return Err(admin_required());
         }
-        Ok(())
+        Ok(member.role)
     }
+}
+impl<S: OrganizationMemberDetailStorage> VaultService<S> {
     pub fn get_org_member(
         &mut self,
         owner: &str,

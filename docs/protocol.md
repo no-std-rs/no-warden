@@ -289,7 +289,7 @@ data and explicit response serializers keep JWTs, Unicode normalization, JSON
 compatibility parsing, hashing, clocks and persistence outside the no-allocation
 core. The full finish view has no flattened/untagged decoder in the core. The
 strict legacy registration API remains available unchanged.
-SMTP delivery, invitation/emergency enrollment, placeholder completion, domain
+SMTP delivery, invite-JWT/emergency enrollment, domain
 restrictions/configuration, rate controls, notifications, complete header grammar,
 detailed errors and
 transport-limit parity remain open. The adapter's 16-MiB request cap differs
@@ -1801,9 +1801,9 @@ both targets, including fresh member names without an intervening sync and
 fresh-cache recovery. Seventeen direct HTTP requests include one setup login;
 two further logins are CLI commands, excluding one registration/two requests.
 Client-internal HTTP remains uncounted and no request trace is captured.
-The host's reachable membership lifecycle remains created Owner/full-access;
-status/role/group variants have separate provider evidence, not implemented
-invitations or administration. Owner/full-access and disabled-group arrays are
+That historical list-only proof used created Owner/full-access memberships;
+the invitation extension below adds stored Invited and Accepted recipients.
+Other status/role/group variants retain separate provider evidence. Owner/full-access and disabled-group arrays are
 empty for every query option, so HTTP acceptance does not independently prove
 boolean decoding or non-full-access ACL projection. Source/parser/provider tests
 establish those distinctions. Sharing and general organization parity remain
@@ -1852,3 +1852,64 @@ require exact exit-one JSON with no data/private extras; unrelated server,
 authorization, transport or malformed failures cannot pass. This
 checked-negative branch establishes no successful invitations, acceptance,
 confirmation, key delivery or captured route trace.
+
+## Organization invitations and placeholder registration
+
+The [pinned invitation
+handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L962-L1141)
+and [release 1.37.4
+handler](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/organizations.rs#L960-L1139)
+agree on `POST /api/organizations/{orgId}/users/invite`. Current-device
+Owner/Admin authorization precedes UUID and JSON guards. It requires emails,
+groups and a number-or-string type; collections are optional and permissions
+default to an empty map. Collection selections require
+id/readOnly/hidePasswords/ manage. All collection references are checked
+before groups, then role and inviter authority, before processing recipients.
+Request-supplied accessAll is ignored. Names and encrypted membership keys are
+not supplied by this operation.
+
+Missing-user policy checks precede mailbox validation. The [default domain
+gate](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/config.rs#L1518-L1527)
+requires nonempty local and domain parts around the last at-sign even with no
+whitelist. Missing-at-sign inputs return
+`Email domain not eligible for invitations` first; a valid-domain invalid
+mailbox reaches the later Invitation-email error. Existing accounts bypass
+these missing-user policy checks.
+
+In the default no-SMTP flow, an existing password account receives an Accepted
+membership. An unknown email receives a new enabled, passwordless user, a
+pending email invitation and an Invited membership. User and invitation
+addresses are lowercased without trimming; their saves enforce email validity.
+The placeholder gets a fresh account UUID, creation timestamp, email-based
+name, empty verifier and wrapped user key, absent asymmetric keys and default
+PBKDF2 settings. Its membership has a separate ID, empty wrapped organization
+key and the authenticated inviter's email. This does not confirm membership or
+deliver an organization key.
+
+[Registration
+completion](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L351-L430)
+reuses an eligible empty-verifier account's UUID and creation time. Normal
+signed email verification consumes the pending invitation and changes every
+Invited membership for that UUID to Accepted, across organizations. Other
+statuses, roles, grants, inviter metadata and wrapped organization keys remain
+unchanged. The signed optional name replaces the existing name only when
+present; omitted asymmetric keys preserve the existing pair. The client proof,
+wrapped user key, KDF and cleaned hint initialize the same account, and the
+security stamp and device refresh authority rotate. No-SMTP profile
+emailVerified remains true even when the registration token's verified claim
+is false.
+
+The opt-in allocation-free provider and same-ID adapter completion are
+implemented. The corrected six-case HTTP comparison passes both actual targets
+with 211 counted requests plus eight modern registration requests, three
+password attempts (two successful, one rejected placeholder) and two
+refreshes. The separate official CLI 2026.10.0 comparison passes twenty-four
+commands on both, with sixteen direct HTTP requests plus four registration
+requests and three CLI password attempts plus one direct setup attempt.
+Invitation HTTP setup is distinct from CLI commands: the shipped CLI has no
+invitation or registration command. Successful confirmation, invite-JWT
+acceptance, SMTP, policy matrices, group administration and cipher sharing
+remain separate work. Upstream performs inner saves sequentially. The local
+provider atomically commits each recipient while retaining earlier successful
+recipients. Registration completion atomically covers account/marker/status
+updates. These stronger rollback guarantees do not imply batch atomicity.

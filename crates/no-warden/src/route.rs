@@ -55,6 +55,7 @@ pub enum Route<'a> {
     OrganizationCreate,
     OrganizationGet(&'a str),
     OrganizationMembers(&'a str),
+    OrganizationInvite(&'a str),
     OrganizationMember(&'a str, &'a str),
     OrganizationCollections(&'a str),
     OrganizationCollectionCreate(&'a str),
@@ -238,6 +239,7 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                     }
                     return match (method, action) {
                         (Get, "users") => Some(OrganizationMembers(organization)),
+                        (Post, "users/invite") => Some(OrganizationInvite(organization)),
                         (Get, action) if action.starts_with("users/") => {
                             let member = action.strip_prefix("users/")?;
                             (!member.is_empty()
@@ -433,7 +435,32 @@ fn valid_segment(segment: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
     use super::*;
+
+    #[test]
+    fn organization_invite_is_authenticated_post_only_and_preserves_raw_guard_input() {
+        for org in ["org", "bad.id", "%300000000-0000-0000-0000-000000000001"] {
+            let uri = std::format!("/api/organizations/{org}/users/invite/?ignored=true");
+            let route = classify(Method::Post, &uri).unwrap();
+            assert_eq!(route, Route::OrganizationInvite(org));
+            assert!(route.requires_authentication());
+            // A POST action does not reserve the same spelling from dynamic GET.
+            assert_eq!(
+                classify(Method::Get, &uri),
+                Some(Route::OrganizationMember(org, "invite"))
+            );
+            for method in [Method::Put, Method::Delete, Method::Options] {
+                assert_eq!(classify(method, &uri), None);
+            }
+        }
+        for uri in [
+            "/api/organizations//users/invite",
+            "/api/organizations/org/users/invite/extra",
+        ] {
+            assert_eq!(classify(Method::Post, uri), None);
+        }
+    }
 
     #[test]
     fn organization_get_keeps_raw_segments_for_adapter_authentication_and_uuid_guards() {

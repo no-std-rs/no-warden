@@ -1858,6 +1858,145 @@ impl<'de: 'a, 'a> Deserialize<'de> for OrganizationPlanType<'a> {
     }
 }
 
+/// Required signed-integer-or-string organization invitation role. Raw numeric `4`
+/// and string `"4"` retain their custom-permission provenance; `"Custom"` differs.
+pub type OrganizationInviteRole<'a> = OrganizationPlanType<'a>;
+
+/// Invitation collection selection. The four required tuple slots are deliberately
+/// different from CollectionSelectionRequest: id, readOnly, hidePasswords, manage.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizationInviteCollection<'a> {
+    pub id: &'a str,
+    pub read_only: bool,
+    pub hide_passwords: bool,
+    pub manage: bool,
+}
+impl core::fmt::Debug for OrganizationInviteCollection<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationInviteCollection([REDACTED])")
+    }
+}
+
+/// Only these three exact boolean-true entries affect custom full access. Other JSON
+/// values are accepted and interpreted as false; duplicate map keys use the last value.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizationInvitePermissions {
+    pub create_new_collections: bool,
+    pub edit_any_collection: bool,
+    pub delete_any_collection: bool,
+}
+impl<'de> Deserialize<'de> for OrganizationInvitePermissions {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Truth(bool);
+        impl<'de> Deserialize<'de> for Truth {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                struct ValueVisitor;
+                impl<'de> serde::de::Visitor<'de> for ValueVisitor {
+                    type Value = Truth;
+                    fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        f.write_str("any JSON value")
+                    }
+                    fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<Truth, E> {
+                        Ok(Truth(value))
+                    }
+                    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Truth, E> {
+                        Ok(Truth(false))
+                    }
+                    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Truth, E> {
+                        Ok(Truth(false))
+                    }
+                    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Truth, E> {
+                        Ok(Truth(false))
+                    }
+                    fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Truth, E> {
+                        Ok(Truth(false))
+                    }
+                    fn visit_unit<E: serde::de::Error>(self) -> Result<Truth, E> {
+                        Ok(Truth(false))
+                    }
+                    fn visit_none<E: serde::de::Error>(self) -> Result<Truth, E> {
+                        Ok(Truth(false))
+                    }
+                    fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                        self,
+                        mut seq: A,
+                    ) -> Result<Truth, A::Error> {
+                        while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                        Ok(Truth(false))
+                    }
+                    fn visit_map<A: serde::de::MapAccess<'de>>(
+                        self,
+                        mut map: A,
+                    ) -> Result<Truth, A::Error> {
+                        while map
+                            .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                            .is_some()
+                        {}
+                        Ok(Truth(false))
+                    }
+                }
+                d.deserialize_any(ValueVisitor)
+            }
+        }
+        struct PermissionsVisitor;
+        impl<'de> serde::de::Visitor<'de> for PermissionsVisitor {
+            type Value = OrganizationInvitePermissions;
+            fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.write_str("an invitation permission object")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut result = OrganizationInvitePermissions::default();
+                while let Some(key) = map.next_key::<&str>()? {
+                    let destination = match key {
+                        "createNewCollections" => Some(&mut result.create_new_collections),
+                        "editAnyCollection" => Some(&mut result.edit_any_collection),
+                        "deleteAnyCollection" => Some(&mut result.delete_any_collection),
+                        _ => None,
+                    };
+                    if let Some(destination) = destination {
+                        *destination = map.next_value::<Truth>()?.0;
+                    } else {
+                        map.next_value::<serde::de::IgnoredAny>()?;
+                    }
+                }
+                Ok(result)
+            }
+        }
+        deserializer.deserialize_map(PermissionsVisitor)
+    }
+}
+
+/// Optional fixed-capacity decoder. Adapters with owned strings/vectors implement the
+/// uncapped OrganizationInviteData view instead. This borrowed decoder needs support
+/// for deserialize_any and borrowed strings; it is not a full HTTP JSON decoder.
+/// Missing/null object collections is None; a positional input requires its fourth slot.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizationInviteRequest<'a, const E: usize, const G: usize, const C: usize> {
+    #[serde(borrow)]
+    pub emails: BoundedList<&'a str, E>,
+    #[serde(borrow)]
+    pub groups: BoundedList<&'a str, G>,
+    #[serde(rename = "type", borrow)]
+    pub role: OrganizationInviteRole<'a>,
+    #[serde(borrow)]
+    pub collections: Option<BoundedList<OrganizationInviteCollection<'a>, C>>,
+    #[serde(default)]
+    pub permissions: OrganizationInvitePermissions,
+}
+impl<const E: usize, const G: usize, const C: usize> core::fmt::Debug
+    for OrganizationInviteRequest<'_, E, G, C>
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationInviteRequest([REDACTED])")
+    }
+}
+
 /// Borrowed owner creation input. Dynamic number/string decoding needs a deserializer
 /// with deserialize_any support; adapters can construct this view after owned decoding.
 #[derive(Deserialize)]

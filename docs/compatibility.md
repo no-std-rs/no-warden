@@ -47,6 +47,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Personal file Sends: reservation, multipart upload, file-URL issuance and binary GET | Immutable encrypted metadata, exact bytes, scoped capabilities and create-only storage | Six matching HTTP cases and a separate twenty-command official CLI comparison on both servers; configured policies and full transport remain open |
 | Organization-owner creation/discovery and initial collection | Confirmed Owner membership, exact public/profile/collection projections and last-owner deletion protection | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers |
 | Organization member discovery | Actual member/account metadata, exact nineteen-field projection and current-device/full-access guards | Six matching HTTP cases and sixteen matching official CLI commands on both actual targets; imported-role/query branches have separate provider/parser tests |
+| Default no-SMTP organization invitations and placeholder completion | Ordered per-email commits, real Invited/Accepted states and same-ID modern registration | Six matching HTTP cases and twenty-four matching official CLI result checks on both targets; invitation/registration setup is HTTP, not a CLI caller or confirmation claim |
 | Organization member detail | Scoped Owner/Admin read and direct nineteen-field response | Expanded six matching HTTP cases and eighteen official CLI commands on both targets, with strict local already-confirmed rejection; no successful confirmation claim |
 | Single organization-collection update/delete | Complete grant replacement, opaque names, whitespace external-ID clearing and preserved cipher data | Allocation-free core and local rollback/cascade tests; six matching HTTP cases and twenty matching official CLI commands on both actual targets |
 | Organization-scoped collection list/create/single access-details | Confirmed manager authorization, exact projections, opaque names/external IDs and reference validation | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers; atomic local provider tests |
@@ -110,7 +111,7 @@ the [roadmap](../ROADMAP.md).
 The expanded local HTTP regression suite has passed all 61 tests. After the
 missing-download-token status correction, the final nine focused attachment
 checks also pass against the rebuilt adapter.
-All 692 active workspace unit tests pass: 337 core, 245 host and 110 support,
+All 720 active workspace unit tests pass: 349 core, 260 host and 111 support,
 plus one ignored support test. They include modern registration, deferred email
 validation, account proof/stamp transitions and the corrected concurrency fixtures. Clippy with warnings denied
 and minimum-Rust-version checks pass. Required CI also checks the core
@@ -489,8 +490,8 @@ adds no modern-registration command or route-trace claim.
 The prior combined local milestone remains 72 cases/3038 requests, including
 the selected eight-case login comparison with 444 requests against each server.
 The registration milestone expanded the default selection to 80 cases; the
-current combined result appears below. SMTP, invitations/emergency access,
-placeholder completion, signup/configuration policy, rate controls,
+current combined result appears below. SMTP, invite-JWT/emergency access,
+signup/configuration policy, rate controls,
 notifications, complete header grammar, error envelopes and transport limits
 remain partial. This chunk
 does not claim complete registration or upstream API parity.
@@ -1145,9 +1146,9 @@ comparison passes sixteen commands on both, including fresh member names without
 an intervening sync and fresh-cache recovery. Seventeen direct HTTP requests
 include one fixture login; two additional logins are CLI commands, excluding
 one modern registration/two requests. Client internals are uncounted and no
-route trace is captured. The public adapter
-creates Owner/full-access memberships; imported status/role/ACL projections are
-separate local provider evidence. Owner/full-access always suppresses direct
+route trace is captured. That historical comparison used Owner/full-access memberships; the invitation
+extension below adds real Invited and Accepted recipients. Other imported
+status/role/ACL projections retain separate local provider evidence. Owner/full-access always suppresses direct
 collections and the host has no group rows; the HTTP query matrix cannot by
 itself distinguish Boolean decoding. Parser/provider tests establish those
 branches. No invitations, arbitrary member changes, group lifecycle, sharing or
@@ -1176,3 +1177,25 @@ requests. Two strict exit-one JSON checks require
 production detail GET and before any public-key lookup or confirmation POST.
 It does not claim a successful member lifecycle, endpoint trace, general
 policy/group support or complete transport/error parity.
+
+## Default no-SMTP organization invitations
+
+`POST /api/organizations/{orgId}/users/invite` creates actual recipient state:
+registered accounts become Accepted; unknown accounts receive passwordless
+placeholders, pending email markers and Invited memberships. Modern
+registration initializes the same UUID and accepts all its pending memberships
+across organizations. Ordered batches retain their successful prefix on later
+failure. Local per-recipient mutation and registration completion are atomic;
+upstream saves their components sequentially. See the [source
+contract](protocol.md#organization-invitations-and-placeholder-registration).
+
+Both actual targets pass all six HTTP cases with 211 counted requests plus
+eight modern registration requests, three password attempts (two successful,
+one rejected placeholder) and two refreshes. The separate twenty-four-command
+official CLI 2026.10.0 comparison also passes both targets, with sixteen
+direct HTTP requests plus four registration requests, three CLI password
+attempts and one direct attempt. Separate fresh reference processes retain
+unchanged limits. The client exercises owner listing and completed-invitee
+personal-vault login/decryption, not an invitation or registration command,
+confirmation, organization-key delivery or request trace. SMTP, invite JWTs,
+policy/group administration and sharing remain open.

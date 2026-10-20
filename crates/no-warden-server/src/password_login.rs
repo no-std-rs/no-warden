@@ -82,6 +82,10 @@ impl PasswordLoginStorage for Store {
         let Some((owner, encoded, enabled)) = record else {
             return Ok(None);
         };
+        if encoded.is_empty() {
+            // An invited, uninitialized account has no password credential yet.
+            return Ok(None);
+        }
         let parsed = PasswordHash::new(&encoded).map_err(|_| rusqlite::Error::InvalidQuery)?;
         if Argon2::default()
             .verify_password(password.expose_secret().as_bytes(), &parsed)
