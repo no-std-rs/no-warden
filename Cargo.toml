@@ -8,3 +8,15 @@ edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/no-std-rs/no-warden"
+
+# Keep full-strength fixture derivation practical in the real-client suites.
+[profile.conformance]
+inherits = "dev"
+debug-assertions = true
+overflow-checks = true
+
+[profile.conformance.package.no-warden-conformance]
+opt-level = 2
+
+[profile.conformance.package.sha2]
+opt-level = 2

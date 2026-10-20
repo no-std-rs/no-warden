@@ -1566,3 +1566,30 @@ sync and fresh-cache reads verify primary visibility loss/recovery with
 retained personal/sibling decryption. One strict revoked-confirmation
 rejection observes metadata. No CLI bulk mutation caller, captured route
 trace or successful member confirmation is inferred.
+
+## Pinned web-client smoke
+
+A real Chromium browser now exercises the Vaultwarden-distributed Bitwarden Web
+2026.7.0 client against no-warden and Vaultwarden 1.37.4. Both pass password
+login, the browser's authenticated initial sync and profile retrieval. Captured
+method/path/status counts distinguish actual browser calls from HTTP fixture
+registration. The isolated runner emits no tokens, headers, query values,
+response bodies, console output or decrypted payloads.
+
+Both also pass vault navigation, Lock now, password unlock with a second
+token/sync, and browser reload returning to the lock view. The reference's
+extension-onboarding and welcome-tour dialogs are dismissed through their
+ordinary Skip controls. Both create a login item through the UI, read its
+decrypted username/password, edit it, decrypt the persisted edit after unlock,
+and move it to trash. The adapter's single-cipher trash response now matches the
+reference's empty200 response; a tightened existing Rust fixture catches the
+previous204. Other item types, restore/permanent-delete UI, notification
+WebSockets and the wider web interface remain open. This is not evidence for the unmodified official Web
+artifact or complete API parity.
+
+The [portable setup](../tools/web-compat/README.md) verifies the immutable image,
+all image blobs, official Chromium 149.0.7827.55 archive and executable, and three
+web bootstrap bundles. Playwright-core 1.64.1 is locked separately. A dedicated
+Linux x64 CI job runs the same disposable HTTPS comparison. Fresh anonymous
+image acquisition and the supplied-cache path both pass locally; inherited
+browser/HTTP debug modes are suppressed before credentials are created.

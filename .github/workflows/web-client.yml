@@ -1,0 +1,33 @@
+name: Web client
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: web-client-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  web-client:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: tools/web-compat/package-lock.json
+      - run: rustup update stable --no-self-update
+      - run: rustup default stable
+      - name: Install disposable comparison tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes skopeo unzip fontconfig fonts-dejavu-core openssl
+      - name: Pinned real-browser comparison
+        run: bash tools/web-compat.sh
+        env:
+          BW_WEB_INSTALL_DEPS: '1'
+      - name: Fixture redirect isolation
+        run: node --test tools/seed-account.test.mjs

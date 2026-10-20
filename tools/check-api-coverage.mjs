@@ -34,7 +34,7 @@ export function sourceHashes(root = repositoryRoot) {
     }
   }
   for (const directory of ["crates", "checks"]) walk(join(root, directory));
-  for (const file of ["Cargo.toml", "Cargo.lock"]) paths.push(join(root, file));
+  for (const file of ["Cargo.toml", "Cargo.lock", "tools/web-compat/package.json", "tools/web-compat/package-lock.json"]) paths.push(join(root, file));
   // Include helpers and subprocess entry points as well as the test entry points.
   for (const entry of readdirSync(join(root, "tools"), { withFileTypes: true })) {
     if (entry.isFile() && (entry.name.endsWith(".mjs") || entry.name.endsWith(".sh") || ["package.json", "package-lock.json"].includes(entry.name))) {
@@ -207,6 +207,20 @@ export function validateCoverage(coverage, hashes = sourceHashes(), readSource =
     named_http_tests_including_parent: coverage.http_test_catalog.length,
   };
   assert.deepEqual(coverage.counts, counts, "Coverage counts must describe the records");
+  const web = coverage.web_client_evidence_sources;
+  assert(web && typeof web === "object", "Web evidence sources must be explicit");
+  for (const source of [web.runner, web.setup, "tools/web-compat/package.json", "tools/web-compat/package-lock.json"]) {
+    assert(Object.hasOwn(hashes, source), `Unaudited web evidence source: ${source}`);
+  }
+  const webRunner = readSource(web.runner);
+  assert.equal(web.client_distribution, "Vaultwarden Web");
+  assert(webRunner.includes(`version: "${web.client_version}"`), "Web client version differs from the tested artifact");
+  assert.equal(web.playwright_version, JSON.parse(readSource("tools/web-compat/package-lock.json")).packages["node_modules/playwright-core"].version);
+  assert.equal(web.playwright_version, JSON.parse(readSource("tools/web-compat/package.json")).dependencies["playwright-core"]);
+  assert.deepEqual(web.paired_checks, ["passwordLogin", "initialSync", "authenticatedProfile", "vaultNavigation", "lock", "passwordUnlockAndSync", "reloadLocksVault", "itemRoundtrip"]);
+  assert.deepEqual(web.no_warden_only_checks, []);
+  for (const operation of web.paired_browser_http_shapes) assert(rows.has(operation), `Unknown browser-observed route: ${operation}`);
+  assert.equal(new Set(web.paired_browser_http_shapes).size, web.paired_browser_http_shapes.length);
   return { ...counts, fully_verified_upstream_operations: coverage.routes.filter(r => r.full_upstream_parity_verified).length };
 }
 

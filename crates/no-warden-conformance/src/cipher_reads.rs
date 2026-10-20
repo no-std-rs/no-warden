@@ -763,10 +763,14 @@ fn seed_cipher(
             Some(&account.access),
             None,
         )?;
-        require(
-            (200..300).contains(&response.status),
-            "Cipher read lifecycle fixture preparation failed",
-        )?;
+        if index == 1 {
+            response.status(200)?.empty()?;
+        } else {
+            require(
+                (200..300).contains(&response.status),
+                "Cipher read lifecycle fixture preparation failed",
+            )?;
+        }
     }
     Ok(Cipher {
         owner,
