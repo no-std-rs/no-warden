@@ -85,6 +85,13 @@ schema errors reject before processing. Six matching HTTP cases and a separate
 21-command official CLI state/decryption comparison pass both actual targets.
 Bulk mutation is HTTP setup; no CLI bulk caller or endpoint trace is claimed.
 
+Single organization-member removal preserves the account and personal vault
+while removing scoped membership/collection access. Its allocation-free
+provider protects the last confirmed Owner and conditionally cleans pending
+invitations. Six matching HTTP cases and a separate 25-command official CLI
+state/decryption comparison pass both actual targets. Removal is HTTP setup;
+the CLI has no member-removal command and account sessions remain usable.
+
 The remaining surface is tracked in the [API parity inventory](docs/api-parity.md). This is an early
 implementation, not yet a production password manager or a complete Vaultwarden
 replacement. Client-side vault encryption stays with the client.

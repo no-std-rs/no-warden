@@ -2011,3 +2011,63 @@ collection decryption after HTTP bulk setup. No CLI bulk caller, internal
 request count or endpoint trace is inferred. SMTP, configured policies,
 backend diagnostic variants, remaining member/group administration and
 shared-cipher writes remain open.
+
+
+## Single organization-member removal
+
+The [pinned single DELETE](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L1632-L1694)
+and [release 1.37.4 handler](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/organizations.rs#L1630-L1692)
+agree on `DELETE /api/organizations/{orgId}/users/{memberId}`. There is no
+request DTO or JSON guard; body bytes, media type and body-supplied owner/ID
+have no authority. Current-device confirmed Owner/Admin guards precede typed
+organization/member UUID parameters. An organization query fallback can
+qualify an invalid organization path before the final UUID rejection, but no
+query can replace the target member path. Nonempty raw member segments are
+classified before UUID checking, including literals with no DELETE-specific
+handler.
+
+Lookup is scoped to organization and membership ID. Missing and foreign IDs
+have the same 400 error. Only an Owner may remove any target other than a User;
+this includes Managers although the source error names Admins and Owners.
+Removing a confirmed Owner requires another confirmed Owner. Self-removal is
+allowed when those rules permit it. Success has an empty 200 response.
+
+[Membership deletion](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/organization.rs#L738-L750)
+removes all direct grants for that account and organization, group links and
+the membership, while advancing recipient revision. The direct-grant helper
+has no status filter. The account, passwordless placeholder, keys, devices,
+access/refresh authority, personal vault and other memberships remain.
+No-SMTP cleanup consumes the global lowercased-email invitation marker only
+when no other raw Invited-status-zero membership remains; the target is
+excluded from that check. Removing one organization must not consume another
+pending organization's marker. Existing initialized users can be invited again
+under the same account UUID but a new membership UUID, without restoring old
+unselected grants.
+
+Upstream performs notification, marker consumption, two revision updates and
+cleanup sequentially. The group-link helper updates revision even with no
+group rows, and a failed invitation-marker take is ignored. The local provider
+instead atomically commits supported scoped cleanup, conditional marker
+removal and one recipient revision update. This preserves revision advancement
+while strengthening rollback; identical failure timing, update count or
+revision value is not claimed. Group administration and notification delivery
+remain unsupported.
+
+The [shared remove transport](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/admin-console/src/common/organization-user/services/default-organization-user-api.service.ts#L309-L318)
+matches this DELETE. The separate deleteOrganizationUser method targets a
+different delete-account route. The shipped CLI DeleteCommand has no
+org-member branch. Client sync/decryption after HTTP removal is observation of
+membership state, not a CLI removal caller or endpoint trace. Removing server
+access does not erase previously cached plaintext/organization keys or rotate
+the organization key.
+
+Both actual targets pass six focused HTTP cases: 212 counted requests plus
+eight registration requests for four fixtures, two password logins and two
+refreshes. The separate official CLI 2026.10.0 comparison passes 25 commands
+on both, with 40 direct HTTP requests plus four registration requests, three
+CLI password logins and two direct setup logins. Recipient sync/fresh-cache
+state loses the removed organization while retained sibling and personal data
+decrypts. Private marker cleanup and physical rollback use
+local SQL tests, not portable list absence. Bulk removal, configured
+group/SMTP/notification variants, shared-cipher writes and complete
+failure/transport parity remain open.

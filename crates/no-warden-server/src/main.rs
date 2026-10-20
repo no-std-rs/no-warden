@@ -15,6 +15,7 @@ mod organization_bulk_confirmations;
 mod organization_collections;
 mod organization_confirmations;
 mod organization_invitations;
+mod organization_member_removal;
 mod organization_members;
 mod organizations;
 mod password_login;
@@ -103,6 +104,7 @@ impl IntoResponse for Failure {
             || self.1 == "User not allowed to create organizations"
             || organization_collections::is_collection_error(self.1)
             || organization_confirmations::is_confirmation_error(self.1)
+            || organization_member_removal::is_removal_error(self.1)
             || self.1 == "The specified user isn't a member of the organization"
             || self.1 == "Member id is required"
         {
@@ -768,6 +770,19 @@ async fn dispatch_with_peer(
                 &member,
                 &input.request(),
             )?;
+            Ok(StatusCode::OK.into_response())
+        }
+        Route::OrganizationMemberDelete(raw_org, raw_member) => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let (org, member) = organization_members::detail_paths(
+                &mut store,
+                &owner,
+                raw_org,
+                raw_member,
+                uri.query(),
+            )?;
+            VaultService::new(&mut *store).remove_org_member(&owner, &org, &member)?;
             Ok(StatusCode::OK.into_response())
         }
         Route::OrganizationMember(raw_org, raw_member) => {

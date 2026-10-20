@@ -70,6 +70,11 @@ invoke the pinned official Bitwarden CLI as an external process.
   actual HTTP cases and 21 matching official CLI state/decryption commands
   after HTTP bulk setup. No CLI bulk caller, SMTP, sharing or complete
   policy/backend-error parity is claimed.
+- [x] Single organization-member removal subset: allocation-free scoped
+  removal, last-owner protection and retained account authority, with six
+  matching actual HTTP cases and 25 matching official CLI state/decryption
+  commands after HTTP setup. No CLI removal command, bulk deletion,
+  groups/notifications or offline cache erasure is claimed.
 - [ ] Attachments, Sends, event notifications and websocket transport.
 - [ ] Two-factor authentication, passkeys, SSO and administrative APIs.
 - [ ] Full import/export compatibility, remaining formats and variants, and upstream protocol regression fixtures.
