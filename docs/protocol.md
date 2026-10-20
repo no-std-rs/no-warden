@@ -1047,7 +1047,6 @@ top-level empty `Key`, while API-key grants retain it, as shown in the pinned
 [password response](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L592)
 and [API-key response](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/identity.rs#L726).
 
-
 ### Password changes
 
 `POST /api/accounts/password` requires an authenticated device and old
@@ -1907,9 +1906,63 @@ refreshes. The separate official CLI 2026.10.0 comparison passes twenty-four
 commands on both, with sixteen direct HTTP requests plus four registration
 requests and three CLI password attempts plus one direct setup attempt.
 Invitation HTTP setup is distinct from CLI commands: the shipped CLI has no
-invitation or registration command. Successful confirmation, invite-JWT
-acceptance, SMTP, policy matrices, group administration and cipher sharing
-remain separate work. Upstream performs inner saves sequentially. The local
+invitation or registration command. That invitation-only milestone did not
+confirm members. Invite-JWT acceptance, SMTP, policy matrices, group
+administration and cipher sharing remain separate work. Upstream performs inner saves sequentially. The local
 provider atomically commits each recipient while retaining earlier successful
 recipients. Registration completion atomically covers account/marker/status
 updates. These stronger rollback guarantees do not imply batch atomicity.
+
+## Single organization-member confirmation
+
+The [pinned single confirmation handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L1296-L1433)
+and [release 1.37.4 handler](https://github.com/dani-garcia/vaultwarden/blob/7c188967e7a467b19b2757bc3326f9cf3ccae327/src/api/core/organizations.rs#L1294-L1431)
+agree on `POST /api/organizations/{orgId}/users/{memberId}/confirm`.
+Current-device Owner/Admin authorization precedes typed path and JSON guards.
+The canonical optional `id` and `key` fields occur in that order; the body ID
+has no selection authority. Missing/null key becomes empty. A nonempty opaque
+key is required before the organization-scoped lookup. The server does not
+validate an RSA envelope, target asymmetric keypair or ciphertext. Unknown
+fields, including the CLI's `defaultUserCollectionName`, are ignored;
+confirmation does not create a collection.
+
+A valid missing or foreign membership produces the same scoped 400 error.
+An Admin can confirm only a User; a Manager, Admin or Owner requires an Owner,
+and hierarchy precedes the target-state check. Only raw Accepted status 1 can
+become Confirmed status 2. Proposed-state policy then permits or rejects the
+mutation. The default-policy adapter atomically changes that membership's
+wrapped key/status and recipient revision, preserving grants, other
+memberships, keys, sessions and vault payloads. Upstream saves and
+notifications are sequential; local rollback/CAS does not imply equivalent
+event, mail or push failure behavior.
+
+[Collection visibility and flags](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/collection.rs#L99-L162)
+are separate from administration. Confirmed members enumerate stored
+`accessAll` or directly assigned collections; role alone does not select rows.
+Basic `GET /api/collections` has seven fields. Sync adds readOnly,
+hidePasswords and manage: Users retain restrictions and never get manage;
+Managers retain stored restrictions in sync even when manage is true.
+Non-sync manager details may clear those restrictions. Profile organizations
+contains Confirmed memberships, while organizationsNew contains Accepted and
+Confirmed memberships. Existing sessions observe confirmation without a new
+login. Shared-cipher ownership and write access remain outside this slice.
+
+The [production CLI confirmation flow](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/admin-console/commands/confirm.command.ts#L47-L102)
+loads its organization key, reads Accepted membership, fetches the recipient
+public key and wraps the organization key before POST. The [bundled SDK
+unsigned encapsulation](https://github.com/bitwarden/sdk-internal/blob/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6/crates/bitwarden-crypto/src/enc_string/asymmetric.rs#L216-L234)
+uses type 4 RSA OAEP-SHA1. Its encrypted default collection name is an ignored
+extra at this server. For a regular recipient, the [production org-collection
+list](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/commands/list.command.ts#L195-L239)
+selects global `GET /collections` when canViewAllCollections is false; it does
+not require the Owner/Admin organization list endpoint. `list collections`
+reads cache instead. These call paths are not captured request traces.
+
+Both actual targets pass six focused HTTP cases: 213 counted requests plus
+eight registration requests, two password logins and two refreshes. The
+separate official CLI 2026.10.0 comparison passes 23 commands on both: 32 direct
+HTTP requests plus four registration requests, three CLI password logins and
+two direct setup logins. It performs actual confirmation and verifies selective
+recipient collection decryption after login, unlock and fresh-cache login.
+Bulk confirmation, SMTP, policy administration, groups, sharing and complete
+transport/error parity remain open.

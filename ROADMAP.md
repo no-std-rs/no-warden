@@ -51,13 +51,20 @@ invoke the pinned official Bitwarden CLI as an external process.
 - [x] Organization member detail subset: allocation-free scoped Owner/Admin
   lookup and direct nineteen-field response, with six matching expanded HTTP
   cases and eighteen matching official CLI commands, including two strict
-  already-confirmed local rejections. Invitation/confirmation mutations,
-  broader member/group administration and sharing remain open.
+  already-confirmed local rejections. That milestone did not exercise
+  invitation/confirmation mutations; broader member/group administration and
+  sharing remain open.
 - [x] Default no-SMTP organization invitations and same-ID passwordless-account
   completion: allocation-free provider and ordered partial writes implemented;
   six matching HTTP cases and twenty-four matching official CLI commands after
   direct HTTP setup.
-  Confirmation, SMTP, broader policy/member lifecycle and sharing remain open.
+  That milestone did not confirm members; SMTP, broader policy/member lifecycle
+  and sharing remain open.
+- [x] Single-member confirmation and confirmed recipient collection reads:
+  allocation-free provider, six matching actual HTTP cases and 23 matching
+  official CLI commands with selective recipient decryption after login, unlock
+  and fresh-cache login. Bulk confirmation, SMTP, policy/group lifecycle and
+  shared-cipher writes remain open.
 - [ ] Attachments, Sends, event notifications and websocket transport.
 - [ ] Two-factor authentication, passkeys, SSO and administrative APIs.
 - [ ] Full import/export compatibility, remaining formats and variants, and upstream protocol regression fixtures.

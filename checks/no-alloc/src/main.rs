@@ -21,6 +21,10 @@ use no_warden::{
         CollectionAccessData, CollectionAccessEntry, CollectionCreateData, CollectionListData,
         OrganizationCollectionMembership, OrganizationCollectionStorage, ValidatedCollectionCreate,
     },
+    organization_confirmations::{
+        OrganizationConfirmationPolicy, OrganizationConfirmationRecord,
+        OrganizationConfirmationStorage, ValidatedOrganizationConfirmation,
+    },
     organization_invitations::{
         InvitationPolicy, InvitationTarget, InviteCommit, OrganizationInvitationStorage,
         OrganizationInviteData, ValidatedOrganizationInvite,
@@ -59,14 +63,15 @@ use no_warden::{
         DomainSettingsUpdateResponse, FileSendRequest, FolderRequest, ImportRequest,
         InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
         MasterPasswordPolicy, MasterPasswordPolicyResponse, OrganizationCollectionCreateRequest,
-        OrganizationCreateRequest, OrganizationInviteCollection, OrganizationInvitePermissions,
-        OrganizationInviteRequest, OrganizationPlanType, PasswordLoginRequest,
-        PasswordOrOtpRequest, PreloginKdfSettings, PreloginRequest, PreloginResponse,
-        ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest, RegistrationAuthentication,
-        RegistrationCredentials, RegistrationFinishRequest, RegistrationFinishResponse,
-        RegistrationUnlock, RegistrationVerificationRequest, RegistrationVerificationToken,
-        SecretVerificationRequest, SendAccessTokenRequest, SendFileData, TextSendRequest,
-        UserKeyIdRequest, UserPublicKeyResponse, WebAuthnCredentialsResponse,
+        OrganizationConfirmRequest, OrganizationCreateRequest, OrganizationInviteCollection,
+        OrganizationInvitePermissions, OrganizationInviteRequest, OrganizationPlanType,
+        PasswordLoginRequest, PasswordOrOtpRequest, PreloginKdfSettings, PreloginRequest,
+        PreloginResponse, ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest,
+        RegistrationAuthentication, RegistrationCredentials, RegistrationFinishRequest,
+        RegistrationFinishResponse, RegistrationUnlock, RegistrationVerificationRequest,
+        RegistrationVerificationToken, SecretVerificationRequest, SendAccessTokenRequest,
+        SendFileData, TextSendRequest, UserKeyIdRequest, UserPublicKeyResponse,
+        WebAuthnCredentialsResponse,
     },
 };
 
@@ -98,6 +103,9 @@ struct PurgeProbe {
     added_external: [u8; 64],
     added_external_len: Option<usize>,
     invited: [bool; 2],
+    confirmed: bool,
+    confirmed_key: [u8; 96],
+    confirmed_key_len: usize,
 }
 impl PurgeProbe {
     fn organization_record(&self) -> OrganizationRecord<'_> {
@@ -460,6 +468,55 @@ impl core::fmt::Write for InvitationMessageBuffer {
         let destination = self.bytes.get_mut(self.len..end).ok_or(core::fmt::Error)?;
         destination.copy_from_slice(text.as_bytes());
         self.len = end;
+        Ok(())
+    }
+}
+impl OrganizationConfirmationStorage for PurgeProbe {
+    type Id = &'static str;
+    fn confirmation_member(
+        &mut self,
+        org: &str,
+        member: &str,
+    ) -> Result<Option<OrganizationConfirmationRecord<Self::Id>>, ()> {
+        Ok(
+            (org == "embedded-org" && member == "embedded-invited-member" && self.invited[0])
+                .then_some(OrganizationConfirmationRecord {
+                    membership_id: "embedded-invited-member",
+                    organization_id: "embedded-org",
+                    user_id: "existing-account",
+                    role: 2,
+                    status: if self.confirmed { 2 } else { 1 },
+                }),
+        )
+    }
+    fn confirmation_policy(
+        &mut self,
+        plan: &ValidatedOrganizationConfirmation<'_, Self::Id>,
+    ) -> Result<OrganizationConfirmationPolicy, ()> {
+        if plan.status() != 2 || plan.previous_status() != 1 {
+            return Err(());
+        }
+        Ok(OrganizationConfirmationPolicy::Allowed)
+    }
+    fn confirm_organization_member(
+        &mut self,
+        plan: &ValidatedOrganizationConfirmation<'_, Self::Id>,
+    ) -> Result<(), ()> {
+        let key = plan.key().expose_secret().as_bytes();
+        if self.confirmed
+            || !self.invited[0]
+            || plan.owner() != "embedded-owner"
+            || plan.organization() != "embedded-org"
+            || plan.membership_id() != "embedded-invited-member"
+            || plan.user_id() != "existing-account"
+            || key.len() > self.confirmed_key.len()
+        {
+            return Err(());
+        }
+        self.confirmed_key[..key.len()].copy_from_slice(key);
+        self.confirmed_key_len = key.len();
+        self.confirmed = true;
+        self.revision += 1;
         Ok(())
     }
 }
@@ -1078,6 +1135,9 @@ pub extern "C" fn _start() -> ! {
             added_external: [0; 64],
             added_external_len: None,
             invited: [false; 2],
+            confirmed: false,
+            confirmed_key: [0; 96],
+            confirmed_key_len: 0,
         };
         let organization = OrganizationCreateRequest {
             billing_email: "owner@example.com",
@@ -1247,6 +1307,33 @@ pub extern "C" fn _start() -> ! {
         black_box(classify(
             Method::Post,
             "/api/organizations/embedded-org/users/invite",
+        ));
+        let confirmation = serde_json_core::from_slice::<OrganizationConfirmRequest<'_>>(
+            black_box(br#"{"id":"ignored-body-id","key":"opaque-wrapped-org-key"}"#),
+        );
+        if let Ok((request, _)) = confirmation {
+            let _ = black_box(organization_service.confirm_org_member(
+                "embedded-owner",
+                "embedded-org",
+                "embedded-invited-member",
+                &request,
+            ));
+            let _ = black_box(organization_service.confirm_org_member(
+                "embedded-owner",
+                "embedded-org",
+                "embedded-invited-member",
+                &request,
+            ));
+            let state = organization_service.storage_mut();
+            black_box((
+                state.confirmed,
+                state.confirmed_key_len,
+                state.confirmed_key,
+            ));
+        }
+        black_box(classify(
+            Method::Post,
+            "/api/organizations/embedded-org/users/embedded-invited-member/confirm",
         ));
         black_box(organization_output);
         for email in black_box(["bare-metal@example.com", ""]) {

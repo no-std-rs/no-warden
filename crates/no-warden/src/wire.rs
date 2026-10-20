@@ -1997,6 +1997,22 @@ impl<const E: usize, const G: usize, const C: usize> core::fmt::Debug
     }
 }
 
+/// Single confirmation input in exact positional order [id, key]. Both object
+/// fields are optional/null; positional forms still require both slots. The body ID
+/// is schema-checked but ignored for target selection. Key exposure is explicit only.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizationConfirmRequest<'a> {
+    pub id: Option<&'a str>,
+    #[serde(borrow)]
+    pub key: Option<Secret<'a>>,
+}
+impl core::fmt::Debug for OrganizationConfirmRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationConfirmRequest([REDACTED])")
+    }
+}
+
 /// Borrowed owner creation input. Dynamic number/string decoding needs a deserializer
 /// with deserialize_any support; adapters can construct this view after owned decoding.
 #[derive(Deserialize)]

@@ -26,6 +26,8 @@ pub mod organization_collection_mutations;
 pub mod organization_collection_mutations_cli;
 pub mod organization_collections;
 pub mod organization_collections_cli;
+pub mod organization_confirmations;
+pub mod organization_confirmations_cli;
 pub mod organization_invites;
 pub mod organization_invites_cli;
 pub mod organization_members;

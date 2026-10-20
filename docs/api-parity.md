@@ -39,13 +39,13 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 110 routed patterns, 57 with typed requests, 103 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 111 routed patterns, 58 with typed requests, 104 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 107 partial and 187 unimplemented. Query/rank/configuration
+status: 108 partial and 186 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
@@ -56,8 +56,8 @@ responses, and attachment responses. Bulk cipher lists use the generic `ListResp
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 104 patterns, negative
-HTTP evidence for 103, 257 named HTTP cases, and 53 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 105 patterns, negative
+HTTP evidence for 104, 263 named HTTP cases, and 53 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -508,7 +508,6 @@ both selections within the unchanged default login limit. The default adapter
 entry point runs all 72 cases. No CLI device-route trace or full-parity flag is
 claimed, and the full API delivery goal remains open.
 
-
 ## Device push-token contracts
 
 | Method and route | Scoped behavior |
@@ -549,7 +548,6 @@ activity on exact repeats, disabled clears, owner isolation and refresh identity
 Its 16 requests include three logins and one refresh; no secret values are emitted.
 The host's stronger zero-write shortcut proof uses abort triggers in unit tests.
 No CLI token-route trace, real relay delivery or full-parity status is claimed.
-
 
 ## Authentication-request creation and discovery
 
@@ -620,7 +618,6 @@ time and keeps all credential values out of diagnostics. Notifications, expiry
 cleanup, rate controls and trusted forwarding remain open;
 these two routes do not complete the authentication-request lifecycle.
 
-
 All eight authentication-response cases pass against the actual adapter and
 Vaultwarden `1.37.4`, with 322 counted HTTP requests and four successful logins
 per server. The selected fixture makes eleven decoded creation attempts and
@@ -633,7 +630,6 @@ alternate-loopback peer rejection, and pending-list/device transitions. Hidden
 stored response-device IDs, rollback, account/device invariants and database
 reopen remain separately established by host/provider tests. These direct HTTP
 results add no CLI auth-request login or captured route trace.
-
 
 ## Authentication-request login
 
@@ -791,7 +787,6 @@ CLI-internal requests. No CLI-posted KDF endpoint or captured route is inferred.
 The KDF milestone passed all 96 cases with 4214 tracked HTTP
 requests, including the real authentication-request expiry fixture.
 
-
 ## Password transition subset
 
 The [pinned password handler](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/accounts.rs#L621-L687)
@@ -831,7 +826,6 @@ upstream's 30-second JWT expiry leeway is an inherited difference. Neither a
 successful comparison nor CLI decryption establishes full route parity or a
 CLI-posted password endpoint trace.
 
-
 All eight selected password HTTP cases pass against the actual adapter and
 Vaultwarden 1.37.4: 285 tracked requests each, including 11 identity requests
 (eight password logins, one API-key login and two refresh attempts, one successful), two
@@ -848,7 +842,6 @@ old-password rejection, fresh-cache new-password login, lock/unlock, sync and
 decryption of an item encrypted before the HTTP password change. Seven direct
 HTTP requests and one password grant exclude bootstrap and CLI-internal HTTP.
 No CLI-posted password endpoint or captured request trace is inferred.
-
 
 The preceding password milestone passed all 104 local HTTP cases with 4499 tracked
 requests across thirteen groups, including real authentication-request and
@@ -1393,6 +1386,32 @@ requests plus four registration requests, three CLI password attempts and one
 direct attempt. Existing command forms are reused after HTTP setup; the
 invitation route has no production CLI caller or trace claim. Private
 marker/verifier, creation-date preservation, rollback and reopen effects use
-separate provider/SQL tests. Successful confirmation, SMTP, invite JWTs,
-general group/policy administration, sharing and complete
-failure/rate/transport variants remain open.
+separate provider/SQL tests. That invitation-only milestone did not confirm
+members. SMTP, invite JWTs, general group/policy administration, sharing and
+complete failure/rate/transport variants remain open.
+
+## Single-member confirmation subset
+
+The single authenticated confirmation POST deepens the no-SMTP invitation
+foundation through an allocation-free opt-in provider and sealed mutation
+plan. Accepted members receive an opaque wrapped organization key and become
+Confirmed. Current-device Owner/Admin, scoped target, hierarchy and state
+checks remain distinct. Empty 200 has no typed response model. Bulk
+confirmation is a separate upstream handler and remains unimplemented.
+
+All six focused HTTP cases pass against both actual servers: 213 counted
+requests plus eight registration requests for four fixtures, two password
+logins and two refreshes. The separate official CLI 2026.10.0 comparison passes
+23 commands on both, with 32 direct HTTP requests plus four registration
+requests, three CLI password logins and two direct setup logins. It performs
+actual confirmation and verifies assigned collection decryption after recipient
+login, unlock and fresh-cache login, with unassigned collections absent.
+The existing confirmation argv form is reused; the historical eighteen-command
+already-confirmed rejection remains a separate milestone.
+
+Recipient reads now include confirmed access-all/direct-grant collection
+visibility, profile key delivery and exact supported sync flags. Ordinary Users
+do not gain organization administration. Shared-cipher ownership/writes,
+group/policy administration, SMTP, bulk confirmation and complete
+failure/transport parity remain open. Static call paths and successful client
+commands supply no captured endpoint trace or full-parity claim.

@@ -114,6 +114,8 @@ jobs:
           target/debug/no-warden-http-conformance --suite organization-members-cli
           target/debug/no-warden-http-conformance --suite organization-invites
           target/debug/no-warden-http-conformance --suite organization-invites-cli
+          target/debug/no-warden-http-conformance --suite organization-confirmation
+          target/debug/no-warden-http-conformance --suite organization-confirmation-cli
           target/debug/no-warden-http-conformance --suite account-kdf-cli
           target/debug/no-warden-http-conformance --suite account-password-cli
           bash tools/e2e.sh

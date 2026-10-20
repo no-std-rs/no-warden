@@ -514,7 +514,6 @@ the server. The runner requires the two fingerprints to match without printing
 either fingerprint or the account ID. This is direct client evidence for the
 public-key read flow, with no captured route trace or full-parity claim.
 
-
 The `--suite auth-responses` comparison uses another fresh reference process.
 Its eight cases cover approval, rejection, repeated non-consuming polling,
 verified response-device and owner boundaries, opaque/nullable/positional input,
@@ -526,7 +525,6 @@ make 44 public handler entries, preserving the reference's unchanged burst
 limit of 50; six path/query guard rejects do not enter that handler. Set `BW_AUTH_RESPONSES_RECEIPT` to a new path for a
 private receipt containing only authored case names and counters. The selected group passes with exit zero against both servers; no CLI
 auth-request login or route trace is inferred from this suite.
-
 
 `--suite auth-login` uses a fresh reference process and real IPv4 loopback peers
 for independent login budgets. It checks approved access-code login, new device
@@ -542,7 +540,6 @@ all eight selected cases with 444 counted HTTP requests each: 43 identity reques
 These HTTP results
 are separate from the unchanged official CLI baseline and establish no CLI
 request-login command or captured route trace.
-
 
 `--suite registration` directly exercises verification and finish without the
 fixture helper's legacy-route fallback. It covers token transport and claims,
@@ -604,7 +601,6 @@ requests, including the real authentication-request expiry fixture.
 The unchanged official CLI `2026.10.0` baseline also passes all 120 commands
 against each server, separately from the nine-command KDF proof.
 
-
 The focused password CLI comparison passes ten commands against both actual
 servers with official CLI 2026.10.0. HTTP rewraps the same user key under the new
 password before a fresh client cache starts. The CLI rejects the old password,
@@ -612,7 +608,6 @@ then logs in, locks/unlocks, syncs and decrypts the preexisting item with the ne
 password. Seven direct HTTP requests and one direct password grant exclude
 registration bootstrap and CLI-internal HTTP. No password POST trace is claimed.
 `BW_ACCOUNT_PASSWORD_CLI_RECEIPT` selects a private counts-only receipt.
-
 
 All eight selected password HTTP cases pass against the actual adapter and
 Vaultwarden 1.37.4: 285 tracked requests each, including 11 identity requests
@@ -630,7 +625,6 @@ old-password rejection, fresh-cache new-password login, lock/unlock, sync and
 decryption of an item encrypted before the HTTP password change. Seven direct
 HTTP requests and one password grant exclude bootstrap and CLI-internal HTTP.
 No CLI-posted password endpoint or captured request trace is inferred.
-
 
 The preceding password milestone passed all 104 local HTTP cases with 4499 tracked
 requests across thirteen groups, including real authentication-request and
@@ -954,3 +948,26 @@ claimed. Separate fresh reference processes retain unchanged controls; default
 `BW_ORGANIZATION_INVITES_RECEIPT` and `BW_ORGANIZATION_INVITES_CLI_RECEIPT`
 record authored status/counters only, with no credentials, response bodies,
 keys, private URLs or request traces.
+
+## Single-member confirmation
+
+`--suite organization-confirmation` passes six HTTP cases against the adapter
+and actual Vaultwarden 1.37.4: 213 counted requests plus eight registration
+requests for four fixtures, two password logins and two refreshes. The separate
+`--suite organization-confirmation-cli` passes 23 official CLI 2026.10.0
+commands on both targets, with 32 direct HTTP requests plus four registration
+requests, three CLI password logins and two direct setup logins.
+
+The CLI reads Accepted membership, obtains the public key, wraps the
+organization key and posts confirmation. Recipient login, unlock and
+fresh-cache login decrypt assigned collection names and exclude unassigned
+collections. `list collections` uses cache; ordinary-member `list org-collections` selects global `GET /collections`, preserving denial of
+organization administration. Historical already-confirmed local rejections
+remain a separate milestone, not a positive confirmation proof.
+
+`BW_ORGANIZATION_CONFIRMATION_RECEIPT` and
+`BW_ORGANIZATION_CONFIRMATION_CLI_RECEIPT` contain only authored status and
+counters. Direct setup and client-internal requests remain distinct; no
+captured trace, bulk confirmation, SMTP, policy/group administration or
+shared-cipher write is claimed. The default 104-case and baseline 120-command
+suites remain separate.

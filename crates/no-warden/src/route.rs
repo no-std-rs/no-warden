@@ -56,6 +56,7 @@ pub enum Route<'a> {
     OrganizationGet(&'a str),
     OrganizationMembers(&'a str),
     OrganizationInvite(&'a str),
+    OrganizationMemberConfirm(&'a str, &'a str),
     OrganizationMember(&'a str, &'a str),
     OrganizationCollections(&'a str),
     OrganizationCollectionCreate(&'a str),
@@ -240,6 +241,11 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                     return match (method, action) {
                         (Get, "users") => Some(OrganizationMembers(organization)),
                         (Post, "users/invite") => Some(OrganizationInvite(organization)),
+                        (Post, action) if action.starts_with("users/") => {
+                            let member = action.strip_prefix("users/")?.strip_suffix("/confirm")?;
+                            (!member.is_empty() && !member.contains('/'))
+                                .then_some(OrganizationMemberConfirm(organization, member))
+                        }
                         (Get, action) if action.starts_with("users/") => {
                             let member = action.strip_prefix("users/")?;
                             (!member.is_empty()
@@ -437,6 +443,37 @@ fn valid_segment(segment: &str) -> bool {
 mod tests {
     extern crate std;
     use super::*;
+
+    #[test]
+    fn organization_confirmation_is_single_authenticated_post_with_raw_ids_and_no_bulk_alias() {
+        for (org, member) in [
+            ("org", "member"),
+            ("bad.id", "%30member"),
+            ("%30org", "bad.id"),
+        ] {
+            let uri = std::format!(
+                "/api/organizations/{org}/users/{member}/confirm/?organizationId=ignored"
+            );
+            let route = classify(Method::Post, &uri).unwrap();
+            assert_eq!(route, Route::OrganizationMemberConfirm(org, member));
+            assert!(route.requires_authentication());
+            for method in [Method::Get, Method::Put, Method::Delete, Method::Options] {
+                assert_eq!(classify(method, &uri), None);
+            }
+        }
+        for uri in [
+            "/api/organizations/org/users/confirm",
+            "/api/organizations//users/member/confirm",
+            "/api/organizations/org/users//confirm",
+            "/api/organizations/org/users/member/confirm/extra",
+        ] {
+            assert_eq!(classify(Method::Post, uri), None);
+        }
+        assert_eq!(
+            classify(Method::Get, "/api/organizations/org/users/confirm"),
+            Some(Route::OrganizationMember("org", "confirm"))
+        );
+    }
 
     #[test]
     fn organization_invite_is_authenticated_post_only_and_preserves_raw_guard_input() {

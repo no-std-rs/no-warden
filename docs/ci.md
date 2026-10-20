@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 720 active Rust tests: 349 core, 260 host, and 111 conformance
+The workspace has 740 active Rust tests: 361 core, 267 host, and 112 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -178,7 +178,6 @@ Host tests include rollback, reopen and actual socket-peer capture. Forwarded-IP
 configuration, notifications and expiry/rate controls remain
 separate parity work.
 
-
 The authentication-response group adds approval/rejection and public response
 polling. Its no-allocator consumer exercises the borrowed update request,
 secret code input, approved/rejected-snapshot projections and both route kinds.
@@ -188,7 +187,6 @@ persistence. Required CI reruns the default HTTP suite and the unchanged
 own fresh process. Notification/expiry/proxy/rate behavior
 remain separate work.
 
-
 The eight response cases pass against the adapter and actual Vaultwarden 1.37.4
 with 322 requests and four logins per target. Eleven decoded creates and
 33 guard-valid polls share a 44-attempt public budget below the unchanged limit
@@ -196,7 +194,6 @@ of 50; six rejected query/path guards do not enter the polling handler. The
 focused group verifies positive transitions and negative owner/device/code/type/IP
 boundaries. All 97 coverage, client-inventory and repository-policy tests pass;
 those checks preserve source binding and keep all 294 upstream handlers visible.
-
 
 The authentication-login group exercises the password-grant `authRequest`
 variant, single-use consumption and refresh authority. Its expiry case creates
@@ -225,7 +222,6 @@ after an HTTP PBKDF2 change and same-user-key rewrap. This does not attribute th
 KDF POST to the CLI or count its internal HTTP calls. Reference HTTP, focused CLI
 and baseline CLI selections use separate fresh processes with unchanged limits.
 
-
 The password-change extension adds exact nested/legacy parsing and a pure
 four-route, 120-second previous-stamp policy. The no-allocator executable links
 both the borrowed request and the inclusive-deadline decision. Host regressions
@@ -250,7 +246,6 @@ and two refresh attempts),
 two authentication-request creations and four public polls. The final case waits
 at least 121 real seconds after the latest password change; exact equal-second
 boundary behavior has separate pure-core/provider tests.
-
 
 The preceding password milestone passed all 104 local HTTP cases with 4499 tracked
 requests across thirteen groups, including real authentication-request and
@@ -524,3 +519,20 @@ processes retain unchanged limits. The default 104-case and baseline
 120-command runs retain separate receipts; no combined total, internal-request
 count, invitation/registration CLI caller, confirmation success or trace
 follows.
+
+The selections `--suite organization-confirmation` and
+`--suite organization-confirmation-cli` extend the invitation foundation.
+Both actual targets pass six HTTP cases with 213 counted requests plus eight
+registration requests for four fixtures, two password logins and two
+refreshes. Both also pass the separate official CLI 2026.10.0 comparison:
+23 commands, 32 direct HTTP requests plus four registration requests, three
+CLI password logins and two direct setup logins. The positive flow performs
+actual client key wrapping and newly confirmed recipient collection decryption,
+including unlock and fresh-cache reads with unassigned collections absent.
+
+Private `BW_ORGANIZATION_CONFIRMATION_RECEIPT` and
+`BW_ORGANIZATION_CONFIRMATION_CLI_RECEIPT` files record authored status and
+counters without keys, credentials, private URLs or response bodies. Direct
+HTTP setup and client-internal traffic remain separately counted and untraced.
+The default 104-case and baseline 120-command receipts stay separate; no
+combined total, bulk confirmation, SMTP or complete policy lifecycle follows.
