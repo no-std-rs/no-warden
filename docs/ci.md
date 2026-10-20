@@ -5,7 +5,7 @@ Rust version, and a RISC-V bare-metal compilation of the library. A separate
 consumer links JSON decoding and encoding without a global allocator. The
 standalone adapter's real Bitwarden CLI, HTTP authorization, and restart
 persistence suites run in the same pipeline against disposable SQLite databases.
-The workspace has 795 active Rust tests: 391 core, 289 host, and 115 conformance
+The workspace has 816 active Rust tests: 403 core, 296 host, and 117 conformance
 support tests, plus one ignored subprocess fixture. A compile-fail doctest proves
 that `Secret` cannot be serialized implicitly. Host tests on Unix include
 attachment byte/revision rollback, capability expiry and deletion cleanup.
@@ -601,3 +601,29 @@ The existing single-removal observer also passes a separate 25-command run on
 each final target, with 40 direct HTTP requests plus four registration requests
 and three CLI plus two direct password logins. That regression uses single
 HTTP removal; it is not added to the bulk comparison or baseline 120 totals.
+
+## Member revoke/restore comparison
+
+`--suite organization-member-status` passes six focused HTTP cases against
+both actual targets: 265 counted requests plus ten registration requests for
+five fixtures, two password logins and two refreshes. It checks all three
+bodyless routes, exact errors/guards, selective visibility loss and recovery,
+Admin peers/Owner protection, Invited wire behavior and preserved authority.
+Invited no-op revision advancement and physical preservation/rollback remain
+local SQL evidence rather than HTTP claims.
+
+`--suite organization-member-status-cli` passes 31 official CLI 2026.10.0
+commands on both, with 43 direct HTTP requests plus four registration requests,
+three CLI password logins and two direct setup logins. Recipient login
+sessions, sync and fresh-cache reads decrypt personal/sibling data and recover
+primary
+collections after HTTP restore. One strict revoked-confirmation check is
+metadata observation; successful confirmation and a mutation caller are not
+claimed. Client-internal traffic, the default 104-case suite and the baseline
+120-command runs remain separate and untraced.
+
+`BW_ORGANIZATION_MEMBER_STATUS_RECEIPT` and
+`BW_ORGANIZATION_MEMBER_STATUS_CLI_RECEIPT` contain authored counters/status
+without credentials, keys or private response bodies. Configured policies,
+2FA fallback, events/groups, sharing and full failure/transport parity remain
+open.

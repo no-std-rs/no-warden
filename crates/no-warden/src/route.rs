@@ -61,6 +61,9 @@ pub enum Route<'a> {
     OrganizationMember(&'a str, &'a str),
     OrganizationBulkMemberDelete(&'a str),
     OrganizationMemberDelete(&'a str, &'a str),
+    OrganizationMemberRevoke(&'a str, &'a str),
+    OrganizationMemberRestore(&'a str, &'a str),
+    OrganizationMemberRestoreVNext(&'a str, &'a str),
     OrganizationCollections(&'a str),
     OrganizationCollectionCreate(&'a str),
     OrganizationCollectionUpdate(&'a str, &'a str),
@@ -250,6 +253,25 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                             let member = action.strip_prefix("users/")?.strip_suffix("/confirm")?;
                             (!member.is_empty() && !member.contains('/'))
                                 .then_some(OrganizationMemberConfirm(organization, member))
+                        }
+                        (Put, action) if action.starts_with("users/") => {
+                            let rest = action.strip_prefix("users/")?;
+                            let (member, kind) =
+                                if let Some(member) = rest.strip_suffix("/restore/vnext") {
+                                    (member, 2)
+                                } else if let Some(member) = rest.strip_suffix("/restore") {
+                                    (member, 1)
+                                } else {
+                                    (rest.strip_suffix("/revoke")?, 0)
+                                };
+                            if member.is_empty() || member.contains('/') {
+                                return None;
+                            }
+                            Some(match kind {
+                                0 => OrganizationMemberRevoke(organization, member),
+                                1 => OrganizationMemberRestore(organization, member),
+                                _ => OrganizationMemberRestoreVNext(organization, member),
+                            })
                         }
                         (Delete, action) if action.starts_with("users/") => {
                             let member = action.strip_prefix("users/")?;
@@ -453,6 +475,43 @@ fn valid_segment(segment: &str) -> bool {
 mod tests {
     extern crate std;
     use super::*;
+
+    #[test]
+    fn organization_member_status_routes_preserve_raw_ids_and_distinguish_vnext() {
+        for (org, member) in [
+            ("org", "member"),
+            ("bad.id", "%30member"),
+            ("%30org", "bad.id"),
+            ("org", "malformed%"),
+        ] {
+            for (suffix, route) in [
+                ("revoke", Route::OrganizationMemberRevoke(org, member)),
+                ("restore", Route::OrganizationMemberRestore(org, member)),
+                (
+                    "restore/vnext",
+                    Route::OrganizationMemberRestoreVNext(org, member),
+                ),
+            ] {
+                let path = std::format!(
+                    "/api/organizations/{org}/users/{member}/{suffix}/?organizationId=other"
+                );
+                assert_eq!(classify(Method::Put, &path), Some(route));
+                assert!(route.requires_authentication());
+                for method in [Method::Get, Method::Post, Method::Delete, Method::Options] {
+                    assert_eq!(classify(method, &path), None);
+                }
+            }
+        }
+        for path in [
+            "/api/organizations//users/member/revoke",
+            "/api/organizations/org/users/revoke",
+            "/api/organizations/org/users/restore",
+            "/api/organizations/org/users/restore/vnext",
+            "/api/organizations/org/users/member/revoke/extra",
+        ] {
+            assert_eq!(classify(Method::Put, path), None);
+        }
+    }
 
     #[test]
     fn organization_bulk_member_removal_is_authenticated_delete_only_with_raw_org() {

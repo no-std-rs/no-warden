@@ -10,6 +10,19 @@ export const upstreamKey = route => `${route.method} ${route.uri} @ ${route.sour
 export const routeShape = path => path.split("?")[0].replace(/<\w+(?:\.\.)?>|\{\w+\}/g, "{}");
 export const routeParameters = path => [...path.split("?")[0].matchAll(/<(\w+)(?:\.\.)?>|\{(\w+)\}/g)].map(match => match[1] ?? match[2]);
 
+// rustfmt may put the arrow only on the final alternative. Follow adjacent
+// complete Route patterns, never an arbitrary later arrow or handler body.
+export function multilineRouteArm(source, lineNumber, classifier) {
+  const lines = source.split("\n");
+  if (!new RegExp(`^\\s*(?:\\|\\s*)?Route::${classifier}\\([^)]*\\)\\s*$`).test(lines[lineNumber - 1] ?? "")) return false;
+  for (const line of lines.slice(lineNumber)) {
+    const alternative = /^\s*\|\s*Route::[A-Za-z_]\w*(?:\([^)]*\))?\s*(=>.*)?$/.exec(line);
+    if (!alternative) return false;
+    if (alternative[1]) return true;
+  }
+  return false;
+}
+
 export function sourceHashes(root = repositoryRoot) {
   const paths = [];
   function walk(directory) {
@@ -111,7 +124,8 @@ export function validateCoverage(coverage, hashes = sourceHashes(), readSource =
     assert.equal(route.server_implemented, route.server_handler !== null, `${key}: server dimension requires a handler reference`);
     if (route.server_implemented) {
       const line = auditedLine(route.server_handler);
-      assert(new RegExp(`\\bRoute::${classifier}\\b`).test(line) && (/=>/.test(line) || /^\s*if route == Route::/.test(line) || /^\s*if let Route::\w+\([^)]*\) = route \{\s*$/.test(line)), `${key}: handler must cite its classifier arm or condition`);
+      const [, file, lineNumber] = /^(.*):(\d+)$/.exec(route.server_handler);
+      assert(new RegExp(`\\bRoute::${classifier}\\b`).test(line) && (/=>/.test(line) || /^\s*if route == Route::/.test(line) || /^\s*if let Route::\w+\([^)]*\) = route \{\s*$/.test(line) || multilineRouteArm(readSource(file), Number(lineNumber), classifier)), `${key}: handler must cite its classifier arm or condition`);
     }
     for (const name of [...route.http_test_names.positive, ...route.http_test_names.negative]) {
       assert(tests.has(name), `${key}: unknown HTTP test ${name}`);

@@ -1227,3 +1227,28 @@ marker cleanup and rollback require local SQL evidence; portable collection
 absence alone does not prove private row deletion. Account/session authority,
 personal vault and unrelated memberships remain. Group administration,
 notification transport and shared-cipher writes remain outside this slice.
+
+## Membership status transition boundary
+
+`OrganizationMemberStatusStorage` returns owned scoped metadata, a live
+confirmed-owner count and a proposed-state restoration-policy result.
+`VaultService::revoke_org_member` and `restore_org_member` enforce exact
+signed-status eligibility, self prohibition and Owner hierarchy before a
+sealed commit. Policy checks see the restored status, with Owner/Admin and
+Invited-zero exemptions. No allocator, HTTP decoder, clock or crypto provider
+enters the core. The linked bare-metal consumer calls both real services.
+
+The default-policy SQLite provider rechecks current actor and target state,
+hierarchy and applicable owner count in one savepoint. It changes only the
+selected status and recipient revision, preserving membership/key/ACL rows,
+invitation metadata, credentials, devices, sessions and unrelated vault state.
+Rollback and reopen tests cover the local guarantee. Source revision attempts
+precede membership save and can survive a later error; configured email-2FA
+fallback may mutate before policy failure. Atomic local writes and stronger
+live checks do not establish matching failure timing or configured policies.
+
+Both actual targets pass six focused HTTP cases and a separate 31-command
+official CLI observation comparison after HTTP setup. Restoring Invited zero
+has local SQL revision evidence; no HTTP revision claim is inferred. The CLI
+adds no mutation caller or trace. Event delivery, bulk status changes, policy
+administration, groups and organization cipher sharing remain outside this slice.
