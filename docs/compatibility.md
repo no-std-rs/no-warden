@@ -57,6 +57,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Organization member public-key batches | Ordered scoped public-only rows, null-key retention and unfiltered target states/roles | Six matching HTTP cases (431 requests) and 16 matching official CLI fingerprint/decryption commands on both targets; no bulk CLI caller or browser trace claim |
 | Organization member mini-details | Seven-field read-only metadata, unfiltered names/native states, restricted Manager admission | Six matching HTTP cases (619 requests) and 18 matching official CLI observation commands on both targets; no mini CLI caller/browser trace |
 | Single organization-cipher sharing | Sequential collection-prefix effects, confirmed canonical membership and historical grants, viewer annotations and route-specific shared reads | Seven matching HTTP cases (538 requests) and 21 actual CLI move/fresh-cache decryption commands per target; no route trace/attachment/bulk/full-parity claim |
+| Bulk organization-cipher sharing | Reverse cipher updates, forward durable collection prefixes, separate source/manage and destination ACLs, private annotations and bounded host work | Seven matching direct HTTP cases (1106 requests) and 37 CLI observation commands/31 direct HTTP per target, including two direct bulk PUTs; no CLI bulk caller/trace/standalone browser/full-parity claim |
 | Organization web reads | Canonical cipher lists, aggregate collection access and explicit default empty groups | Six matching HTTP cases (156 requests) and 21 matching official CLI observation commands; reference-only organization UI experiment stays separate |
 | Single organization-collection update/delete | Complete grant replacement, opaque names, whitespace external-ID clearing and preserved cipher data | Allocation-free core and local rollback/cascade tests; six matching HTTP cases and twenty matching official CLI commands on both actual targets |
 | Organization-scoped collection list/create/single access-details | Confirmed manager authorization, exact projections, opaque names/external IDs and reference validation | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers; atomic local provider tests |
@@ -1544,3 +1545,79 @@ provider/noalloc boundaries and exact limitations appear in the
 [API parity notes](api-parity.md#organization-web-read-subset). Group CRUD,
 configured groups/SMTP/policies, attachments, broader cipher/transport/error and
 failure/concurrency behavior remain open. All three handlers remain partial.
+
+## Bulk organization-cipher sharing
+
+This partial `PUT /api/ciphers/share` slice accepts the measured native
+attachment-free secure-note bulk wrapper. Both actual Vaultwarden 1.37.4 and
+no-warden pass seven named direct HTTP cases (1106 counted requests,
+3 password logins), excluding 3
+registrations/6 registration requests per target.
+The [pinned declaration](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L1021) remains separate from that runtime executable.
+All full-upstream-parity flags remain false.
+
+Required exact `ciphers` and `collectionIds` arrays and the observed positional
+`[ciphers, collectionIds]` form are compared. Entire typed structure and every
+item ID's presence are checked before mutation. Present missing sources are
+looked up only when reached: items run in reverse order, with a fresh lookup for
+each duplicate, so the first input payload wins. Collection IDs run forwards.
+A later invalid selection retains the current valid association prefix and account
+revision fanout; completed suffix items also survive. The current failed item's
+payload, canonical ownership, cipher revision and private annotations stay intact.
+There is no whole-batch rollback or global source-existence prevalidation claim.
+
+Source update authority and destination permission differ. Confirmed canonical
+membership and validated current/historical association facts are required for
+shared sources. A readonly existing source with an assigned manage grant can be
+updated by bulk while its ordinary GET edit/delete/restore flags remain false.
+Readonly NEW selections still fail even with manage. Shared sources require their
+same nonnull organization; personal missing/null targets remain personal and skip
+selection lookups. Native empty/plain names do not pass through strict
+personal/single payload validation. Inner `encryptedFor` is a required nonnull
+string whose value does not authorize sharing or require a UUID; the outer field
+is ignored. Typed parser categories preserve field-data errors as 422 even when
+invalid input includes decoder-message text; positional wrapper overflow is 400.
+Missing/null `favorite` preserves the actor's value for measured personal updates,
+personal-to-organization moves and same-org updates; explicit false applies.
+Missing/null `folderId` clears the actor's folder. Invalid or foreign
+folders fail after successful collection associations have already committed.
+Final payload/ownership and the actor's folder/favorite update atomically locally,
+preserving other viewers' annotations and opaque encrypted fields/extensions.
+
+A dedicated revision-metadata case accepts older, future, malformed, omitted,
+null and equal date strings for personal-to-organization updates, plus an older
+same-org shared update. Those successes apply opaque payloads and advance cipher
+and reader account revisions while retaining each viewer's private annotations.
+A numeric date is a whole-request 422 with unchanged state. Bulk therefore does
+not inherit the separately measured single-share stale-date guard. Empty selected
+collections reject before provider access; every reachable final target plan has
+nonempty exact destination checks. This is not a concurrency-parity claim.
+
+Success is exactly empty 200 with no Content-Type. There is no bulk list response
+or complete typed cipher serializer. `CipherBulkShareRequest` is a caller-bounded
+borrowed wrapper, `CipherBulkShareItemRequest` only its minimal decision view;
+adapters retain the original opaque JSON instead of serializing that narrow view.
+The host streams at most 4096 ciphers and 4096 selections and rejects a checked
+cipher-count times selection-count estimate above 8192 association attempts before
+mutation. These are explicit local count/work policies, not upstream limit or
+response-byte parity. The reusable indexed `bulk_share_ciphers` service is uncapped.
+
+The separate official CLI 2026.10.0 observer passes 37 commands with
+31 direct HTTP requests, including exactly two DIRECT bulk
+PUT mutations, 4 CLI and 2
+direct password logins, excluding 2 registrations/
+4 registration requests per target. It verifies
+fresh owner/recipient decryption, assigned collections, per-viewer folders/favorites,
+retained account keys/profiles and personal controls. It reuses existing command
+forms and does not demonstrate a production CLI bulk caller or captured endpoint
+trace; focused totals remain separate from baseline120.
+
+The independently measured combined organization-read plus bulk browser flow is
+separate integration evidence reserved for a later browser harness PR. This
+standalone API slice claims no actual browser execution or ancillary-read coverage.
+General shared Save/edit/lifecycle, attachments, other item types, configured groups,
+policies/SMTP, backend/failure/concurrency variants and full parity remain open.
+Fourteen core tests, the static-route precedence test, twelve host regressions
+and the real fixed-storage noalloc decoder/prefix/final/source-access link
+exercise provide local contracts;
+firmware is linked rather than executed, and these are not upstream backend proofs.
