@@ -14,10 +14,15 @@ use no_warden::{
     devices::{DeviceRecord, PendingDeviceAuthRequest},
     domains::{DomainProjection, DomainSettingsView, GlobalDomain},
     identity::Secret,
+    organization_cipher_bulk_sharing::{
+        CipherBulkSharingData, OrganizationCipherBulkSharingStorage, ValidatedCipherBulkShare,
+        ValidatedCipherBulkShareAssociation, resolve_bulk_cipher_source_write_access,
+    },
     organization_cipher_sharing::{
-        CipherCollectionAccessRecord, CipherOwnership, CipherSharingCollection,
-        CipherSharingMembership, CipherSharingSource, OrganizationCipherSharingStorage,
-        ValidatedCipherShare, ValidatedCipherShareAssociation, resolve_cipher_access,
+        CipherCollectionAccessData, CipherCollectionAccessRecord, CipherOwnership,
+        CipherSharingCollection, CipherSharingMembership, CipherSharingSource,
+        OrganizationCipherSharingStorage, ValidatedCipherShare, ValidatedCipherShareAssociation,
+        resolve_cipher_access,
     },
     organization_collection_mutations::{
         OrganizationCollectionMutationStorage, ValidatedCollectionDelete, ValidatedCollectionUpdate,
@@ -83,9 +88,10 @@ use no_warden::{
         AccountKdfRequest, AccountKeys, AccountKeysResponse, AccountPasswordRequest,
         ApiKeyResponse, AttachmentRequest, AttachmentResponse, AttachmentUploadResponse,
         AuthRequestCreateRequest, AuthRequestListResponse, AuthRequestLoginRequest,
-        AuthRequestResponse, AuthRequestUpdateRequest, AvatarUpdateRequest, CipherIdsRequest,
-        CipherRequest, CipherShareRequest, ClientCredentialsRequest, DeviceListResponse,
-        DevicePushTokenRequest, DeviceResponse, DomainSettingsRequest, DomainSettingsResponse,
+        AuthRequestResponse, AuthRequestUpdateRequest, AvatarUpdateRequest,
+        CipherBulkShareItemRequest, CipherBulkShareRequest, CipherIdsRequest, CipherRequest,
+        CipherShareRequest, ClientCredentialsRequest, DeviceListResponse, DevicePushTokenRequest,
+        DeviceResponse, DomainSettingsRequest, DomainSettingsResponse,
         DomainSettingsUpdateResponse, FileSendRequest, FolderRequest, ImportRequest,
         InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
         MasterPasswordPolicy, MasterPasswordPolicyResponse, OrganizationBulkConfirmRequest,
@@ -138,6 +144,8 @@ struct PurgeProbe {
     member_status: i32,
     sharing_associations: usize,
     shared_cipher: bool,
+    bulk_associations: usize,
+    bulk_commits: usize,
 }
 impl PurgeProbe {
     fn organization_record(&self) -> OrganizationRecord<'_> {
@@ -312,6 +320,87 @@ impl OrganizationCipherSharingStorage for PurgeProbe {
             return Err(());
         }
         self.shared_cipher = true;
+        Ok(())
+    }
+}
+struct BulkAccess;
+impl CipherCollectionAccessData for BulkAccess {
+    fn len(&self) -> usize {
+        0
+    }
+    fn get(&self, _: usize) -> Option<CipherCollectionAccessRecord<'_>> {
+        None
+    }
+}
+impl OrganizationCipherBulkSharingStorage for PurgeProbe {
+    type BulkId = &'static str;
+    type SourceAccess = BulkAccess;
+    fn bulk_sharing_source(
+        &mut self,
+        id: &str,
+    ) -> Result<Option<CipherSharingSource<Self::BulkId>>, ()> {
+        Ok((id == "bulk-source").then_some(CipherSharingSource {
+            id: "bulk-source",
+            owner_id: Some("embedded-owner"),
+            organization_id: None,
+            revision: "bulk-revision",
+        }))
+    }
+    fn bulk_sharing_membership(
+        &mut self,
+        user: &str,
+        org: &str,
+    ) -> Result<Option<CipherSharingMembership<Self::BulkId>>, ()> {
+        self.sharing_membership(user, org)
+    }
+    fn bulk_source_collections(
+        &mut self,
+        _: &str,
+        _: &CipherSharingSource<Self::BulkId>,
+    ) -> Result<Self::SourceAccess, ()> {
+        Ok(BulkAccess)
+    }
+    fn bulk_sharing_collection(
+        &mut self,
+        user: &str,
+        org: &str,
+        collection: &str,
+    ) -> Result<Option<CipherSharingCollection<Self::BulkId>>, ()> {
+        self.sharing_collection(user, org, collection)
+    }
+    fn associate_bulk_sharing_collection<D: CipherBulkSharingData + ?Sized>(
+        &mut self,
+        plan: &ValidatedCipherBulkShareAssociation<'_, D>,
+    ) -> Result<(), ()> {
+        if plan.owner() != "embedded-owner"
+            || plan.cipher_id() != "bulk-source"
+            || plan.source_revision() != "bulk-revision"
+            || plan.source_owner() != Some("embedded-owner")
+            || plan.source_organization().is_some()
+            || plan.target_organization() != "embedded-org"
+            || plan.collection_id() != "embedded-share-collection"
+            || plan.request().cipher(plan.index()).and_then(|v| v.id) != Some("bulk-source")
+        {
+            return Err(());
+        }
+        self.bulk_associations += 1;
+        Ok(())
+    }
+    fn commit_cipher_bulk_share<D: CipherBulkSharingData + ?Sized>(
+        &mut self,
+        plan: &ValidatedCipherBulkShare<'_, D>,
+    ) -> Result<(), ()> {
+        if plan.owner() != "embedded-owner"
+            || plan.cipher_id() != "bulk-source"
+            || plan.source_revision() != "bulk-revision"
+            || plan.source_owner() != Some("embedded-owner")
+            || plan.source_organization().is_some()
+            || plan.target_organization() != Some("embedded-org")
+            || plan.request().cipher(plan.index()).map(|v| v.cipher_type) != Some(2)
+        {
+            return Err(());
+        }
+        self.bulk_commits += 1;
         Ok(())
     }
 }
@@ -1508,6 +1597,8 @@ pub extern "C" fn _start() -> ! {
             member_status: 1,
             sharing_associations: 0,
             shared_cipher: false,
+            bulk_associations: 0,
+            bulk_commits: 0,
         };
         let organization = OrganizationCreateRequest {
             billing_email: "owner@example.com",
@@ -1546,6 +1637,26 @@ pub extern "C" fn _start() -> ! {
                 organization_service.storage().shared_cipher,
             ));
         }
+        let bulk = serde_json_core::from_slice::<CipherBulkShareRequest<'_, CipherBulkShareItemRequest<'_>, 2, 2>>(black_box(
+            br#"{"ciphers":[{"id":"bulk-source","type":2,"name":"","encryptedFor":"ignored wire value","organizationId":"embedded-org"}],"collectionIds":["embedded-share-collection","missing"]}"#,
+        ));
+        if let Ok((mut request, _)) = bulk {
+            // Prefix error retains one association; the next call succeeds with
+            // the caller-bounded borrowed DTO through the generic core service.
+            let _ = black_box(organization_service.bulk_share_ciphers("embedded-owner", &request));
+            black_box((
+                organization_service.storage().bulk_associations,
+                organization_service.storage().bulk_commits,
+            ));
+            let mut ids = no_warden::bounded::BoundedList::new();
+            let _ = ids.push("embedded-share-collection");
+            request.collection_ids = ids;
+            let _ = black_box(organization_service.bulk_share_ciphers("embedded-owner", &request));
+            black_box((
+                organization_service.storage().bulk_associations,
+                organization_service.storage().bulk_commits,
+            ));
+        }
         let readonly = [CipherCollectionAccessRecord {
             cipher_organization_id: Some("embedded-org"),
             collection: CipherSharingCollection {
@@ -1580,6 +1691,20 @@ pub extern "C" fn _start() -> ! {
                 access.restore(),
             ));
         }
+        let _ = black_box(resolve_bulk_cipher_source_write_access(
+            "embedded-reader",
+            CipherOwnership::Organization {
+                organization_id: "embedded-org",
+            },
+            Some(CipherSharingMembership {
+                user_id: "embedded-reader",
+                organization_id: "embedded-org",
+                role: 2,
+                status: 2,
+                access_all: false,
+            }),
+            readonly.as_slice(),
+        ));
         if let Ok(response) =
             organization_service.create_organization("embedded-owner", &organization)
         {

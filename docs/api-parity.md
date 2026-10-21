@@ -39,13 +39,13 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 125 routed patterns, 64 with typed requests, 118 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 126 routed patterns, 65 with typed requests, 119 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 122 partial and 172 unimplemented. Query/rank/configuration
+status: 123 partial and 171 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
@@ -56,8 +56,8 @@ responses, and attachment responses. Bulk cipher lists use the generic `ListResp
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 119 patterns, negative
-HTTP evidence for 118, 317 named HTTP cases, and 54 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 120 patterns, negative
+HTTP evidence for 119, 323 named HTTP cases, and 54 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -1952,3 +1952,70 @@ these reads, or bulk sharing. The existing paired personal-web smoke retains its
 own narrower evidence. Configured policies/groups/SMTP, attachments, complete
 query/error/transport/failure/concurrency variants and full upstream parity
 remain unfinished.
+
+## Bulk organization-cipher sharing subset
+
+This partial `PUT /api/ciphers/share` slice accepts the measured native
+attachment-free secure-note bulk wrapper. Both actual Vaultwarden 1.37.4 and
+no-warden pass six named direct HTTP cases (1001 counted requests,
+3 password logins), excluding 3
+registrations/6 registration requests per target.
+The [pinned declaration](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L1021) remains separate from that runtime executable.
+All full-upstream-parity flags remain false.
+
+Required exact `ciphers` and `collectionIds` arrays and the observed positional
+`[ciphers, collectionIds]` form are compared. Entire typed structure and every
+item ID's presence are checked before mutation. Present missing sources are
+looked up only when reached: items run in reverse order, with a fresh lookup for
+each duplicate, so the first input payload wins. Collection IDs run forwards.
+A later invalid selection retains the current valid association prefix and account
+revision fanout; completed suffix items also survive. The current failed item's
+payload, canonical ownership, cipher revision and private annotations stay intact.
+There is no whole-batch rollback or global source-existence prevalidation claim.
+
+Source update authority and destination permission differ. Confirmed canonical
+membership and validated current/historical association facts are required for
+shared sources. A readonly existing source with an assigned manage grant can be
+updated by bulk while its ordinary GET edit/delete/restore flags remain false.
+Readonly NEW selections still fail even with manage. Shared sources require their
+same nonnull organization; personal missing/null targets remain personal and skip
+selection lookups. Native empty/plain names do not pass through strict
+personal/single payload validation. Inner `encryptedFor` is a required nonnull
+string whose value does not authorize sharing or require a UUID; the outer field
+is ignored. Typed parser categories preserve field-data errors as 422 even when
+invalid input includes decoder-message text; positional wrapper overflow is 400.
+Missing/null `favorite` preserves the actor's value for measured personal updates,
+personal-to-organization moves and same-org updates; explicit false applies.
+Missing/null `folderId` clears the actor's folder. Invalid or foreign
+folders fail after successful collection associations have already committed.
+Final payload/ownership and the actor's folder/favorite update atomically locally,
+preserving other viewers' annotations and opaque encrypted fields/extensions.
+
+Success is exactly empty 200 with no Content-Type. There is no bulk list response
+or complete typed cipher serializer. `CipherBulkShareRequest` is a caller-bounded
+borrowed wrapper, `CipherBulkShareItemRequest` only its minimal decision view;
+adapters retain the original opaque JSON instead of serializing that narrow view.
+The host streams at most 4096 ciphers and 4096 selections and rejects a checked
+cipher-count times selection-count estimate above 8192 association attempts before
+mutation. These are explicit local count/work policies, not upstream limit or
+response-byte parity. The reusable indexed `bulk_share_ciphers` service is uncapped.
+
+The separate official CLI 2026.10.0 observer passes 37 commands with
+31 direct HTTP requests, including exactly two DIRECT bulk
+PUT mutations, 4 CLI and 2
+direct password logins, excluding 2 registrations/
+4 registration requests per target. It verifies
+fresh owner/recipient decryption, assigned collections, per-viewer folders/favorites,
+retained account keys/profiles and personal controls. It reuses existing command
+forms and does not demonstrate a production CLI bulk caller or captured endpoint
+trace; focused totals remain separate from baseline120.
+
+The independently measured combined organization-read plus bulk browser flow is
+separate integration evidence reserved for a later browser harness PR. This
+standalone API slice claims no actual browser execution or ancillary-read coverage.
+General shared Save/edit/lifecycle, attachments, other item types, configured groups,
+policies/SMTP, backend/failure/concurrency variants and full parity remain open.
+Fourteen core tests, the static-route precedence test, twelve host regressions
+and the real fixed-storage noalloc decoder/prefix/final/source-access link
+exercise provide local contracts;
+firmware is linked rather than executed, and these are not upstream backend proofs.

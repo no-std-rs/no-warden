@@ -104,6 +104,7 @@ pub enum Route<'a> {
     CipherCreate,
     CipherCreateWrapped,
     CipherShare(&'a str),
+    CipherBulkShare,
     CipherImport,
     CipherPurge,
     CipherBulkTrash,
@@ -226,6 +227,7 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (Get, "/api/ciphers") => Some(Ciphers),
         (Post, "/api/ciphers") => Some(CipherCreate),
         (Post, "/api/ciphers/create") => Some(CipherCreateWrapped),
+        (Put, "/api/ciphers/share") => Some(CipherBulkShare),
         (_, "/api/ciphers/create") => None,
         (Post, "/api/ciphers/import") => Some(CipherImport),
         (_, "/api/ciphers/import") => None,
@@ -534,6 +536,27 @@ mod tests {
     extern crate std;
     use super::*;
 
+    #[test]
+    fn bulk_sharing_static_put_overrides_dynamic_id_without_changing_adjacent_routes() {
+        for path in ["/api/ciphers/share", "/api/ciphers/share/?ignored=true"] {
+            assert_eq!(classify(Method::Put, path), Some(Route::CipherBulkShare));
+            assert!(Route::CipherBulkShare.requires_authentication());
+            assert_eq!(classify(Method::Get, path), Some(Route::CipherGet("share")));
+            assert_eq!(
+                classify(Method::Delete, path),
+                Some(Route::CipherDelete("share"))
+            );
+        }
+        assert_eq!(
+            classify(Method::Put, "/api/ciphers/id/share"),
+            Some(Route::CipherShare("id"))
+        );
+        assert_eq!(
+            classify(Method::Post, "/api/ciphers/share"),
+            Some(Route::CipherUpdate("share"))
+        );
+        assert_eq!(classify(Method::Put, "/api/ciphers/share/extra"), None);
+    }
     #[test]
     fn organization_member_public_keys_route_keeps_raw_org_and_is_authenticated_post() {
         for org in ["org", "bad.id", "%30org", "malformed%"] {
