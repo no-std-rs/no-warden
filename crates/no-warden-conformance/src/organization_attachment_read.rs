@@ -306,7 +306,7 @@ impl Suite {
     fn receipt(&mut self, status: &str) -> Result<(), Error> {
         write_receipt(
             &mut self.receipt,
-            &json!({"schemaVersion":1,"status":status,"passedCases":self.passed,"cases":self.passed.len(),"expectedCases":CASE_COUNT,"httpRequests":self.http.requests,"expectedHttpRequests":HTTP_REQUEST_COUNT,"fixtureRegistrationHttpRequests":12,"httpRequestsIncludingFixtureRegistration":self.http.requests+12,"fixtureAccounts":6,"directPasswordLogins":self.http.logins,"eachAccountUsesFreshOwnerHttp":true,"existingOwnerHttpLoginBudgetUnchanged":true,"normalDeviceBoundPasswordFixtures":true,"negativeDeviceBindingProbeClaimed":false,"additionalRealDeviceGrantRequests":2,"metadataNonUuidAndEmptyDeviceBearerAsserted":self.passed.len()>=2,"metadataExact7FieldsOpaqueIdentityAsserted":self.passed.len()>=1,"metadataUuidAuthCaseBodyQueryHeadGuardsAsserted":self.passed.len()>=2,"firstLowercaseTokenAndCapabilityScopeAsserted":self.passed.len()>=3,"exact257EncryptedBytesAbsentContentTypeDispositionAsserted":self.passed.len()>=3,"oldCapabilityAfterRevokeAndNewMetadataDeniedAsserted":self.passed.len()>=4,"realClockCapabilitySamples":self.expiry_samples,"noJwtDecodeOrClockChange":true,"wholeViewsOnlyCapabilityUrlValuesNormalized":true,"allSixAccountRevisionsKeysAndPrivateViewsAsserted":self.finished,"accountKeysPrivateFoldersPersonalControlsAndSessionsPreserved":self.finished,"actualCliExecuted":false,"actualBrowserExecuted":false,"capturedRouteTrace":false,"decodedSecretTraceClaimed":false,"attachmentWriteAuthorityClaimed":false,"setupAttachmentUploadedByDirectHttp":true,"setupPersonalUploadBeforeDirectHttpMove":true,"historicalAssociationTested":false,"configuredPolicies":false,"groupsConfigured":false,"smtpEnabled":false,"rawDatabaseChecked":false,"nativeConcurrencyClaimed":false,"fullParityClaimed":false}),
+            &json!({"schemaVersion":1,"status":status,"passedCases":self.passed,"cases":self.passed.len(),"expectedCases":CASE_COUNT,"httpRequests":self.http.requests,"expectedHttpRequests":HTTP_REQUEST_COUNT,"fixtureRegistrationHttpRequests":12,"httpRequestsIncludingFixtureRegistration":self.http.requests+12,"fixtureAccounts":6,"directPasswordLogins":self.http.logins,"eachAccountUsesFreshOwnerHttp":true,"existingOwnerHttpLoginBudgetUnchanged":true,"normalDeviceBoundPasswordFixtures":true,"negativeDeviceBindingProbeClaimed":false,"additionalRealDeviceGrantRequests":2,"metadataNonUuidAndEmptyDeviceBearerAsserted":self.passed.len()>=2,"metadataExact7FieldsOpaqueIdentityAsserted":!self.passed.is_empty(),"metadataUuidAuthCaseBodyQueryHeadGuardsAsserted":self.passed.len()>=2,"firstLowercaseTokenAndCapabilityScopeAsserted":self.passed.len()>=3,"exact257EncryptedBytesAbsentContentTypeDispositionAsserted":self.passed.len()>=3,"oldCapabilityAfterRevokeAndNewMetadataDeniedAsserted":self.passed.len()>=4,"realClockCapabilitySamples":self.expiry_samples,"noJwtDecodeOrClockChange":true,"wholeViewsOnlyCapabilityUrlValuesNormalized":true,"allSixAccountRevisionsKeysAndPrivateViewsAsserted":self.finished,"accountKeysPrivateFoldersPersonalControlsAndSessionsPreserved":self.finished,"actualCliExecuted":false,"actualBrowserExecuted":false,"capturedRouteTrace":false,"decodedSecretTraceClaimed":false,"attachmentWriteAuthorityClaimed":false,"setupAttachmentUploadedByDirectHttp":true,"setupPersonalUploadBeforeDirectHttpMove":true,"historicalAssociationTested":false,"configuredPolicies":false,"groupsConfigured":false,"smtpEnabled":false,"rawDatabaseChecked":false,"nativeConcurrencyClaimed":false,"fullParityClaimed":false}),
         )
     }
     fn token(&self, i: usize) -> String {
@@ -427,12 +427,13 @@ impl Suite {
             }),
             "Attachment exact7string model differed",
         )?;
+        let expected_size = f.bytes.len().to_string();
         require(
             v["object"] == "attachment"
                 && v["id"] == f.id
                 && v["fileName"] == f.name
                 && v["key"] == f.key
-                && v["size"] == f.bytes.len().to_string(),
+                && v["size"].as_str() == Some(expected_size.as_str()),
             "Attachment opaque identity/size changed",
         )?;
         require(
@@ -906,15 +907,12 @@ fn setup() -> Result<Suite, Error> {
         }
     }
     let mut user_keys = Vec::new();
-    for i in 0..6 {
+    for (i, label) in LABELS.iter().enumerate() {
         let user_key = fixture::fixture_user_key(&s.accounts[i].fixture, &s.accounts[i].password)
             .map_err(|_| Error("Attachment private fixture key failed"))?;
         user_keys.push(user_key);
-        let encrypted = fixture::encrypt(
-            format!("Private folder {}", LABELS[i]).as_bytes(),
-            &user_key,
-        )
-        .map_err(|_| Error("Attachment folder encryption failed"))?;
+        let encrypted = fixture::encrypt(format!("Private folder {label}").as_bytes(), &user_key)
+            .map_err(|_| Error("Attachment folder encryption failed"))?;
         let folder = s.http.json(
             Method::POST,
             "/api/folders",
