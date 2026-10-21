@@ -16,6 +16,7 @@ mod organization_bulk_confirmations;
 mod organization_bulk_member_removal;
 mod organization_bulk_member_status;
 mod organization_cipher_archive;
+mod organization_cipher_bulk_lifecycle;
 mod organization_cipher_bulk_sharing;
 mod organization_cipher_collections;
 mod organization_cipher_lifecycle;
@@ -57,7 +58,6 @@ use no_warden::{
     ApiError, ErrorKind, VaultService,
     auth_login::AuthRequestLoginContext,
     auth_requests::AuthRequestContext,
-    bulk::CipherBulkOperation,
     devices::DeviceRegistration,
     domains::DomainProjection,
     identity::{AuthorizedApiKeyGrant, Secret},
@@ -382,6 +382,10 @@ async fn dispatch_http(
     let classified = route::Method::parse(method.as_str())
         .and_then(|method| route::classify(method, uri.path()));
     let bulk = classified == Some(Route::CipherBulkShare);
+    let selected_lifecycle = matches!(
+        classified,
+        Some(Route::CipherBulkTrash | Route::CipherBulkRestore | Route::CipherBulkDelete)
+    );
     let collections = matches!(classified, Some(Route::CipherCollectionsUpdate(_)));
     let partial = matches!(classified, Some(Route::CipherPartial(_)));
     let archive = matches!(
@@ -403,6 +407,9 @@ async fn dispatch_http(
         Err(error) if partial => Ok(organization_cipher_partial::render_error(error)),
         Err(error) if archive => Ok(organization_cipher_archive::render_error(error)),
         Err(error) if lifecycle => Ok(organization_cipher_lifecycle::render_error(error)),
+        Err(error) if selected_lifecycle => {
+            Ok(organization_cipher_bulk_lifecycle::render_error(error))
+        }
         result => result,
     }
 }
@@ -444,8 +451,9 @@ async fn dispatch_with_peer(
         .or_else(|| invalid_purge_id.then_some(Route::CipherGet("purge")))
         .ok_or_else(missing)?;
     // The pinned executable rejects POST restore, despite the older route inventory.
-    if method == route::Method::Post && matches!(route, Route::CipherRestore(_)) {
-        return Err(missing());
+    match route {
+        Route::CipherRestore(_) if method == route::Method::Post => return Err(missing()),
+        _ => {}
     }
     if let Route::FolderGet(id) | Route::FolderUpdate(id) | Route::FolderDelete(id) = route {
         // Upstream's FromParam validates UUID syntax but keeps its original
@@ -1231,9 +1239,11 @@ async fn dispatch_with_peer(
             let response = service.rotate_api_key(&owner, &request)?;
             Ok(Json(response).into_response())
         }
-        Route::CipherBulkTrash => cipher_bulk(route, &owner, &body, &mut store),
-        Route::CipherBulkRestore => cipher_bulk(route, &owner, &body, &mut store),
-        Route::CipherBulkDelete => cipher_bulk(route, &owner, &body, &mut store),
+        Route::CipherBulkTrash | Route::CipherBulkRestore | Route::CipherBulkDelete => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            organization_cipher_bulk_lifecycle::dispatch(route, &owner, &body, &mut store)
+        }
         Route::CipherBulkArchive
         | Route::CipherBulkUnarchive
         | Route::CipherArchive(_)
@@ -1496,6 +1506,14 @@ async fn dispatch_with_peer(
                 .map_err(folder_api_error)?;
             Ok(StatusCode::OK.into_response())
         }
+        // POST /ciphers/restore falls through to a malformed dynamic cipher ID
+        // in the pinned native executable; it is not a bulk restore alias.
+        Route::CipherUpdate("restore") => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            cipher_reads::path_id("restore")?;
+            Err(missing())
+        }
         Route::CipherCreate | Route::CipherCreateWrapped | Route::CipherUpdate(_) => {
             let document: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
             let payload = if route == Route::CipherCreateWrapped {
@@ -1545,61 +1563,6 @@ async fn dispatch_with_peer(
             organization_cipher_lifecycle::dispatch(route, &owner, &mut store)
         }
         _ => Err(missing()),
-    }
-}
-
-fn cipher_bulk(
-    route: Route<'_>,
-    owner: &str,
-    body: &[u8],
-    store: &mut Store,
-) -> Result<Response, Failure> {
-    let operation = match route {
-        Route::CipherBulkTrash => CipherBulkOperation::Trash,
-        Route::CipherBulkRestore => CipherBulkOperation::Restore,
-        Route::CipherBulkDelete => CipherBulkOperation::Delete,
-        Route::CipherArchive(_) | Route::CipherBulkArchive => CipherBulkOperation::Archive,
-        Route::CipherUnarchive(_) | Route::CipherBulkUnarchive => CipherBulkOperation::Unarchive,
-        _ => return Err(missing()),
-    };
-    let single = match route {
-        Route::CipherArchive(id) | Route::CipherUnarchive(id) => Some(id),
-        _ => None,
-    };
-    let document: Value = if single.is_some() {
-        Value::Null
-    } else {
-        serde_json::from_slice(body).map_err(|_| invalid())?
-    };
-    let ids: Vec<&str> = if let Some(id) = single {
-        vec![id]
-    } else {
-        document
-            .get("ids")
-            .and_then(Value::as_array)
-            .ok_or_else(invalid)?
-            .iter()
-            .map(|id| id.as_str().ok_or_else(invalid))
-            .collect::<Result<_, _>>()?
-    };
-    let mut scratch = vec![""; ids.len()];
-    let count = VaultService::new(&mut *store).bulk_ciphers(owner, operation, ids, &mut scratch)?;
-    if matches!(
-        operation,
-        CipherBulkOperation::Trash | CipherBulkOperation::Delete
-    ) {
-        return Ok(StatusCode::OK.into_response());
-    }
-    let data = scratch[..count]
-        .iter()
-        .map(|id| store.item(owner, id, "cipher")?.ok_or_else(missing))
-        .collect::<Result<Vec<_>, Failure>>()?;
-    if single.is_some() {
-        Ok(json_response(data.into_iter().next().ok_or_else(missing)?))
-    } else {
-        Ok(json_response(
-            json!({"object":"list","data":data,"continuationToken":null}),
-        ))
     }
 }
 

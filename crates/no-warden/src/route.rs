@@ -239,6 +239,9 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         (Post, "/api/ciphers/delete" | "/api/ciphers/delete-admin") => Some(CipherBulkDelete),
         (Put, "/api/ciphers/delete" | "/api/ciphers/delete-admin") => Some(CipherBulkTrash),
         (Put, "/api/ciphers/restore" | "/api/ciphers/restore-admin") => Some(CipherBulkRestore),
+        // The pinned executable matches POST restore as a dynamic ID, then its
+        // authenticated UUID guard rejects the literal (422, not a bulk alias).
+        (Post, "/api/ciphers/restore") => Some(CipherUpdate("restore")),
         (Put, "/api/ciphers/archive") => Some(CipherBulkArchive),
         (Put, "/api/ciphers/unarchive") => Some(CipherBulkUnarchive),
         (
@@ -1805,6 +1808,7 @@ mod tests {
             (Post, "/api/ciphers/delete-admin", CipherBulkDelete),
             (Put, "/api/ciphers/delete-admin", CipherBulkTrash),
             (Put, "/api/ciphers/restore", CipherBulkRestore),
+            (Post, "/api/ciphers/restore", CipherUpdate("restore")),
             (Put, "/api/ciphers/restore-admin", CipherBulkRestore),
             (Put, "/api/ciphers/archive", CipherBulkArchive),
             (Put, "/api/ciphers/unarchive", CipherBulkUnarchive),

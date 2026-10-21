@@ -79,6 +79,11 @@ struct SelectedInput {
     ids: Ids,
 }
 
+pub(crate) fn selected_ids(body: &[u8]) -> Result<Vec<String>, Failure> {
+    let input: SelectedInput = serde_json::from_slice(body).map_err(schema)?;
+    Ok(input.ids.0)
+}
+
 pub fn dispatch(
     route: Route<'_>,
     actor: &str,
@@ -98,8 +103,8 @@ pub fn dispatch(
             Ok(crate::json_response(project(&s.db, actor, &id)?))
         }
         _ => {
-            let input: SelectedInput = serde_json::from_slice(body).map_err(schema)?;
-            let mut ids: Vec<&str> = input.ids.0.iter().map(String::as_str).collect();
+            let input = selected_ids(body)?;
+            let mut ids: Vec<&str> = input.iter().map(String::as_str).collect();
             ids.sort_unstable();
             ids.dedup();
             preflight(&s.db, actor, &ids)?;
