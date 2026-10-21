@@ -21,7 +21,7 @@ fn fixture(path: &str) -> Store {
         store
             .db
             .execute(
-                "INSERT INTO items VALUES(?1,?2,'cipher',?3,0,'2000-01-01','2000-01-01')",
+                "INSERT INTO items(id,owner,kind,document,deleted,revision,created) VALUES(?1,?2,'cipher',?3,0,'2000-01-01','2000-01-01')",
                 params![
                     format!("{owner}-cipher"),
                     owner,

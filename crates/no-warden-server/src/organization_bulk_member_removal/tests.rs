@@ -68,7 +68,7 @@ fn setup(path: &str, bob_role: i32) -> Setup {
                 [format!("{user}@example.test")],
             )
             .unwrap();
-        store.db.execute("INSERT INTO items VALUES(?1,?2,'cipher','{\"name\":\"opaque-ciphertext\"}',0,'2000','2000')",params![format!("personal-{user}"),user]).unwrap();
+        store.db.execute("INSERT INTO items(id,owner,kind,document,deleted,revision,created) VALUES(?1,?2,'cipher','{\"name\":\"opaque-ciphertext\"}',0,'2000','2000')",params![format!("personal-{user}"),user]).unwrap();
     }
     Setup {
         store,
