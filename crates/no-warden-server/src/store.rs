@@ -352,7 +352,11 @@ impl Store {
     }
 
     pub fn item(&self, owner: &str, id: &str, kind: &str) -> rusqlite::Result<Option<Value>> {
-        let mut document = item(&self.db, owner, id, kind)?;
+        let mut document = if kind == "cipher" {
+            crate::organization_cipher_sharing::project(&self.db, owner, id, true)?
+        } else {
+            item(&self.db, owner, id, kind)?
+        };
         if kind == "cipher"
             && let Some(document) = &mut document
         {
@@ -362,6 +366,13 @@ impl Store {
     }
 
     pub fn items(&self, owner: &str, kind: &str) -> rusqlite::Result<Vec<Value>> {
+        if kind == "cipher" {
+            let mut documents = crate::organization_cipher_sharing::list(&self.db, owner)?;
+            for document in &mut documents {
+                crate::attachments::enrich_cipher(&self.db, &self.download_base, document)?;
+            }
+            return Ok(documents);
+        }
         let mut statement = self.db.prepare(
             "SELECT i.document,a.cipher_id IS NOT NULL,a.archived_at FROM items i
              LEFT JOIN cipher_archives a ON a.cipher_id=i.id AND a.owner=i.owner
@@ -465,18 +476,7 @@ fn save_document(
     require_change(db.execute(if allow_update { "INSERT INTO items(id,owner,kind,document,deleted,revision,created) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET document=excluded.document,revision=excluded.revision,deleted=excluded.deleted WHERE items.owner=excluded.owner AND items.kind=excluded.kind" } else { "INSERT INTO items(id,owner,kind,document,deleted,revision,created) VALUES(?1,?2,?3,?4,?5,?6,?7)" },
             params![id,owner,kind,doc.to_string(),deleted,revision,revision])?)?;
     if kind == "cipher" {
-        let archived_at = match doc.get("archivedDate") {
-            None | Some(Value::Null) => Some(None),
-            Some(Value::String(date)) => chrono::NaiveDateTime::parse_from_str(date, "%+")
-                .ok()
-                .map(|date| {
-                    Some(
-                        date.and_utc()
-                            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
-                    )
-                }),
-            _ => None,
-        };
+        let archived_at = archive_value(&doc);
         if let Some(archived_at) = archived_at {
             save_archive(db, owner, id, archived_at.as_deref())?;
         } else {
@@ -501,7 +501,24 @@ fn save_document(
     Ok(())
 }
 
-fn save_archive(
+pub(crate) fn archive_value(document: &Value) -> Option<Option<String>> {
+    match document.get("archivedDate") {
+        None | Some(Value::Null) => Some(None),
+        Some(Value::String(date)) => {
+            chrono::NaiveDateTime::parse_from_str(date, "%+")
+                .ok()
+                .map(|date| {
+                    Some(
+                        date.and_utc()
+                            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+                    )
+                })
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn save_archive(
     db: &Connection,
     owner: &str,
     id: &str,
@@ -819,7 +836,12 @@ impl AccountKdfStorage for Store {
 
 // The default read-access hook uses trusted personal ownership metadata. An
 // organization adapter can supply readable access independently of write access.
-impl CipherReadStorage for Store {}
+impl CipherReadStorage for Store {
+    fn cipher_read_access(&mut self, owner: &str, id: &str) -> rusqlite::Result<Option<bool>> {
+        crate::organization_cipher_sharing::access(&self.db, owner, id)
+            .map(|access| access.map(|access| access.readable()))
+    }
+}
 
 impl AccountDeletionStorage for Store {
     fn account_deletion_blocked_by_last_owner(&mut self, owner: &str) -> rusqlite::Result<bool> {
@@ -6058,7 +6080,9 @@ mod tests {
             VaultService::new(&mut store)
                 .create_cipher(owner, id, &request)
                 .unwrap();
-            let saved = store.item(owner, id, "cipher").unwrap().unwrap();
+            // Assert persisted validation metadata independently of the wire
+            // projection, which omits fields sent only with write requests.
+            let saved = item(&store.db, owner, id, "cipher").unwrap().unwrap();
             assert_eq!(saved["encryptedByKeyId"].as_str(), candidate);
         }
     }

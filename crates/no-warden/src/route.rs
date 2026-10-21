@@ -100,6 +100,7 @@ pub enum Route<'a> {
     Ciphers,
     CipherCreate,
     CipherCreateWrapped,
+    CipherShare(&'a str),
     CipherImport,
     CipherPurge,
     CipherBulkTrash,
@@ -416,6 +417,9 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
             }
             let tail = path.strip_prefix("/api/ciphers/")?;
             if let Some((id, action)) = tail.split_once('/') {
+                if method == Put && !id.is_empty() && action == "share" {
+                    return Some(CipherShare(id));
+                }
                 if method == Get && !id.is_empty() {
                     match action {
                         "details" => return Some(CipherDetails(id)),

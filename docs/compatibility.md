@@ -56,6 +56,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Single member revoke/restore | Bodyless status transitions preserve keys/grants and recover selective visibility | Six matching HTTP cases and 31 matching CLI observation commands on both actual targets; no mutation caller or trace claim |
 | Organization member public-key batches | Ordered scoped public-only rows, null-key retention and unfiltered target states/roles | Six matching HTTP cases (431 requests) and 16 matching official CLI fingerprint/decryption commands on both targets; no bulk CLI caller or browser trace claim |
 | Organization member mini-details | Seven-field read-only metadata, unfiltered names/native states, restricted Manager admission | Six matching HTTP cases (619 requests) and 18 matching official CLI observation commands on both targets; no mini CLI caller/browser trace |
+| Single organization-cipher sharing | Sequential collection-prefix effects, confirmed canonical membership and historical grants, viewer annotations and route-specific shared reads | Seven matching HTTP cases (538 requests) and 21 actual CLI move/fresh-cache decryption commands per target; no route trace/attachment/bulk/full-parity claim |
 | Single organization-collection update/delete | Complete grant replacement, opaque names, whitespace external-ID clearing and preserved cipher data | Allocation-free core and local rollback/cascade tests; six matching HTTP cases and twenty matching official CLI commands on both actual targets |
 | Organization-scoped collection list/create/single access-details | Confirmed manager authorization, exact projections, opaque names/external IDs and reference validation | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers; atomic local provider tests |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
@@ -1469,3 +1470,45 @@ groups/policies, dangling-account/backend variants, full failure/transport
 semantics, editing and general sharing remain partial. See the
 [API parity notes](api-parity.md#organization-member-mini-details-subset) for scope
 and the actual/source evidence distinction.
+
+## Single organization-cipher sharing
+
+The single sharing PUT accepts native encrypted secure-note input and required
+collection selections under scoped membership/add permission. Host decoding
+rejects more than 4096 selected IDs with 422 before mutation; the indexed core
+remains uncapped and no upstream count-limit parity is inferred. Valid-prefix
+association/revision effects survive a later rejected ID; only the final phase
+replaces payload and canonical ownership. Whole-operation atomic rollback is
+not claimed. Historical collection links may remain visible to full viewers.
+A confirmed member of the current organization may also gain access through an
+older associated collection grant; canonical membership alone does not grant a
+restricted member access to a fresh unassigned cipher. The final paired HTTP suite includes retained full-viewer historical IDs,
+confirmed current-organization Manager/User access via an older collection grant,
+fresh restricted Manager denial without a grant and retry revision fanout. The separate B-only
+selective-recipient result remains native reference-only evidence.
+
+Shared reads preserve the measured readonly single-GET versus list/sync collection
+ID difference and separate edit/password/delete/restore flags. Folder/favorite/
+archive state belongs to each viewer. Default personal/shared TOTP capability is
+true. Native success has thirty known fields, but remains opaque adapter JSON,
+not complete typed response coverage.
+
+Both no-warden and Vaultwarden 1.37.4 pass seven HTTP cases/538
+counted requests, excluding 4 registration
+requests; 2 password logins and 2
+refreshes remain explicit. The separate official CLI 2026.10.0 suite executes
+`bw move` in 21 commands/25 direct HTTP requests,
+excluding 4 registration requests. It recovers
+the same-ID plaintext immediately, after fresh owner login/cache and in a fresh
+selective recipient cache, including assigned collection decryption. This is a
+real mutation caller; captured route trace/browser/internal-request counts remain
+false, and focused totals are not combined with the 120-command baseline.
+
+The reusable no_std/no-alloc service uses owned provider snapshots, stable indexed
+IDs and sealed association/final plans. Canonical SQLite ownership/private
+annotations, migration/reopen, cleanup and local rollback/live-authority tests
+are separate from actual upstream failure/concurrency/durability proof. Firmware
+is linked, not run. Deprecated aliases, attachment-bearing moves, general shared
+editing/lifecycle, bulk/import/admin, configured policies/groups/SMTP, complete
+typed serialization and full parity remain open. See the
+[API parity notes](api-parity.md#single-organization-cipher-sharing-subset).

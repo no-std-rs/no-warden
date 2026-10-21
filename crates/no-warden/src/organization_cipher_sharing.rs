@@ -351,6 +351,14 @@ pub trait OrganizationCipherSharingStorage: Storage {
         &mut self,
         plan: &ValidatedCipherShareAssociation<'_>,
     ) -> Result<(), Self::Error>;
+    /// Compare an optional client revision using the adapter's timestamp rules.
+    /// Only a valid older revision is stale. The service calls this after all
+    /// association steps; rejecting the payload must preserve their commits.
+    fn sharing_revision_is_older(
+        &mut self,
+        source: &CipherSharingSource<Self::ShareId>,
+        requested: &str,
+    ) -> Result<bool, Self::Error>;
     fn commit_cipher_share(
         &mut self,
         plan: &ValidatedCipherShare<'_, '_>,
@@ -390,6 +398,13 @@ impl<T: OrganizationCipherSharingStorage + ?Sized> OrganizationCipherSharingStor
         plan: &ValidatedCipherShare<'_, '_>,
     ) -> Result<(), Self::Error> {
         (**self).commit_cipher_share(plan)
+    }
+    fn sharing_revision_is_older(
+        &mut self,
+        source: &CipherSharingSource<Self::ShareId>,
+        requested: &str,
+    ) -> Result<bool, Self::Error> {
+        (**self).sharing_revision_is_older(source, requested)
     }
 }
 
@@ -469,6 +484,18 @@ impl<S: OrganizationCipherSharingStorage> VaultService<S> {
                         collection_id: selected,
                     })
                     .map_err(S::map_error)?;
+            }
+        }
+        if let Some(revision) = request.last_known_revision_date {
+            if self
+                .storage_mut()
+                .sharing_revision_is_older(&source, revision)
+                .map_err(S::map_error)?
+            {
+                return Err(ApiError::invalid(
+                    "lastKnownRevisionDate",
+                    "Cipher revision is older than the stored revision",
+                ));
             }
         }
         self.storage_mut()
