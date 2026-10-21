@@ -14,8 +14,8 @@ use std::{collections::BTreeSet, fs, io::Read};
 use uuid::Uuid;
 
 pub const CASE_COUNT: usize = 6;
-// Set from complete successful native development, registration HTTP is separate.
-pub const HTTP_REQUEST_COUNT: usize = 0;
+// Measured complete native development; registration HTTP is separate.
+pub const HTTP_REQUEST_COUNT: usize = 4648;
 const NOTE: &str = "Selected lifecycle retains opaque note Ω\0";
 type Case = fn(&mut Suite) -> Result<(), Error>;
 const CASES: [(&str, Case); CASE_COUNT] = [
