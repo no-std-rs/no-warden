@@ -175,7 +175,11 @@ pub(crate) fn project(db: &Connection, actor: &str, id: &str) -> Result<Value, F
 fn confirmed(db: &Connection, actor: &str, cipher: &str) -> rusqlite::Result<bool> {
     db.query_row("SELECT EXISTS(SELECT 1 FROM items i JOIN organization_memberships m ON m.organization_id=i.organization_id WHERE i.id=?1 AND i.kind='cipher' AND m.user_id=?2 AND m.status=2)",params![cipher,actor],|r|r.get(0))
 }
-fn material(db: &Connection, actor: &str, cipher: &str) -> rusqlite::Result<Option<usize>> {
+pub(crate) fn material(
+    db: &Connection,
+    actor: &str,
+    cipher: &str,
+) -> rusqlite::Result<Option<usize>> {
     // Negative load optimization only. Missing/foreign/unconfirmed sources skip
     // owned fact/document loading and receive independent core admission checks.
     let row: Option<(bool, usize)> = db.query_row("SELECT coalesce((i.owner=?2 AND i.organization_id IS NULL) OR EXISTS(SELECT 1 FROM organization_memberships m WHERE m.organization_id=i.organization_id AND m.user_id=?2 AND m.status=2),0),128+length(CAST(i.id AS BLOB))+coalesce(length(CAST(i.owner AS BLOB)),0)+coalesce(length(CAST(i.organization_id AS BLOB)),0)+length(CAST(i.revision AS BLOB))+length(CAST(i.document AS BLOB)) FROM items i WHERE i.id=?1 AND i.kind='cipher'",params![cipher,actor],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;

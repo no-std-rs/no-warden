@@ -13,6 +13,7 @@ mod cipher_reads;
 mod devices;
 mod domains;
 mod organization_attachment_read;
+mod organization_attachment_write;
 mod organization_bulk_confirmations;
 mod organization_bulk_member_removal;
 mod organization_bulk_member_status;
@@ -342,6 +343,16 @@ async fn request_body_limit(
 }
 
 fn authorize_send_upload(app: &App, headers: &HeaderMap) -> Result<(), Failure> {
+    authorize_upload(app, headers, true)
+}
+
+fn authorize_attachment_upload(app: &App, headers: &HeaderMap) -> Result<(), Failure> {
+    authorize_upload(app, headers, false)
+}
+
+// Check authority without retaining a database lock across multipart parsing.
+// Ordinary dispatch repeats authentication after parsing to check live sessions.
+fn authorize_upload(app: &App, headers: &HeaderMap, require_device: bool) -> Result<(), Failure> {
     let bearer = headers
         .get("authorization")
         .and_then(|value| value.to_str().ok())
@@ -368,7 +379,9 @@ fn authorize_send_upload(app: &App, headers: &HeaderMap) -> Result<(), Failure> 
         return Err(unauthorized());
     };
     store.account("id", &owner)?.ok_or_else(unauthorized)?;
-    devices::access_binding(&store.db, &access, &owner)?.ok_or_else(unauthorized)?;
+    if require_device {
+        devices::access_binding(&store.db, &access, &owner)?.ok_or_else(unauthorized)?;
+    }
     Ok(())
 }
 
@@ -381,6 +394,9 @@ async fn dispatch_http(
     body: Bytes,
 ) -> Result<Response, Failure> {
     let attachment_scope = organization_attachment_read::error_scope(&method, uri.path());
+    let attachment_write_scope = organization_attachment_write::error_scope(&method, uri.path());
+    let unsupported_attachment_admin_read =
+        organization_attachment_write::unsupported_admin_read(&method, uri.path());
     let attachment_head =
         method == Method::HEAD && organization_attachment_read::route(uri.path()).is_some();
     let method = if attachment_head { Method::GET } else { method };
@@ -407,6 +423,9 @@ async fn dispatch_http(
         Some(Route::CipherSoftDelete(_) | Route::CipherRestore(_) | Route::CipherDelete(_))
     );
     let result = match dispatch_with_peer(app, method, uri, headers, body, peer.ip()).await {
+        Err(error) if attachment_write_scope || unsupported_attachment_admin_read => {
+            Ok(organization_attachment_write::render_error(error))
+        }
         Err(error) if attachment_scope => Ok(organization_attachment_read::render_error(error)),
         Err(error) if bulk => Ok(organization_cipher_bulk_sharing::render_error(error)),
         Err(error) if collections => Ok(organization_cipher_collections::render_error(error)),
@@ -475,6 +494,10 @@ async fn dispatch_with_peer(
     }
     if route == Route::Config {
         return Ok(json_response(protocol::config(&app.base)));
+    }
+    if let Route::AttachmentUpload(cipher, _) = route {
+        authorize_attachment_upload(&app, &headers)?;
+        cipher_reads::path_id(cipher)?;
     }
     let upload = if matches!(
         route,
@@ -1171,9 +1194,17 @@ async fn dispatch_with_peer(
             Ok(Json(response).into_response())
         }
         Route::AttachmentReserve(cipher_id) => {
-            let document: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
+            let cipher_id = cipher_reads::path_id(cipher_id)?;
+            let cipher_id = cipher_id.as_str();
+            let document: Value = serde_json::from_slice(&body)
+                .map_err(organization_attachment_write::json_syntax_error)?;
             let request = no_warden::wire::AttachmentRequest::deserialize(&document)
-                .map_err(|_| invalid())?;
+                .map_err(|_| Failure(StatusCode::UNPROCESSABLE_ENTITY, "Invalid request"))?;
+            if organization_attachment_write::shared(&store.db, cipher_id)? {
+                return organization_attachment_write::reserve(
+                    &mut store, &owner, cipher_id, &request,
+                );
+            }
             let id = attachments::new_id();
             VaultService::new(&mut *store).reserve_attachment(&owner, cipher_id, &id, &request)?;
             let cipher = store
@@ -1196,7 +1227,18 @@ async fn dispatch_with_peer(
             &app.base,
         ),
         Route::AttachmentUpload(cipher_id, attachment_id) => {
+            let cipher_id = cipher_reads::path_id(cipher_id)?;
+            let cipher_id = cipher_id.as_str();
             let upload = upload.ok_or_else(invalid)?;
+            if organization_attachment_write::shared(&store.db, cipher_id)? {
+                return organization_attachment_write::upload(
+                    &mut store,
+                    &owner,
+                    cipher_id,
+                    attachment_id,
+                    upload.data,
+                );
+            }
             let size = upload.data.len() as u64;
             store.pending_attachment_data = upload.data;
             VaultService::new(&mut *store).upload_attachment(
@@ -1229,6 +1271,16 @@ async fn dispatch_with_peer(
             ))
         }
         Route::AttachmentDelete(cipher_id, attachment_id) => {
+            let cipher_id = cipher_reads::path_id(cipher_id)?;
+            let cipher_id = cipher_id.as_str();
+            if organization_attachment_write::shared(&store.db, cipher_id)? {
+                return organization_attachment_write::delete(
+                    &mut store,
+                    &owner,
+                    cipher_id,
+                    attachment_id,
+                );
+            }
             VaultService::new(&mut *store).delete_attachment(&owner, cipher_id, attachment_id)?;
             Ok(json_response(
                 json!({"cipher":store.item(&owner, cipher_id, "cipher")?.ok_or_else(missing)?}),

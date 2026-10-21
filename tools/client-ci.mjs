@@ -46,6 +46,7 @@ export const shards = {
     "file-sends", "file-sends-cli",
     "organization-member-public-keys", "organization-member-public-keys-cli",
     "organization-cipher-bulk-sharing", "organization-cipher-bulk-sharing-cli",
+    "organization-attachment-write", "organization-attachment-write-cli",
     "account-kdf-cli",
   ],
 };

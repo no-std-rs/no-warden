@@ -79,3 +79,6 @@ pub mod organization_cipher_lifecycle_cli;
 
 pub mod organization_attachment_read;
 pub mod organization_attachment_read_cli;
+
+pub mod organization_attachment_write;
+pub mod organization_attachment_write_cli;

@@ -61,17 +61,17 @@ const CASES: [(&str, Case); CASE_COUNT] = [
         preservation,
     ),
 ];
-struct Reply {
-    status: u16,
-    bytes: Vec<u8>,
-    media: Option<String>,
-    length: Option<u64>,
-    disposition: bool,
-    started: Instant,
-    completed: Instant,
+pub(crate) struct Reply {
+    pub(crate) status: u16,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) media: Option<String>,
+    pub(crate) length: Option<u64>,
+    pub(crate) disposition: bool,
+    pub(crate) started: Instant,
+    pub(crate) completed: Instant,
 }
 impl Reply {
-    fn expect(&self, expected: u16) -> Result<(), Error> {
+    pub(crate) fn expect(&self, expected: u16) -> Result<(), Error> {
         if self.status != expected {
             eprintln!(
                 "Attachment READ status expected {expected}, actual {}",
@@ -80,7 +80,7 @@ impl Reply {
         }
         require(self.status == expected, "Attachment READ status differed")
     }
-    fn value(&self) -> Result<Value, Error> {
+    pub(crate) fn value(&self) -> Result<Value, Error> {
         serde_json::from_slice(&self.bytes)
             .map_err(|_| Error("Attachment private JSON capture failed"))
     }
@@ -126,14 +126,14 @@ impl Reply {
         }
     }
 }
-struct Http {
-    client: Client,
-    base: String,
-    requests: usize,
-    logins: usize,
+pub(crate) struct Http {
+    pub(crate) client: Client,
+    pub(crate) base: String,
+    pub(crate) requests: usize,
+    pub(crate) logins: usize,
 }
 impl Http {
-    fn raw(
+    pub(crate) fn raw(
         &mut self,
         method: Method,
         path: &str,
@@ -195,7 +195,7 @@ impl Http {
             completed: Instant::now(),
         })
     }
-    fn json(
+    pub(crate) fn json(
         &mut self,
         method: Method,
         path: &str,
@@ -247,10 +247,10 @@ impl Http {
         Ok(text(&v["access_token"])?.to_owned())
     }
 }
-struct Snapshot {
-    views: Vec<Option<Value>>,
-    revisions: Vec<Value>,
-    keys: Vec<Value>,
+pub(crate) struct Snapshot {
+    pub(crate) views: Vec<Option<Value>>,
+    pub(crate) revisions: Vec<Value>,
+    pub(crate) keys: Vec<Value>,
 }
 struct Trial {
     reply: Reply,
@@ -271,29 +271,29 @@ impl Trial {
         self.reply.rejection(status)
     }
 }
-struct File {
-    id: String,
-    bytes: Vec<u8>,
-    name: String,
-    key: String,
+pub(crate) struct File {
+    pub(crate) id: String,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) name: String,
+    pub(crate) key: String,
 }
-struct Suite {
-    http: Http,
-    accounts: Vec<Account>,
-    org: Organization,
-    members: Vec<String>,
-    folders: Vec<String>,
-    key: [u8; 64],
-    cipher: String,
-    file: Option<File>,
-    controls: Vec<Value>,
-    keys: Vec<Value>,
-    folder_controls: Vec<Value>,
-    passed: Vec<&'static str>,
-    receipt: Option<fs::File>,
-    finished: bool,
-    expiry_samples: Vec<Value>,
-    device_bearers: Vec<String>,
+pub(crate) struct Suite {
+    pub(crate) http: Http,
+    pub(crate) accounts: Vec<Account>,
+    pub(crate) org: Organization,
+    pub(crate) members: Vec<String>,
+    pub(crate) folders: Vec<String>,
+    pub(crate) key: [u8; 64],
+    pub(crate) cipher: String,
+    pub(crate) file: Option<File>,
+    pub(crate) controls: Vec<Value>,
+    pub(crate) keys: Vec<Value>,
+    pub(crate) folder_controls: Vec<Value>,
+    pub(crate) passed: Vec<&'static str>,
+    pub(crate) receipt: Option<fs::File>,
+    pub(crate) finished: bool,
+    pub(crate) expiry_samples: Vec<Value>,
+    pub(crate) device_bearers: Vec<String>,
 }
 impl Drop for Suite {
     fn drop(&mut self) {
@@ -309,7 +309,7 @@ impl Suite {
             &json!({"schemaVersion":1,"status":status,"passedCases":self.passed,"cases":self.passed.len(),"expectedCases":CASE_COUNT,"httpRequests":self.http.requests,"expectedHttpRequests":HTTP_REQUEST_COUNT,"fixtureRegistrationHttpRequests":12,"httpRequestsIncludingFixtureRegistration":self.http.requests+12,"fixtureAccounts":6,"directPasswordLogins":self.http.logins,"eachAccountUsesFreshOwnerHttp":true,"existingOwnerHttpLoginBudgetUnchanged":true,"normalDeviceBoundPasswordFixtures":true,"negativeDeviceBindingProbeClaimed":false,"additionalRealDeviceGrantRequests":2,"metadataNonUuidAndEmptyDeviceBearerAsserted":self.passed.len()>=2,"metadataExact7FieldsOpaqueIdentityAsserted":!self.passed.is_empty(),"metadataUuidAuthCaseBodyQueryHeadGuardsAsserted":self.passed.len()>=2,"firstLowercaseTokenAndCapabilityScopeAsserted":self.passed.len()>=3,"exact257EncryptedBytesAbsentContentTypeDispositionAsserted":self.passed.len()>=3,"oldCapabilityAfterRevokeAndNewMetadataDeniedAsserted":self.passed.len()>=4,"realClockCapabilitySamples":self.expiry_samples,"noJwtDecodeOrClockChange":true,"wholeViewsOnlyCapabilityUrlValuesNormalized":true,"allSixAccountRevisionsKeysAndPrivateViewsAsserted":self.finished,"accountKeysPrivateFoldersPersonalControlsAndSessionsPreserved":self.finished,"actualCliExecuted":false,"actualBrowserExecuted":false,"capturedRouteTrace":false,"decodedSecretTraceClaimed":false,"attachmentWriteAuthorityClaimed":false,"setupAttachmentUploadedByDirectHttp":true,"setupPersonalUploadBeforeDirectHttpMove":true,"historicalAssociationTested":false,"configuredPolicies":false,"groupsConfigured":false,"smtpEnabled":false,"rawDatabaseChecked":false,"nativeConcurrencyClaimed":false,"fullParityClaimed":false}),
         )
     }
-    fn token(&self, i: usize) -> String {
+    pub(crate) fn token(&self, i: usize) -> String {
         self.accounts[i].token.clone()
     }
     fn path(&self) -> Result<String, Error> {
@@ -322,7 +322,7 @@ impl Suite {
                 .id
         ))
     }
-    fn stable(&self, v: &Value) -> Result<Value, Error> {
+    pub(crate) fn stable(&self, v: &Value) -> Result<Value, Error> {
         let mut value = v.clone();
         if let Some(rows) = value["attachments"].as_array_mut() {
             for row in rows {
@@ -343,7 +343,7 @@ impl Suite {
         }
         Ok(value)
     }
-    fn snapshot(&mut self) -> Result<Snapshot, Error> {
+    pub(crate) fn snapshot(&mut self) -> Result<Snapshot, Error> {
         let mut views = Vec::new();
         let mut revisions = Vec::new();
         let mut keys = Vec::new();
@@ -412,7 +412,7 @@ impl Suite {
         let url = self.check_metadata(&t.reply)?;
         Ok((t.reply, url))
     }
-    fn check_metadata(&self, r: &Reply) -> Result<Url, Error> {
+    pub(crate) fn check_metadata(&self, r: &Reply) -> Result<Url, Error> {
         r.expect(200)?;
         let v = r.value()?;
         let f = self
@@ -454,7 +454,7 @@ impl Suite {
         )?;
         Ok(url)
     }
-    fn bytes(&self, r: &Reply) -> Result<(), Error> {
+    pub(crate) fn bytes(&self, r: &Reply) -> Result<(), Error> {
         r.expect(200)?;
         let f = self
             .file
@@ -468,7 +468,7 @@ impl Suite {
             "Attachment encrypted bytes or headers differed",
         )
     }
-    fn change_grant(&mut self, read_only: bool, manage: bool) -> Result<(), Error> {
+    pub(crate) fn change_grant(&mut self, read_only: bool, manage: bool) -> Result<(), Error> {
         let body = json!({"name":self.org.body["collectionName"],"users":[{"id":self.members[1],"readOnly":read_only,"hidePasswords":false,"manage":manage},{"id":self.members[2],"readOnly":true,"hidePasswords":false,"manage":false}],"groups":[],"externalId":null});
         self.http.json(
             Method::PUT,
@@ -815,6 +815,17 @@ fn preservation(s: &mut Suite) -> Result<(), Error> {
     Ok(())
 }
 fn setup() -> Result<Suite, Error> {
+    setup_with_options(Some("BW_ORGANIZATION_ATTACHMENT_READ_RECEIPT"), true)
+}
+
+/// Shared opaque setup only; each suite defines its own observations and receipt.
+pub(crate) fn write_fixture() -> Result<Suite, Error> {
+    let mut fixture = setup_with_options(None, false)?;
+    fixture.finished = true;
+    Ok(fixture)
+}
+
+fn setup_with_options(receipt_env: Option<&str>, extra_read_grants: bool) -> Result<Suite, Error> {
     let mut accounts = Vec::new();
     let mut requests = 0;
     let mut logins = 0;
@@ -850,7 +861,7 @@ fn setup() -> Result<Suite, Error> {
         keys: Vec::new(),
         folder_controls: Vec::new(),
         passed: Vec::new(),
-        receipt: receipt_file("BW_ORGANIZATION_ATTACHMENT_READ_RECEIPT")?,
+        receipt: receipt_env.map(receipt_file).transpose()?.flatten(),
         finished: false,
         expiry_samples: Vec::new(),
         device_bearers: Vec::new(),
@@ -1030,7 +1041,10 @@ fn setup() -> Result<Suite, Error> {
     )?;
     // Extra legitimate grants are setup, outside all READ snapshots. Each seed
     // still used its own OwnerHttp and unchanged two-login budget.
-    for identifier in ["read-guard-device-not-uuid", ""] {
+    for identifier in ["read-guard-device-not-uuid", ""]
+        .into_iter()
+        .filter(|_| extra_read_grants)
+    {
         s.device_bearers
             .push(s.http.device_grant(&s.accounts[0], identifier)?);
     }
