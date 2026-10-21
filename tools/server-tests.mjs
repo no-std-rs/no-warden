@@ -931,12 +931,105 @@ await test("standalone bulk transactions preserve opaque JSON and roll back mixe
   }
   const before = await vaultState(token);
   const foreignBefore = await vaultState(otherToken);
-  for (const action of [...bulkActions, ...archiveActions]) {
+  for (const action of bulkActions) {
     for (const invalid of [foreign.id, randomUUID()]) {
       for (const ids of [[own.id, invalid], [invalid, own.id]]) {
         assert.equal((await request(action.path, { method: action.method, token, body: { ids } })).status, 400);
         unchanged(await vaultState(token), before, "A rejected local bulk transaction must leave every owned cipher and revision unchanged");
         unchanged(await vaultState(otherToken), foreignBefore, "A rejected local bulk transaction must preserve foreign data");
+      }
+    }
+  }
+});
+
+await test("selected archive errors retain only eligible actor archive steps (local provider guarantee)", async () => {
+  const owner = await account("Selected archive owner");
+  const other = await account("Selected archive foreign owner");
+  const token = owner.token.access_token;
+  const otherToken = other.token.access_token;
+  const folder = ok(await request("/api/folders", {
+    method: "POST", token, body: { name: owner.registration.key },
+  }), "selected archive private folder");
+  const foreignFolder = ok(await request("/api/folders", {
+    method: "POST", token: otherToken, body: { name: other.registration.key },
+  }), "selected archive foreign folder");
+  const foreign = await lifecycleFixture(other, { folderId: foreignFolder.id, favorite: true });
+  await lifecycleFixture(owner, { folderId: folder.id, favorite: false });
+  const protectedAccount = async bearer => {
+    const profile = ok(await request("/api/accounts/profile", { token: bearer }), "selected archive profile");
+    delete profile.revisionDate;
+    return { profile, keys: ok(await request("/api/accounts/keys", { token: bearer }), "selected archive keys") };
+  };
+  const foreignBefore = await vaultState(otherToken);
+  const foreignAccount = await protectedAccount(otherToken);
+  const ownerAccount = await protectedAccount(token);
+  const extension = { future: [null, { opaque: "quoted \" café 🔐" }], sealed: owner.registration.key };
+  for (const action of archiveActions) {
+    for (const priorArchived of [false, true]) {
+      for (const foreignTarget of [false, true]) {
+        for (const reverse of [false, true]) {
+          // Fresh source per trial: no rejected operation's partial effects become
+          // another trial's assumed baseline. Request order is not process order.
+          const own = await lifecycleFixture(owner, {
+            folderId: folder.id, favorite: true, key: owner.registration.key,
+            futureProtocolExtension: extension,
+          });
+          unchanged(own.futureProtocolExtension, extension, "The fixture must preserve its unknown opaque JSON before archive operations");
+          if (priorArchived) {
+            lifecycleList(await request("/api/ciphers/archive", {
+              method: "PUT", token, body: { ids: [own.id] },
+            }), [own.id], "selected archive prior state");
+          }
+          const invalid = foreignTarget ? foreign.id : randomUUID();
+          assert.equal((await request(`/api/ciphers/${invalid}`, { token })).status, 400,
+            "The invalid selection must remain unreadable to the acting account");
+          const before = await vaultState(token);
+          const prior = before.ciphers.find(item => item.id === own.id);
+          assert(prior, "The eligible source must exist before the request");
+          const priorDate = prior.archivedDate ?? null;
+          assert.equal(typeof priorDate === "string", priorArchived);
+          await delay(5);
+          const ids = reverse ? [invalid, own.id] : [own.id, invalid];
+          assert.equal((await request(action.path, { method: action.method, token, body: { ids } })).status, 400);
+          const after = await vaultState(token);
+          const current = after.ciphers.find(item => item.id === own.id);
+          assert(current, "A rejected archive selection must never delete its eligible source");
+          const currentDate = current.archivedDate ?? null;
+          const changedDate = currentDate !== priorDate;
+          const advanced = after.revision !== before.revision;
+          assert(Number.isSafeInteger(before.revision) && Number.isSafeInteger(after.revision) && after.revision >= before.revision,
+            "A rejected archive selection must never regress the acting revision");
+          if (action.kind === "archive") {
+            assert(currentDate === priorDate || typeof currentDate === "string",
+              "An eligible Archive step may only retain or set its private archive date");
+            if (advanced) {
+              assert(changedDate && typeof currentDate === "string" && Number.isFinite(Date.parse(currentDate)),
+                "A completed Archive step must set a fresh selected archive date");
+              if (priorDate !== null) assert(Date.parse(currentDate) > Date.parse(priorDate),
+                "A completed Archive step must refresh its previous archive date");
+            }
+          } else {
+            assert(currentDate === priorDate || currentDate === null,
+              "An eligible Unarchive step may only retain or clear its private archive date");
+            if (advanced && !changedDate) assert.equal(priorDate, null,
+              "Only an already-unarchived eligible no-op may advance without a date change");
+          }
+          if (changedDate) assert(advanced, "A durable eligible archive change must advance the actor revision");
+          if (!advanced) assert.equal(currentDate, priorDate, "An uncommitted eligible step must preserve its archive date");
+          unchanged(after, {
+            ...before, revision: after.revision,
+            ciphers: before.ciphers.map(item => item.id === own.id ? { ...item, archivedDate: current.archivedDate } : item),
+          }, "Only the selected actor archive date and account revision may change after a mixed archive error");
+          const fetched = ok(await request(`/api/ciphers/${own.id}`, { token }), "selected archive opaque GET");
+          unchanged(fetched, current, "GET and sync must agree on every selected cipher field");
+          unchanged(fetched.futureProtocolExtension, prior.futureProtocolExtension, "Selected archive errors must preserve unknown opaque JSON");
+          assert.equal(fetched.revisionDate, prior.revisionDate, "Archive steps must preserve the source cipher revision");
+          assert.equal((await request(`/api/ciphers/${invalid}`, { token })).status, 400,
+            "The invalid target must remain unreadable after a partial eligible step");
+          unchanged(await protectedAccount(token), ownerAccount, "Archive errors must preserve account keys and nonrevision profile data");
+          unchanged(await vaultState(otherToken), foreignBefore, "Archive errors must preserve the entire foreign vault and revision");
+          unchanged(await protectedAccount(otherToken), foreignAccount, "Archive errors must preserve the foreign account and keys");
+        }
       }
     }
   }
