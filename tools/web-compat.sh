@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Disposable Linux x64 browser comparison. See tools/web-compat/README.md.
 set -euo pipefail
+web_ci_organization_sharing=false
+case "$#:${1:-}" in
+  0:) ;;
+  1:--organization-sharing) web_ci_organization_sharing=true ;;
+  *) printf 'Usage: tools/web-compat.sh [--organization-sharing]\n' >&2; exit 2 ;;
+esac
 web_ci_root=$(mktemp -d "${RUNNER_TEMP:-/tmp}/no-warden-web-compat-XXXXXX")
 web_ci_container="no-warden-web-${GITHUB_RUN_ID:-local}-$$"
 web_ci_server_pid=""
@@ -138,3 +144,11 @@ FONTCONFIG_FILE="$web_ci_root/fonts.conf" \
 BW_WEB_CHROMIUM="$web_ci_root/browser/chrome-linux64/chrome" \
 BW_WEB_VAULT_MODE=both node tools/web-compat.mjs
 # Server logs, browser traces, screenshots and raw network artifacts stay private.
+
+# This explicit extension always follows the existing mandatory personal-vault
+# checks. Both servers use the same strict organization-sharing browser flow.
+if [[ "$web_ci_organization_sharing" == true ]]; then
+  FONTCONFIG_FILE="$web_ci_root/fonts.conf" \
+  BW_WEB_CHROMIUM="$web_ci_root/browser/chrome-linux64/chrome" \
+  BW_WEB_ORG_MODE=paired node tools/web-org-sharing.mjs
+fi
