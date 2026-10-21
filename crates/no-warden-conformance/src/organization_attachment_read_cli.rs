@@ -25,9 +25,10 @@ use std::{
 };
 use tempfile::{NamedTempFile, TempDir};
 
-// Deliberate development sentinels: freeze only after actual native execution.
-pub const COMMAND_COUNT: usize = 0;
-pub const DIRECT_HTTP_REQUEST_COUNT: usize = 0;
+// Measured with the pinned native server and unmodified CLI: 32 commands,
+// 101 direct requests, excluding four fixture-registration requests.
+pub const COMMAND_COUNT: usize = 32;
+pub const DIRECT_HTTP_REQUEST_COUNT: usize = 101;
 const DEVELOPMENT_COMMAND_LIMIT: usize = 64;
 const CLI_SHA256: &str = "7cad23262b9ca168f22c12d7cdf64ef168e57d49784377c2b8cd02707759e4d7";
 const MAX_FILE: u64 = 4 * 1024 * 1024;
