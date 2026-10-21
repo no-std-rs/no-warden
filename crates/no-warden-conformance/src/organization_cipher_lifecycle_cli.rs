@@ -22,9 +22,9 @@ use std::{
 };
 use tempfile::TempDir;
 
-pub const COMMAND_COUNT: usize = 0;
-// Measured after native development; registration HTTP is separate.
-pub const DIRECT_HTTP_REQUEST_COUNT: usize = 0;
+pub const COMMAND_COUNT: usize = 63;
+// Measured native63-command flow; excludes four registration requests.
+pub const DIRECT_HTTP_REQUEST_COUNT: usize = 101;
 struct Cli {
     binary: PathBuf,
     environment: BTreeMap<OsString, OsString>,
