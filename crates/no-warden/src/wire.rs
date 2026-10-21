@@ -1845,6 +1845,30 @@ impl<const N: usize> crate::organization_cipher_sharing::CipherShareIdsData
     }
 }
 
+/// Minimal private annotations, ordered as the measured [folderId, favorite]
+/// tuple. Favorite is required; omitted/null folder is allowed. Only camelCase
+/// names are modeled: uppercase folder aliases were not isolated by native probes.
+/// Unknown encrypted/ownership fields are ignored, never serialized as a cipher.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CipherPartialRequest<'a> {
+    pub folder_id: Option<&'a str>,
+    pub favorite: bool,
+}
+impl CipherPartialRequest<'_> {
+    pub const fn view(&self) -> crate::organization_cipher_partial::CipherPartialView<'_> {
+        crate::organization_cipher_partial::CipherPartialView {
+            folder_id: self.folder_id,
+            favorite: self.favorite,
+        }
+    }
+}
+impl core::fmt::Debug for CipherPartialRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("CipherPartialRequest([REDACTED])")
+    }
+}
+
 /// Minimal borrowed bulk decision fields. Unknown opaque cipher fields remain in
 /// the adapter's original document; do not serialize this view as a full cipher.
 #[derive(Clone, Deserialize)]
