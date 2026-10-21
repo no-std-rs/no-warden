@@ -15,8 +15,8 @@ use std::{collections::BTreeSet, fs, io::Read};
 use uuid::Uuid;
 
 pub const CASE_COUNT: usize = 6;
-// Development count; fixed from actual native execution before final proofs.
-pub const HTTP_REQUEST_COUNT: usize = 0;
+// Measured actual native six-case flow; excludes four registration requests.
+pub const HTTP_REQUEST_COUNT: usize = 1115;
 const NOTE: &str = "Archive retains encrypted note Ω\0";
 type Case = fn(&mut Suite) -> Result<(), Error>;
 const CASES: [(&str, Case); CASE_COUNT] = [
@@ -165,6 +165,7 @@ impl Http {
             .client
             .put(format!("{}{path}", self.owner.server))
             .bearer_auth(token)
+            .header("Accept", "application/json")
             .header("Content-Type", "application/json")
             .body(body.to_owned())
             .send()
