@@ -1003,7 +1003,7 @@
 "crates/no-warden-server/src/account_security.rs": "581a7061d1eed3ccdc594a2b2a35b7d27117eb0a874e061a36210368e50a77ea",
 "crates/no-warden-server/src/attachments.rs": "2dadea975f428de9b600fd93d22fb2115a84d003a8642de73007ba05224b9d44",
 "crates/no-warden-server/src/auth_requests.rs": "867a5b3ff590086848780c1b5d76f177f28dc44ebf3065ddd7f1ec7417a6b1f9",
-"crates/no-warden-server/src/cipher_ownership.rs": "2434d7d15c90784e3d4d888d0cc8c6743a13d0a71e0936977f08363fbb465930",
+"crates/no-warden-server/src/cipher_ownership.rs": "41fdc1624bf1c142aa422d7f9cd50562ce5d09c4ba774eb176399ca599d6a885",
 "crates/no-warden-server/src/cipher_reads.rs": "423b7a38395c189f2cc66d6c1b092465998a64ae45a99c9b0ab604adba953d4d",
 "crates/no-warden-server/src/devices.rs": "55fb21137f36d613f0af563b49ae44c0c1dd0c3f7cf22b2af67371ee7c2d322a",
 "crates/no-warden-server/src/domains.rs": "18ace3b3f890ca6e18bd05f227e58791e6203bda6283f00ae262464e0c84e1fe",
