@@ -18,6 +18,7 @@ mod organization_bulk_member_status;
 mod organization_cipher_archive;
 mod organization_cipher_bulk_sharing;
 mod organization_cipher_collections;
+mod organization_cipher_lifecycle;
 mod organization_cipher_partial;
 mod organization_cipher_sharing;
 mod organization_collections;
@@ -392,11 +393,16 @@ async fn dispatch_http(
                 | Route::CipherBulkUnarchive
         )
     );
+    let lifecycle = matches!(
+        classified,
+        Some(Route::CipherSoftDelete(_) | Route::CipherRestore(_) | Route::CipherDelete(_))
+    );
     match dispatch_with_peer(app, method, uri, headers, body, peer.ip()).await {
         Err(error) if bulk => Ok(organization_cipher_bulk_sharing::render_error(error)),
         Err(error) if collections => Ok(organization_cipher_collections::render_error(error)),
         Err(error) if partial => Ok(organization_cipher_partial::render_error(error)),
         Err(error) if archive => Ok(organization_cipher_archive::render_error(error)),
+        Err(error) if lifecycle => Ok(organization_cipher_lifecycle::render_error(error)),
         result => result,
     }
 }
@@ -437,6 +443,10 @@ async fn dispatch_with_peer(
     let route = route::classify(method, uri.path())
         .or_else(|| invalid_purge_id.then_some(Route::CipherGet("purge")))
         .ok_or_else(missing)?;
+    // The pinned executable rejects POST restore, despite the older route inventory.
+    if method == route::Method::Post && matches!(route, Route::CipherRestore(_)) {
+        return Err(missing());
+    }
     if let Route::FolderGet(id) | Route::FolderUpdate(id) | Route::FolderDelete(id) = route {
         // Upstream's FromParam validates UUID syntax but keeps its original
         // spelling. In particular, an upper-case UUID must not alias another ID.
@@ -1529,20 +1539,10 @@ async fn dispatch_with_peer(
                 store.item(&owner, &id, "cipher")?.ok_or_else(missing)?,
             ))
         }
-        Route::CipherSoftDelete(id) | Route::CipherRestore(id) | Route::CipherDelete(id) => {
-            let mut service = VaultService::new(&mut *store);
-            match route {
-                Route::CipherSoftDelete(_) => service.soft_delete_cipher(&owner, id)?,
-                Route::CipherRestore(_) => service.restore_cipher(&owner, id)?,
-                _ => service.delete_cipher(&owner, id)?,
-            }
-            if matches!(route, Route::CipherRestore(_)) {
-                Ok(json_response(
-                    store.item(&owner, id, "cipher")?.ok_or_else(missing)?,
-                ))
-            } else {
-                Ok(StatusCode::OK.into_response())
-            }
+        Route::CipherSoftDelete(_) | Route::CipherRestore(_) | Route::CipherDelete(_) => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            organization_cipher_lifecycle::dispatch(route, &owner, &mut store)
         }
         _ => Err(missing()),
     }

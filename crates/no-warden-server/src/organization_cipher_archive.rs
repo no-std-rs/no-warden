@@ -123,7 +123,7 @@ pub fn dispatch(
     }
 }
 
-fn project(db: &Connection, actor: &str, id: &str) -> Result<Value, Failure> {
+pub(crate) fn project(db: &Connection, actor: &str, id: &str) -> Result<Value, Failure> {
     let mut value = sharing::project(db, actor, id, true)?.ok_or(rusqlite::Error::InvalidQuery)?;
     // The measured response has these known 30 fields; unknown nested encrypted
     // extensions and the entire stored document remain intact.
@@ -186,7 +186,7 @@ fn material(db: &Connection, actor: &str, cipher: &str) -> rusqlite::Result<Opti
         .checked_add(bytes)
         .filter(|total| *total <= MAX_MATERIAL))
 }
-fn preflight(db: &Connection, actor: &str, ids: &[&str]) -> Result<(), Failure> {
+pub(crate) fn preflight(db: &Connection, actor: &str, ids: &[&str]) -> Result<(), Failure> {
     let mut bytes = 0usize;
     for id in ids {
         bytes = bytes
@@ -213,7 +213,7 @@ impl CipherCollectionAccessData for Access {
             })
     }
 }
-fn facts(
+pub(crate) fn facts(
     db: &Connection,
     actor: &str,
     source: &CipherSharingSource<String>,
@@ -228,7 +228,7 @@ fn facts(
         },
     })
 }
-fn readers(
+pub(crate) fn readers(
     db: &Connection,
     actor: &str,
     source: &CipherSharingSource<String>,
