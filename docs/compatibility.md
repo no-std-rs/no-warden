@@ -1614,3 +1614,7 @@ The [pinned route declaration](https://github.com/dani-garcia/vaultwarden/blob/5
 
 
 Both actual targets pass six HTTP cases/522 requests and a separate actual CLI 2026.10.0 28-command/25-directHTTP comparison. Owner and writable recipient mutate item collections and recover the same decrypted note after sync/fresh caches. Protected old links, nonnull lost-read response, unchanged cipher revision/private annotations, and bounded unordered partial failures are covered. No formal trace/browser, legacy/admin alias, groups/policy/attachment or full-parity claim. See [API notes](api-parity.md#organization-cipher-collection-reassignment) for exact limits and host-only resource policies.
+
+## Private cipher annotations
+
+Both actual targets pass six HTTP cases/605 requests plus 4 registrations and a separate actual CLI observer 31/37 fixture HTTP plus 4 registrations. Private favorite/folder and actor revision, readonly/historical read admission, no-op actor revision, unchanged encrypted common/cipher revision/other-account state and fresh owner/recipient note/folder decryption are covered. Direct HTTP performs mutations; no production CLI partial caller, captured trace, native-only-to-local browser inference or full-parity claim. Separate strict paired pinned-web evidence covers readonly Favorite then private-folder Save via two PUT partial calls and three fresh contexts; POST browser and general web parity remain unclaimed. See [API limits](api-parity.md#private-cipher-annotations).
