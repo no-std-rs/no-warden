@@ -1,7 +1,7 @@
 {
 "schema_version": 1,
 "repository": "no-std-rs/no-warden",
-"snapshot_commit": "ae1ce447c524f5c4cee6d1ef9b75c12fa2b68a5d",
+"snapshot_commit": "9ec00d7c2e7828eeb475942a9d62df3b0d55e9fb",
 "audit_kind": "Default no-SMTP organization invitations and same-ID placeholder completion: one additional partial POST uses an opt-in allocation-free provider and ordered per-email commits. All six focused HTTP cases and the separate twenty-four-command official CLI comparison pass both actual targets. Existing modern registration initializes passwordless accounts and accepts their pending memberships without confirmation. No CLI invitation/registration caller, confirmation success, sharing, full-parity or captured-trace claim.",
 "coverage_semantics": {
 "routed": "Classifier recognizes a method/path shape. This alone is not a semantic implementation, especially reserved names shadowed by {id}.",
@@ -1128,7 +1128,7 @@
 "tools/check-api-coverage.mjs": "5c2cec90d4777721c9061dfed3003afe4a50710108fe13f54897b5d0ec6df3f5",
 "tools/check-cli-inventory.mjs": "ee9101b057e862acffca44accc23295ea4ed95e6119e8f0c4b85e8d78834a031",
 "tools/cli-inventory.test.mjs": "6282eb84ca5a5989c029c2b0902fb3b6eb0c79a300e27198e151a07330ffbb1e",
-"tools/client-ci.mjs": "aa42cea7d7ea34b33b5794b01ffee1244ffcf89d4848bc5a34b06523e9331666",
+"tools/client-ci.mjs": "e5a2db55bae8df6c6125850b9b78a88e66959a2b0df7cd077d9781868d16e06b",
 "tools/client-ci.test.mjs": "60f1b873188807e92beee695eeb2d162ff4a2ad175c13439e3ae393e6b90743a",
 "tools/discover-cli-requests.mjs": "db38517b99011051c706b63c8c28e662a3df63472b4c321c0febfe43d9097b4f",
 "tools/e2e.sh": "8e0eb31460366b847613fead2565c2542435182ffba65e797d48f4ffed393619",
