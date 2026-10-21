@@ -23,9 +23,9 @@ use std::{
 };
 use tempfile::TempDir;
 
-pub const COMMAND_COUNT: usize = 0;
-// Set after successful native development; registration HTTP is separate.
-pub const DIRECT_HTTP_REQUEST_COUNT: usize = 0;
+pub const COMMAND_COUNT: usize = 47;
+// Measured native development; registration HTTP is separate.
+pub const DIRECT_HTTP_REQUEST_COUNT: usize = 62;
 struct Cli {
     binary: PathBuf,
     environment: BTreeMap<OsString, OsString>,

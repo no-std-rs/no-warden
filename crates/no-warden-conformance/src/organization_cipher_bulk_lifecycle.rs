@@ -956,7 +956,11 @@ fn setup() -> Result<Suite, Error> {
     let mut http = Http::new()?;
     let mut accounts = Vec::new();
     for _ in 0..6 {
-        accounts.push(organization_owner::seed(&mut http.owner)?);
+        // Preserve the reused helper's two-account guard for its own suite.
+        let mut single = OwnerHttp::new()?;
+        accounts.push(organization_owner::seed(&mut single)?);
+        http.owner.requests += single.requests;
+        http.owner.logins += single.logins;
     }
     let mut orgs = Vec::new();
     for _ in 0..4 {
