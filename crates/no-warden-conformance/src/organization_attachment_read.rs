@@ -21,9 +21,9 @@ use std::{
 use uuid::Uuid;
 
 pub const CASE_COUNT: usize = 6;
-// Development placeholder: freeze from actual native execution before paired proof.
+// Measured on the pinned native six-case READ suite; eight legitimate grants.
 // Excludes12 modern registration calls performed by the fixture helper.
-pub const HTTP_REQUEST_COUNT: usize = 0;
+pub const HTTP_REQUEST_COUNT: usize = 2168;
 const NOTE: &str = "Attachment read preserves opaque secure note Ω\0";
 const FILE_NAME: &str = "Opaque attachment \"quoted\" café 🔐.bin";
 const LABELS: [&str; 6] = [

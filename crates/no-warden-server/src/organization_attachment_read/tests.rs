@@ -660,6 +660,29 @@ async fn scoped_socket_head_preserves_get_lengths_auth_uuid_guards_and_native_er
         table(&app.store.lock().unwrap().db, "attachment_downloads") == caps,
         "Auth/path guards minted capability"
     );
+    // Exercise the real URI classifier/auth/error dispatcher, not metadata()
+    // directly: native compact/braced/URN source spellings are business400,
+    // rather than aliases or a classifier404. URL construction represents the
+    // braced form exactly as the portable reqwest client sends it on the wire.
+    for alternate in [
+        cipher.replace('-', ""),
+        format!("{{{cipher}}}"),
+        format!("urn:uuid:{cipher}"),
+    ] {
+        let url =
+            url::Url::parse(&format!("{BASE}/api/ciphers/{alternate}/attachment/{FILE}")).unwrap();
+        error_fields(
+            socket(&app, Method::GET, url.path(), auth.clone(), b"\xff\0").await,
+            StatusCode::BAD_REQUEST,
+            9,
+        )
+        .await;
+        assert!(
+            protected(&app.store.lock().unwrap()) == before
+                && table(&app.store.lock().unwrap().db, "attachment_downloads") == caps,
+            "Alternate source spelling changed protected SQL state or minted capability"
+        );
+    }
     let get = socket(&app, Method::GET, &path, auth.clone(), b"\xff\0").await;
     assert_eq!(get.status(), StatusCode::OK);
     assert_eq!(

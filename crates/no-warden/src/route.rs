@@ -448,6 +448,16 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                         _ => {}
                     }
                 }
+                // Metadata authenticates and applies the adapter's decoded UUID
+                // guard. Preserve the raw source spelling, including braced/URN
+                // forms, without broadening attachment write/file-ID routes.
+                if method == Get && !id.is_empty() {
+                    if let Some(attachment) = action.strip_prefix("attachment/") {
+                        if attachment != "v2" && valid_segment(attachment) {
+                            return Some(AttachmentGet(id, attachment));
+                        }
+                    }
+                }
                 if !valid_segment(id) {
                     return None;
                 }
@@ -1782,6 +1792,37 @@ mod tests {
             assert_eq!(classify(Get, path), None);
             assert_eq!(classify(Post, path), None);
         }
+    }
+    #[test]
+    fn attachment_metadata_get_defers_raw_source_uuid_guard_without_changing_writes_or_file_ids() {
+        for source in [
+            "11111111-2222-4333-8444-555555555555",
+            "11111111222243338444555555555555",
+            "{11111111-2222-4333-8444-555555555555}",
+            "%7B11111111-2222-4333-8444-555555555555%7D",
+            "urn:uuid:11111111-2222-4333-8444-555555555555",
+        ] {
+            let path = std::format!("/api/ciphers/{source}/attachment/file");
+            let expected = Route::AttachmentGet(source, "file");
+            assert_eq!(classify(Method::Get, &path), Some(expected));
+            assert!(expected.requires_authentication());
+        }
+        for source in ["%7Bsource%7D", "urn:uuid:source"] {
+            let path = std::format!("/api/ciphers/{source}/attachment/file");
+            for method in [Method::Post, Method::Put, Method::Delete, Method::Options] {
+                assert_eq!(classify(method, &path), None);
+            }
+            for file in ["", "v2", "a%2fb", "file/admin", "file/delete", "file/extra"] {
+                let path = std::format!("/api/ciphers/{source}/attachment/{file}");
+                assert_eq!(classify(Method::Get, &path), None);
+            }
+        }
+        assert_eq!(classify(Method::Get, "/api/ciphers//attachment/file"), None);
+        // Capability decoding and unmeasured file spellings retain their guards.
+        assert_eq!(
+            classify(Method::Get, "/attachments/%7Bsource%7D/file"),
+            None
+        );
     }
     #[test]
     fn api_key_management_is_authenticated_and_post_only() {

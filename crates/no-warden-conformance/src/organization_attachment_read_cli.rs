@@ -61,6 +61,9 @@ struct Cli {
     owner_fresh_completed: bool,
     recipient_fresh_completed: bool,
     read_state_preserved: bool,
+    login_setup_observations: Vec<Value>,
+    login_setup_protected_state_passed: bool,
+    sdk_key_id_migrations_observed: usize,
 }
 impl Drop for Cli {
     fn drop(&mut self) {
@@ -71,9 +74,7 @@ impl Drop for Cli {
 }
 impl Cli {
     fn receipt(&mut self, status: &str) -> Result<(), Error> {
-        write_receipt(
-            &mut self.receipt,
-            &json!({
+        let mut receipt = json!({
                 "schemaVersion":1,"status":status,"commands":self.commands,
                 "expectedCommands":COMMAND_COUNT,"successfulCommands":self.successful_commands,
                 "cliVersion":"2026.10.0","cliBundleSha256":CLI_SHA256,
@@ -98,8 +99,18 @@ impl Cli {
                 "legacyMissingKeyAttachmentTested":false,"archiveOrTrashBearingSourceTested":false,
                 "groupsConfigured":false,"configuredPolicies":false,"smtpEnabled":false,
                 "fullParityClaimed":false,"separateFromBaseline120":true
-            }),
-        )
+        });
+        receipt["loginSetupProtectedStatePassed"] = json!(self.login_setup_protected_state_passed);
+        receipt["actualSdkKeyIdMigrationObserved"] = json!(self.sdk_key_id_migrations_observed > 0);
+        receipt["sdkKeyIdMigrationObservations"] = json!(self.sdk_key_id_migrations_observed);
+        receipt["loginSetupObservations"] = json!(self.login_setup_observations);
+        receipt["freshCacheLoginsPrecedeStrictReadBaseline"] =
+            json!(self.login_setup_protected_state_passed);
+        receipt["sdkKeyIdMigrationAttribution"] =
+            json!("pinned-source-and-login-key-id-transition");
+        receipt["sdkKeyIdBackfillRouteCaptured"] = json!(false);
+        receipt["readPhaseUserKeyIdsUnchanged"] = json!(self.read_state_preserved);
+        write_receipt(&mut self.receipt, &receipt)
     }
     fn command(
         &mut self,
@@ -616,6 +627,86 @@ fn snapshot(
     Ok(json!(views))
 }
 
+fn user_key_id(http: &mut Http, actor: &Account) -> Result<Value, Error> {
+    let sync = http.json(Method::GET, "/api/sync", &actor.token, None)?;
+    sync.get("userDecryption")
+        .and_then(|value| value.get("userKeyId"))
+        .cloned()
+        .ok_or(Error("Attachment CLI sync user key ID field missing"))
+}
+
+fn sdk_key_id(value: &Value) -> bool {
+    value.as_str().is_some_and(|value| {
+        value.len() == 32
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+// The pinned client migration delegates to SDK user_key_id_backfill, which posts only the
+// 32-lowercase-hex identifier of its existing UserKey. This exception is confined to actual
+// fresh-cache authentication setup; the following attachment READ phase permits no changes.
+fn login_setup_observation(
+    before: &Value,
+    after: &Value,
+    actor_index: usize,
+    key_id_before: &Value,
+    key_id_after: &Value,
+) -> Value {
+    let fields = ["cipher", "revision", "keys", "folder", "control"];
+    let shape_valid = actor_index < 2
+        && [before, after].into_iter().all(|snapshot| {
+            snapshot.as_array().is_some_and(|views| {
+                views.len() == 2
+                    && views.iter().all(|view| {
+                        view.as_object().is_some_and(|object| {
+                            object.len() == fields.len()
+                                && fields.iter().all(|field| object.contains_key(*field))
+                        })
+                    })
+            })
+        });
+    let preserved = |field: &str| {
+        shape_valid && (0..2).all(|index| before[index][field] == after[index][field])
+    };
+    let cipher_preserved = preserved("cipher");
+    let keys_preserved = preserved("keys");
+    let folders_preserved = preserved("folder");
+    let controls_preserved = preserved("control");
+    let protected_state_preserved =
+        cipher_preserved && keys_preserved && folders_preserved && controls_preserved;
+    let peer_revision_preserved =
+        shape_valid && before[1 - actor_index]["revision"] == after[1 - actor_index]["revision"];
+    let actor_revision_changed =
+        shape_valid && before[actor_index]["revision"] != after[actor_index]["revision"];
+    let migration = key_id_before.is_null() && sdk_key_id(key_id_after);
+    let unchanged =
+        key_id_before == key_id_after && (key_id_before.is_null() || sdk_key_id(key_id_before));
+    let transition = if migration {
+        "null-to-sdk-id"
+    } else if unchanged && key_id_before.is_null() {
+        "unchanged-null"
+    } else if unchanged {
+        "unchanged-existing"
+    } else {
+        "rejected-transition"
+    };
+    json!({
+        "snapshotShapeValid":shape_valid,
+        "commonAndPrivateCipherPreserved":cipher_preserved,
+        "keysPreserved":keys_preserved,
+        "foldersPreserved":folders_preserved,
+        "personalControlsPreserved":controls_preserved,
+        "otherAccountRevisionPreserved":peer_revision_preserved,
+        "actorAccountRevisionChanged":actor_revision_changed,
+        "keyIdTransition":transition,
+        "sdkKeyIdMigrationObserved":migration,
+        "passed":shape_valid && protected_state_preserved && peer_revision_preserved
+            && (migration || unchanged) && (!actor_revision_changed || migration)
+    })
+}
+
 pub fn run() -> Result<(), Error> {
     let work = private_dir("no-warden-attachment-read-cli-")?;
     let creator = subdir(work.path(), "creator")?;
@@ -708,6 +799,9 @@ pub fn run() -> Result<(), Error> {
         owner_fresh_completed: false,
         recipient_fresh_completed: false,
         read_state_preserved: false,
+        login_setup_observations: Vec::new(),
+        login_setup_protected_state_passed: false,
+        sdk_key_id_migrations_observed: 0,
     };
     c.receipt("running")?;
     require(
@@ -837,20 +931,7 @@ pub fn run() -> Result<(), Error> {
             && recipient_live["permissions"]["restore"] == false,
         "Attachment CLI ordinary readonly source flags differed",
     )?;
-    let before = snapshot(
-        &mut http,
-        &owner,
-        &recipient,
-        &id,
-        [&owner_folder, &recipient_folder],
-    )?;
-    require(
-        before[0]["cipher"]["archivedDate"].is_null()
-            && before[1]["cipher"]["archivedDate"].is_null(),
-        "Attachment CLI fixture unexpectedly archived",
-    )?;
-    let mut fresh_sessions = Vec::new();
-    for (actor, cache, folder, other_folder, name, favorite, password_env, label) in [
+    let readers = [
         (
             &owner,
             &owner_fresh,
@@ -871,27 +952,88 @@ pub fn run() -> Result<(), Error> {
             "BW_ATTACHMENT_RECIPIENT_PASSWORD",
             "recipient-fresh",
         ),
-    ] {
+    ];
+    let mut fresh_sessions = Vec::new();
+    for (actor_index, (actor, cache, _, _, _, _, password_env, label)) in readers.iter().enumerate()
+    {
+        let before_login = snapshot(
+            &mut http,
+            &owner,
+            &recipient,
+            &id,
+            [&owner_folder, &recipient_folder],
+        )?;
+        let key_before = user_key_id(&mut http, actor)?;
         let session = c.login(actor, cache, &server, password_env)?;
-        let value = c.json(&["get", "item", &id], cache, &session, None)?;
+        let key_after = user_key_id(&mut http, actor)?;
+        let after_login = snapshot(
+            &mut http,
+            &owner,
+            &recipient,
+            &id,
+            [&owner_folder, &recipient_folder],
+        )?;
+        let mut observation = login_setup_observation(
+            &before_login,
+            &after_login,
+            actor_index,
+            &key_before,
+            &key_after,
+        );
+        observation["actor"] = json!(label);
+        // This object contains only static labels, booleans and transition categories.
+        // Neither snapshot values nor the key identifier enter diagnostics or receipts.
+        eprintln!("Attachment CLI login setup observation: {observation}");
+        let passed = observation["passed"] == true;
+        if passed && observation["sdkKeyIdMigrationObserved"] == true {
+            c.sdk_key_id_migrations_observed += 1;
+        }
+        c.login_setup_observations.push(observation);
+        c.receipt("running")?;
+        require(
+            passed,
+            "Attachment CLI login setup changed protected state or an unqualified revision",
+        )?;
+        fresh_sessions.push((*cache, session));
+    }
+    c.login_setup_protected_state_passed = true;
+    let before = snapshot(
+        &mut http,
+        &owner,
+        &recipient,
+        &id,
+        [&owner_folder, &recipient_folder],
+    )?;
+    let read_key_ids_before = [
+        user_key_id(&mut http, &owner)?,
+        user_key_id(&mut http, &recipient)?,
+    ];
+    require(
+        before[0]["cipher"]["archivedDate"].is_null()
+            && before[1]["cipher"]["archivedDate"].is_null(),
+        "Attachment CLI fixture unexpectedly archived",
+    )?;
+    for ((_, cache, folder, other_folder, name, favorite, _, label), (_, session)) in
+        readers.into_iter().zip(&fresh_sessions)
+    {
+        let value = c.json(&["get", "item", &id], cache, session, None)?;
         check_note(&value, &id, Some(&org), folder, favorite, &files)?;
         for file in &files {
             c.download(
                 cache,
-                &session,
+                session,
                 &id,
                 file,
                 &output.join(format!("{label}-{}", file.label)),
             )?;
         }
-        let folders = c.json(&["list", "folders"], cache, &session, None)?;
+        let folders = c.json(&["list", "folders"], cache, session, None)?;
         plain_folder(&folders, folder, other_folder, name)?;
         if favorite {
             c.owner_fresh_completed = true;
         } else {
             c.recipient_fresh_completed = true;
         }
-        fresh_sessions.push((cache, session));
     }
     require(
         snapshot(
@@ -902,6 +1044,13 @@ pub fn run() -> Result<(), Error> {
             [&owner_folder, &recipient_folder],
         )? == before,
         "Attachment CLI READ changed common private source revision account revision keys folders or controls",
+    )?;
+    require(
+        [
+            user_key_id(&mut http, &owner)?,
+            user_key_id(&mut http, &recipient)?,
+        ] == read_key_ids_before,
+        "Attachment CLI READ changed a user key identifier",
     )?;
     require(
         read_cipher(&mut http, &owner, &owner.cipher_id)? == owner_control
@@ -939,6 +1088,96 @@ pub fn run() -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn setup_snapshot() -> Value {
+        json!([
+            {"cipher":{"private":"owner"},"revision":1,"keys":{"retained":true},"folder":{"own":true},"control":{"personal":true}},
+            {"cipher":{"private":"recipient"},"revision":2,"keys":{"retained":true},"folder":{"own":true},"control":{"personal":true}}
+        ])
+    }
+
+    #[test]
+    fn login_setup_allows_only_actor_revision_with_observed_sdk_id_initialization() {
+        let before = setup_snapshot();
+        let sdk_id = json!("0123456789abcdef0123456789abcdef");
+        for actor in 0..2 {
+            let mut after = before.clone();
+            after[actor]["revision"] = json!(3);
+            let observation =
+                login_setup_observation(&before, &after, actor, &Value::Null, &sdk_id);
+            assert!(observation["passed"] == true);
+            assert!(observation["sdkKeyIdMigrationObserved"] == true);
+            assert!(observation["actorAccountRevisionChanged"] == true);
+            assert!(observation["otherAccountRevisionPreserved"] == true);
+            assert!(
+                login_setup_observation(&before, &after, actor, &sdk_id, &sdk_id)["passed"]
+                    == false
+            );
+            assert!(
+                login_setup_observation(&before, &after, actor, &Value::Null, &Value::Null)["passed"]
+                    == false
+            );
+            after[1 - actor]["revision"] = json!(4);
+            assert!(
+                login_setup_observation(&before, &after, actor, &Value::Null, &sdk_id)["passed"]
+                    == false
+            );
+        }
+    }
+
+    #[test]
+    fn login_setup_never_masks_protected_vault_private_keys_folders_or_personal_changes() {
+        let before = setup_snapshot();
+        let sdk_id = json!("0123456789abcdef0123456789abcdef");
+        for viewer in 0..2 {
+            for field in ["cipher", "keys", "folder", "control"] {
+                let mut after = before.clone();
+                after[viewer][field] = json!({"changed":true});
+                after[0]["revision"] = json!(3);
+                assert!(
+                    login_setup_observation(&before, &after, 0, &Value::Null, &sdk_id)["passed"]
+                        == false
+                );
+                assert!(before != after);
+            }
+        }
+        let mut extra_field = before.clone();
+        extra_field[0]["unexpected"] = json!(true);
+        assert!(
+            login_setup_observation(&before, &extra_field, 0, &Value::Null, &sdk_id)["passed"]
+                == false
+        );
+    }
+
+    #[test]
+    fn login_setup_rejects_replacing_existing_or_malformed_sdk_ids() {
+        let before = setup_snapshot();
+        let sdk_id = json!("0123456789abcdef0123456789abcdef");
+        for key in [&Value::Null, &sdk_id] {
+            assert!(login_setup_observation(&before, &before, 0, key, key)["passed"] == true);
+        }
+        for invalid in [
+            json!(""),
+            json!("0123456789ABCDEF0123456789ABCDEF"),
+            json!("0123456789abcdef0123456789abcde"),
+            json!(17),
+            json!({}),
+        ] {
+            assert!(
+                login_setup_observation(&before, &before, 0, &Value::Null, &invalid)["passed"]
+                    == false
+            );
+        }
+        for changed in [Value::Null, json!("fedcba9876543210fedcba9876543210")] {
+            assert!(
+                login_setup_observation(&before, &before, 0, &sdk_id, &changed)["passed"] == false
+            );
+        }
+        assert!(
+            login_setup_observation(&before, &before, 2, &Value::Null, &Value::Null)["passed"]
+                == false
+        );
+    }
 
     #[test]
     fn capability_rotation_masks_only_values_preserving_all_other_metadata() {
