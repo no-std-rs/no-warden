@@ -1859,6 +1859,31 @@ steps. Timestamp parsing stays in the provider; the core controls the final phas
 The final SQLite transaction rechecks live destination grants in the target
 organization, retaining historical links for independently verified later reads.
 
+Additional paired Vaultwarden 1.37.4 review probes distinguish historical read
+admission from response flags. After revoking the older membership, a confirmed
+current-organization User still reads the cipher, but all three projections hide
+the older collection ID. Single GET retains edit/delete/restore and password
+visibility; list/sync clear those flags. Restoring the older membership restores
+its collection and flags; removing it denies the historical reader on both
+servers. Actual shared writes were not exercised by these probes.
+
+Personal-target sharing synchronizes the archive annotation with the payload in
+the final transaction. Missing/null `archivedDate` clears it; the measured valid
+older/newer dates replace it and render with six fractional digits. Malformed
+date variants remain outside this comparison. A complete positional inner cipher
+array now rejects with 422 before association or revision effects, like the native
+target; native Rocket's object-valued `error` and the adapter's string-valued
+schema error remain distinct. These direct probes do not add CLI or browser claims
+or change the seven-case suite totals above.
+
+Organization attachment metadata authorization remains a separate open parity
+item: the current attachment metadata provider requires personal ownership.
+Native-only attachment probes accept omitted/empty/partial/complete rewrap maps.
+Modern attachments sharing the unchanged per-item key remain decryptable in all
+four cases, so a complete-map requirement would reject measured valid behavior.
+Legacy direct-user-key attachments need the relevant client rewrap to decrypt;
+opaque payload acceptance alone does not establish attachment-flow compatibility.
+
 The [pinned CLI command](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/admin-console/commands/share.command.ts#L88)
 delegates to the bundled SDK `share_cipher`/`put_share` path. The paired runner
 captures no endpoint trace or client-internal request count. A separate Node
