@@ -444,8 +444,9 @@ async fn dispatch_with_peer(
         .or_else(|| invalid_purge_id.then_some(Route::CipherGet("purge")))
         .ok_or_else(missing)?;
     // The pinned executable rejects POST restore, despite the older route inventory.
-    if method == route::Method::Post && matches!(route, Route::CipherRestore(_)) {
-        return Err(missing());
+    match route {
+        Route::CipherRestore(_) if method == route::Method::Post => return Err(missing()),
+        _ => {}
     }
     if let Route::FolderGet(id) | Route::FolderUpdate(id) | Route::FolderDelete(id) = route {
         // Upstream's FromParam validates UUID syntax but keeps its original

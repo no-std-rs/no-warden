@@ -73,3 +73,6 @@ pub mod webauthn_credentials;
 
 pub mod organization_cipher_archive;
 pub mod organization_cipher_archive_cli;
+
+pub mod organization_cipher_lifecycle;
+pub mod organization_cipher_lifecycle_cli;

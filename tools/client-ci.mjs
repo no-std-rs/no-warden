@@ -33,6 +33,7 @@ export const shards = {
     "organization-cipher-collections", "organization-cipher-collections-cli",
     "organization-cipher-partial", "organization-cipher-partial-cli",
     "organization-cipher-archive", "organization-cipher-archive-cli",
+    "organization-cipher-lifecycle", "organization-cipher-lifecycle-cli",
     "account-deletion", "refresh-grants", "cipher-reads", "password-grants",
   ],
   "organization-b": [
