@@ -8,6 +8,7 @@ mod account_password;
 mod account_security;
 mod attachments;
 mod auth_requests;
+mod cipher_ownership;
 mod cipher_reads;
 mod devices;
 mod domains;

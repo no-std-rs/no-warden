@@ -244,7 +244,7 @@ fn collection_replacement_rolls_back_name_acl_revision_and_cached_response_on_ea
 }
 
 fn seed_links(store: &Store, org: &str, col: &str, sibling: &str) {
-    store.db.execute("INSERT INTO items VALUES('linked-cipher','alice','cipher',?1,0,'fixed-cipher-revision','fixed-created')",[json!({"id":"linked-cipher","organizationId":org,"name":"opaque-encrypted-name","notes":"opaque-ciphertext","future":{"nested":true}}).to_string()]).unwrap();
+    store.db.execute("INSERT INTO items(id,owner,kind,document,deleted,revision,created) VALUES('linked-cipher','alice','cipher',?1,0,'fixed-cipher-revision','fixed-created')",[json!({"id":"linked-cipher","organizationId":org,"name":"opaque-encrypted-name","notes":"opaque-ciphertext","future":{"nested":true}}).to_string()]).unwrap();
     store.db.execute("INSERT INTO attachments VALUES('attachment','linked-cipher','opaque-file-name','opaque-file-key',4,?1)",[&[0_u8,1,127,255][..]]).unwrap();
     for collection in [col, sibling] {
         store

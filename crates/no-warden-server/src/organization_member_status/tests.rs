@@ -52,7 +52,7 @@ fn setup(path: &str, role: i32, status: i32) -> Setup {
             [],
         )
         .unwrap();
-    store.db.execute("INSERT INTO items VALUES('preserved-personal','bob','cipher','{\"name\":\"opaque-private-ciphertext\"}',0,'2000','2000')", []).unwrap();
+    store.db.execute("INSERT INTO items(id,owner,kind,document,deleted,revision,created) VALUES('preserved-personal','bob','cipher','{\"name\":\"opaque-private-ciphertext\"}',0,'2000','2000')", []).unwrap();
     store.db.execute("INSERT INTO device_registry VALUES('bob','recipient-device','opaque',23,'2000','2000')", []).unwrap();
     store.db.execute("INSERT INTO sessions VALUES('recipient-access','recipient-refresh','bob',9999999999,9999999999)", []).unwrap();
     store

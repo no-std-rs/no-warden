@@ -1792,6 +1792,35 @@ pub struct CipherCreateRequest<'a> {
     pub collection_ids: Option<BoundedList<&'a str, MAX_COLLECTION_IDS>>,
 }
 
+/// Single sharing requires a collection array, including when it is empty.
+/// Embedders select this decoder's capacity; the service also accepts uncapped
+/// indexed views and does not impose this transport capacity on other adapters.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CipherShareRequest<'a, const N: usize> {
+    #[serde(borrow, alias = "Cipher")]
+    pub cipher: CipherRequest<'a>,
+    #[serde(borrow, alias = "CollectionIds")]
+    pub collection_ids: BoundedList<&'a str, N>,
+}
+
+impl<const N: usize> core::fmt::Debug for CipherShareRequest<'_, N> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("CipherShareRequest([REDACTED])")
+    }
+}
+
+impl<const N: usize> crate::organization_cipher_sharing::CipherShareIdsData
+    for CipherShareRequest<'_, N>
+{
+    fn len(&self) -> usize {
+        self.collection_ids.len()
+    }
+    fn get(&self, index: usize) -> Option<&str> {
+        self.collection_ids.get(index).copied()
+    }
+}
+
 /// The selected-ID body shared by cipher lifecycle and archive endpoints.
 ///
 /// The caller chooses the decoder capacity. IDs are exact strings, without UUID
