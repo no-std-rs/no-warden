@@ -458,6 +458,26 @@ fn rows(value: &Value) -> Result<&[Value], Error> {
         .map(Vec::as_slice)
         .ok_or(Error("Attachment CLI metadata array missing"))
 }
+// Diagnostic-only categorical output; never serialize IDs or vault contents.
+fn diagnostic_move_shape(stage: &str, value: &Value, org: &Organization) {
+    let collection_rows = value["collectionIds"].as_array();
+    let expected_count =
+        collection_rows.map(|rows| rows.iter().filter(|id| **id == org.collection_id).count());
+    eprintln!(
+        "Attachment CLI diagnostic move: {}",
+        json!({
+            "stage":stage,
+            "organizationMatches":value["organizationId"] == org.id,
+            "organizationNull":value["organizationId"].is_null(),
+            "organizationString":value["organizationId"].is_string(),
+            "collectionIdsArray":collection_rows.is_some(),
+            "collectionCount":collection_rows.map(Vec::len),
+            "expectedCollectionCount":expected_count,
+            "otherCollectionCount":collection_rows.zip(expected_count).map(|(rows,n)|rows.len()-n),
+            "collectionsMatch":value["collectionIds"] == json!([org.collection_id]),
+        })
+    );
+}
 fn check_note(
     value: &Value,
     id: &str,
@@ -884,7 +904,37 @@ pub fn run() -> Result<(), Error> {
         &creator_session,
         Some(&json!([org.collection_id])),
     )?;
-    check_note(&moved, &id, Some(&org), &owner_folder, true, &files)?;
+    diagnostic_move_shape("immediate-cli-stdout", &moved, &org);
+    // Exactly one additional direct setup read, separately attributed from the
+    // original 101-request compatibility budget, before retaining its strict guard.
+    let durable_move = read_cipher(&mut http, &owner, &id)?;
+    diagnostic_move_shape("direct-server-get", &durable_move, &org);
+    c.direct = Some(http.requests);
+    c.receipt("running")?;
+    let original_move_check = check_note(&moved, &id, Some(&org), &owner_folder, true, &files);
+    eprintln!(
+        "Attachment CLI diagnostic move: {}",
+        json!({"stage":"original-strict-guard","passed":original_move_check.is_ok()}),
+    );
+    if original_move_check.is_err() {
+        // One diagnostic sync/get pair cannot replace or turn the original strict
+        // failure into success. No retries, delay, or cache-state assumption.
+        let sync = c.command(&["sync"], &creator, Some(&creator_session), None);
+        eprintln!(
+            "Attachment CLI diagnostic move: {}",
+            json!({"stage":"diagnostic-sync","passed":sync.is_ok()}),
+        );
+        if sync.is_ok() {
+            match c.json(&["get", "item", &id], &creator, &creator_session, None) {
+                Ok(value) => diagnostic_move_shape("diagnostic-post-sync-get", &value, &org),
+                Err(_) => eprintln!(
+                    "Attachment CLI diagnostic move: {}",
+                    json!({"stage":"diagnostic-post-sync-get","passed":false}),
+                ),
+            }
+        }
+    }
+    original_move_check?;
     c.move_completed = true;
     let after_move = encrypted_bytes(&mut http, &owner, &id, &files)?;
     require(
