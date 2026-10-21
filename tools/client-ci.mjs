@@ -13,6 +13,8 @@ export const shards = {
     "repository-policy", "api-coverage", "cli-inventory", "client-ci-tests",
     "server-tests", "persistence", "default-http",
     "organization-member-mini-details", "organization-member-mini-details-cli",
+    "web-organization-reads",
+    "web-organization-reads-cli",
     "personal-vault-purge",
   ],
   baseline: [

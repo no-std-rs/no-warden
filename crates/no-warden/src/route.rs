@@ -69,6 +69,9 @@ pub enum Route<'a> {
     OrganizationBulkMemberRestore(&'a str),
     OrganizationMemberRestoreVNext(&'a str, &'a str),
     OrganizationCollections(&'a str),
+    OrganizationCollectionListDetails(&'a str),
+    OrganizationGroups(&'a str),
+    OrganizationCipherDetails,
     OrganizationCollectionCreate(&'a str),
     OrganizationCollectionUpdate(&'a str, &'a str),
     OrganizationCollectionDelete(&'a str, &'a str),
@@ -177,6 +180,7 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
             | "/api/ciphers/unarchive",
         ) => path.strip_prefix("/api/ciphers/").map(CipherGet),
         (Get, "/api/config") => Some(Config),
+        (Get, "/api/ciphers/organization-details") => Some(OrganizationCipherDetails),
         (
             Post,
             "/api/accounts/prelogin"
@@ -306,6 +310,10 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                                 .then_some(OrganizationMember(organization, member))
                         }
                         (Get, "collections") => Some(OrganizationCollections(organization)),
+                        (Get, "collections/details") => {
+                            Some(OrganizationCollectionListDetails(organization))
+                        }
+                        (Get, "groups") => Some(OrganizationGroups(organization)),
                         (Post, "collections") => Some(OrganizationCollectionCreate(organization)),
                         (Put | Delete, action) => {
                             let collection = action.strip_prefix("collections/")?;
@@ -997,6 +1005,12 @@ mod tests {
                     Route::OrganizationCollections(org),
                 ),
                 (
+                    Method::Get,
+                    "collections/details",
+                    Route::OrganizationCollectionListDetails(org),
+                ),
+                (Method::Get, "groups", Route::OrganizationGroups(org)),
+                (
                     Method::Post,
                     "collections",
                     Route::OrganizationCollectionCreate(org),
@@ -1019,7 +1033,6 @@ mod tests {
                 Method::Post,
                 "/api/organizations/org/collections/col/details",
             ),
-            (Method::Get, "/api/organizations/org/collections/details"),
             (Method::Get, "/api/organizations/org/collections/col"),
             (Method::Get, "/api/organizations/org/collections//details"),
             (Method::Get, "/api/organizations//collections"),

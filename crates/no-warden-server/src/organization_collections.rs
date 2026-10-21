@@ -253,6 +253,52 @@ fn detail(db: &Connection, owner: &str, id: &str) -> rusqlite::Result<Option<Det
     }))
 }
 
+/// Aggregate list projection includes implicit full-access memberships, unlike
+/// the separately verified single-collection direct-selection projection.
+pub(crate) fn web_details(
+    db: &Connection,
+    owner: &str,
+    org: &str,
+) -> rusqlite::Result<Vec<Detail>> {
+    let ids = {
+        let mut statement = db.prepare(
+            "SELECT id FROM organization_collections WHERE organization_id=?1 ORDER BY rowid",
+        )?;
+        statement
+            .query_map([org], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let mut rows = Vec::new();
+    for id in ids {
+        let Some(mut row) = detail(db, owner, &id)? else {
+            continue;
+        };
+        if !row.assigned {
+            continue;
+        }
+        let mut statement = db.prepare("SELECT m.organization_id,m.id,COALESCE(g.read_only,0),COALESCE(g.hide_passwords,0),COALESCE(g.manage,0),m.role,m.access_all,m.status FROM organization_memberships m LEFT JOIN organization_collection_users g ON g.user_id=m.user_id AND g.collection_id=?1 WHERE m.organization_id=?2 AND ((m.status=2 AND (m.role IN(0,1) OR m.access_all=1)) OR g.user_id IS NOT NULL) ORDER BY m.rowid")?;
+        row.users = statement
+            .query_map(params![id, org], |r| {
+                let full = r.get::<_, i32>(7)? == 2
+                    && (matches!(r.get::<_, i32>(5)?, 0 | 1) || r.get::<_, bool>(6)?);
+                let ro = r.get::<_, bool>(2)?;
+                let hide = r.get::<_, bool>(3)?;
+                Ok(Grant {
+                    org: r.get(0)?,
+                    id: r.get(1)?,
+                    ro: !full && ro,
+                    hide: !full && hide,
+                    manage: full
+                        || r.get::<_, bool>(4)?
+                        || (r.get::<_, i32>(5)? == 3 && !ro && !hide),
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
 // Query fallbacks are request-guard inputs, not successful route parameters.
 // Typed path failures remain 422 after all membership/collection guards succeed.
 pub(super) fn query_root(name: &str) -> &str {
