@@ -8,8 +8,10 @@ use no_warden::{
     Storage, VaultService,
     account_deletion::AccountDeletionStorage,
     account_key_id::{AccountKeyIdStorage, ValidatedUserKeyId},
+    attachment::{AttachmentMetadata, AttachmentStorage, ValidatedAttachment},
     auth_login::{AuthRequestLoginContext, AuthRequestLoginDevice, AuthRequestLoginRecord},
     auth_requests::{AuthRequestContext, AuthRequestRecord},
+    bulk::CipherAccess,
     cipher_reads::CipherReadStorage,
     devices::{DeviceRecord, PendingDeviceAuthRequest},
     domains::{DomainProjection, DomainSettingsView, GlobalDomain},
@@ -274,6 +276,86 @@ impl Storage for PurgeProbe {
     }
 }
 impl CipherReadStorage for PurgeProbe {}
+// Fixed-stack READ provider: current confirmed membership and associated readonly
+// collection facts flow through the same core resolver used by the host adapter.
+// Opaque capability verification stands in for host-owned expiry/signature checks;
+// it is independent of bearer identity and never grants attachment mutation access.
+impl AttachmentStorage for PurgeProbe {
+    fn attachment_access(
+        &mut self,
+        actor: &str,
+        cipher_id: &str,
+    ) -> Result<Option<CipherAccess>, ()> {
+        if cipher_id != "embedded-attachment-cipher" {
+            return Ok(None);
+        }
+        let facts = [CipherCollectionAccessRecord {
+            cipher_organization_id: Some("embedded-attachment-org"),
+            collection: CipherSharingCollection {
+                id: "embedded-attachment-collection",
+                user_id: actor,
+                organization_id: "embedded-attachment-org",
+                assigned: actor == "embedded-attachment-reader",
+                read_only: true,
+                hide_passwords: false,
+                manage: false,
+            },
+        }];
+        let access = resolve_cipher_access(
+            actor,
+            CipherOwnership::Organization {
+                organization_id: "embedded-attachment-org",
+            },
+            Some(CipherSharingMembership {
+                user_id: actor,
+                organization_id: "embedded-attachment-org",
+                role: 2,
+                status: if actor == "embedded-attachment-accepted" {
+                    1
+                } else {
+                    2
+                },
+                access_all: false,
+            }),
+            facts.as_slice(),
+        )
+        .map_err(|_| ())?;
+        Ok(Some(CipherAccess {
+            readable: access.readable(),
+            writable: false,
+        }))
+    }
+    fn attachment_metadata(
+        &mut self,
+        attachment_id: &str,
+    ) -> Result<Option<AttachmentMetadata<'_>>, ()> {
+        Ok(match attachment_id {
+            "embedded-attachment-file" => Some(AttachmentMetadata {
+                cipher_id: "embedded-attachment-cipher",
+                file_size: 257,
+            }),
+            "embedded-foreign-attachment" => Some(AttachmentMetadata {
+                cipher_id: "embedded-foreign-cipher",
+                file_size: 257,
+            }),
+            _ => None,
+        })
+    }
+    fn commit_attachment(&mut self, _: &str, _: &ValidatedAttachment<'_>) -> Result<(), ()> {
+        Err(())
+    }
+    fn verify_attachment_download(
+        &mut self,
+        cipher_id: &str,
+        attachment_id: &str,
+        token: &Secret<'_>,
+    ) -> Result<bool, ()> {
+        Ok(self.verified
+            && cipher_id == "embedded-attachment-cipher"
+            && attachment_id == "embedded-attachment-file"
+            && token.expose_secret() == "embedded-opaque-attachment-capability")
+    }
+}
 impl OrganizationCipherSharingStorage for PurgeProbe {
     type ShareId = &'static str;
     fn sharing_source(
@@ -2328,6 +2410,86 @@ pub extern "C" fn _start() -> ! {
             lifecycle_revision: 0,
             lifecycle_account_revisions: [0; 3],
         };
+        // Actually link both attachment authorization services with stable stack
+        // facts. This is a compile/link probe, not executed firmware or JWT parity.
+        {
+            let mut attachments = VaultService::new(&mut provider);
+            for (actor, cipher_id, file_id, allowed) in black_box([
+                (
+                    "embedded-attachment-reader",
+                    "embedded-attachment-cipher",
+                    "embedded-attachment-file",
+                    true,
+                ),
+                (
+                    "embedded-attachment-reader",
+                    "embedded-attachment-cipher",
+                    "embedded-foreign-attachment",
+                    false,
+                ),
+                (
+                    "embedded-attachment-reader",
+                    "embedded-foreign-cipher",
+                    "embedded-attachment-file",
+                    false,
+                ),
+                (
+                    "embedded-attachment-denied",
+                    "embedded-attachment-cipher",
+                    "embedded-attachment-file",
+                    false,
+                ),
+                (
+                    "embedded-attachment-accepted",
+                    "embedded-attachment-cipher",
+                    "embedded-attachment-file",
+                    false,
+                ),
+            ]) {
+                black_box(
+                    attachments
+                        .authorize_attachment_read(actor, cipher_id, file_id)
+                        .is_ok()
+                        == allowed,
+                );
+            }
+            for (cipher_id, file_id, token, allowed) in black_box([
+                (
+                    "embedded-attachment-cipher",
+                    "embedded-attachment-file",
+                    "embedded-opaque-attachment-capability",
+                    true,
+                ),
+                (
+                    "embedded-attachment-cipher",
+                    "embedded-attachment-file",
+                    "embedded-invalid-capability",
+                    false,
+                ),
+                (
+                    "embedded-foreign-cipher",
+                    "embedded-attachment-file",
+                    "embedded-opaque-attachment-capability",
+                    false,
+                ),
+                (
+                    "embedded-attachment-cipher",
+                    "embedded-foreign-attachment",
+                    "embedded-opaque-attachment-capability",
+                    false,
+                ),
+            ]) {
+                let result = attachments.authorize_attachment_download(
+                    cipher_id,
+                    file_id,
+                    &Secret::new(token),
+                );
+                black_box(result.is_ok() == allowed);
+                if let Ok(scope) = result {
+                    black_box((scope.cipher_id(), scope.attachment_id()));
+                }
+            }
+        }
         let organization = OrganizationCreateRequest {
             billing_email: "owner@example.com",
             collection_name: "opaque collection",
