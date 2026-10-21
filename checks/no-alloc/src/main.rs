@@ -18,6 +18,7 @@ use no_warden::{
         CipherArchiveOperation, CipherArchiveRevisionEffect, CipherArchiveStorage,
         ValidatedCipherArchive,
     },
+    organization_cipher_bulk_lifecycle::CipherLifecycleSelectionStorage,
     organization_cipher_bulk_sharing::{
         CipherBulkSharingData, OrganizationCipherBulkSharingStorage, ValidatedCipherBulkShare,
         ValidatedCipherBulkShareAssociation, resolve_bulk_cipher_source_write_access,
@@ -480,6 +481,144 @@ impl CipherLifecycleStorage for PurgeProbe {
             CipherLifecycleOperation::PermanentDelete => self.lifecycle_present = false,
         }
         Ok(())
+    }
+}
+// Separate selected lifecycle consumer; no existing single/archive/partial
+// provider state is reused or changed. All snapshots and permutation own arrays.
+struct SelectedLifecycleProbe {
+    present: [bool; 2],
+    deleted: [bool; 2],
+    revision: [u64; 2],
+    reader_revisions: [u64; 3],
+}
+struct SelectedLifecycleOrder {
+    indices: [usize; 2],
+    len: usize,
+}
+impl AsRef<[usize]> for SelectedLifecycleOrder {
+    fn as_ref(&self) -> &[usize] {
+        &self.indices[..self.len]
+    }
+}
+impl Storage for SelectedLifecycleProbe {
+    type Error = ();
+    fn account_exists(&mut self, _: &str) -> Result<bool, ()> {
+        unreachable!()
+    }
+    fn insert_account(&mut self, _: &str, _: &RegisterRequest<'_>) -> Result<(), ()> {
+        unreachable!()
+    }
+    fn folder_metadata(&mut self, _: &str) -> Result<Option<ItemMetadata<'_>>, ()> {
+        unreachable!()
+    }
+    fn save_folder(&mut self, _: &str, _: &str, _: &FolderRequest<'_>) -> Result<(), ()> {
+        unreachable!()
+    }
+    fn delete_folder(&mut self, _: &str, _: &str) -> Result<(), ()> {
+        unreachable!()
+    }
+    fn cipher_metadata(&mut self, _: &str) -> Result<Option<ItemMetadata<'_>>, ()> {
+        unreachable!()
+    }
+    fn save_cipher(&mut self, _: &str, _: &str, _: &CipherRequest<'_>) -> Result<(), ()> {
+        unreachable!()
+    }
+    fn set_cipher_deleted(&mut self, _: &str, _: &str, _: bool) -> Result<(), ()> {
+        unreachable!()
+    }
+    fn delete_cipher(&mut self, _: &str, _: &str) -> Result<(), ()> {
+        unreachable!()
+    }
+}
+
+impl CipherLifecycleStorage for SelectedLifecycleProbe {
+    type LifecycleId = &'static str;
+    type LifecycleAccess = LifecycleFacts;
+    fn cipher_lifecycle_source(
+        &mut self,
+        cipher: &str,
+    ) -> Result<Option<CipherSharingSource<Self::LifecycleId>>, ()> {
+        let ids = ["embedded-selected-a", "embedded-selected-b"];
+        Ok(ids
+            .iter()
+            .position(|id| *id == cipher)
+            .filter(|index| self.present[*index])
+            .map(|index| CipherSharingSource {
+                id: ids[index],
+                owner_id: None,
+                organization_id: Some("embedded-org"),
+                revision: lifecycle_token(self.revision[index]),
+            }))
+    }
+    fn cipher_lifecycle_membership(
+        &mut self,
+        actor: &str,
+        org: &str,
+    ) -> Result<Option<CipherSharingMembership<Self::LifecycleId>>, ()> {
+        Ok(
+            (actor == "embedded-owner" && org == "embedded-org").then_some(
+                CipherSharingMembership {
+                    user_id: "embedded-owner",
+                    organization_id: "embedded-org",
+                    role: 2,
+                    status: 2,
+                    access_all: false,
+                },
+            ),
+        )
+    }
+    fn cipher_lifecycle_collections(
+        &mut self,
+        _: &str,
+        _: &CipherSharingSource<Self::LifecycleId>,
+    ) -> Result<Self::LifecycleAccess, ()> {
+        Ok(LifecycleFacts { shared: true })
+    }
+    fn commit_cipher_lifecycle(&mut self, plan: &ValidatedCipherLifecycle<'_>) -> Result<(), ()> {
+        let source = self.cipher_lifecycle_source(plan.cipher_id())?.ok_or(())?;
+        let member = self.cipher_lifecycle_membership(plan.actor(), "embedded-org")?;
+        plan.validate_live(
+            &source,
+            member.as_ref().map(CipherSharingMembership::view),
+            &LifecycleFacts { shared: true },
+        )
+        .map_err(|_| ())?;
+        let index = if source.id == "embedded-selected-a" {
+            0
+        } else {
+            1
+        };
+        self.revision[index] += 1;
+        for revision in &mut self.reader_revisions {
+            *revision += 1;
+        }
+        match plan.operation() {
+            CipherLifecycleOperation::Trash => self.deleted[index] = true,
+            CipherLifecycleOperation::Restore => self.deleted[index] = false,
+            CipherLifecycleOperation::PermanentDelete => self.present[index] = false,
+        }
+        Ok(())
+    }
+}
+impl CipherLifecycleSelectionStorage for SelectedLifecycleProbe {
+    type LifecycleOrder = SelectedLifecycleOrder;
+    fn cipher_lifecycle_order(
+        &mut self,
+        _: &str,
+        _: CipherLifecycleOperation,
+        ids: &[&str],
+    ) -> Result<Self::LifecycleOrder, ()> {
+        match ids.len() {
+            1 => Ok(SelectedLifecycleOrder {
+                indices: [0, 0],
+                len: 1,
+            }),
+            2 => Ok(SelectedLifecycleOrder {
+                indices: [1, 0],
+                len: 2,
+            }),
+            _ => Err(()),
+        }
     }
 }
 // Separate archive consumer: shared readonly and personal source facts remain
@@ -2005,6 +2144,56 @@ impl AccountDeletionStorage for PurgeProbe {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
+    // Existing borrowed IDs DTO feeds the new real selected service. Unknown
+    // body organizationId is not authority; provider resolves canonical scope.
+    let selected=serde_json_core::from_slice::<CipherIdsRequest<'_,3>>(black_box(
+        br#"{"ids":["embedded-selected-b","embedded-selected-a","embedded-selected-a"],"organizationId":17}"#,
+    ));
+    if let Ok((selected, _)) = selected {
+        let mut provider = SelectedLifecycleProbe {
+            present: [true; 2],
+            deleted: [false; 2],
+            revision: [0; 2],
+            reader_revisions: [0; 3],
+        };
+        let mut ids = [""; 3];
+        let mut seen = [false; 2];
+        let mut service = VaultService::new(&mut provider);
+        for operation in [
+            CipherLifecycleOperation::Trash,
+            CipherLifecycleOperation::Restore,
+            CipherLifecycleOperation::PermanentDelete,
+        ] {
+            black_box(
+                service
+                    .mutate_selected_cipher_lifecycle(
+                        "embedded-owner",
+                        operation,
+                        selected.ids.iter().copied(),
+                        &mut ids,
+                        &mut seen,
+                    )
+                    .is_ok(),
+            );
+            black_box((
+                service.storage().present,
+                service.storage().deleted,
+                service.storage().revision,
+                service.storage().reader_revisions,
+            ));
+        }
+        black_box(
+            service
+                .mutate_selected_cipher_lifecycle(
+                    "embedded-owner",
+                    CipherLifecycleOperation::Restore,
+                    core::iter::empty(),
+                    &mut [],
+                    &mut [],
+                )
+                .is_ok(),
+        );
+    }
     let input = black_box(br#"{"email":"bare-metal@example.com"}"#);
     let request = serde_json_core::from_slice::<PreloginRequest<'_>>(input);
     let _ = black_box(request);
