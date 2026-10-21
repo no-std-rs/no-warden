@@ -1994,7 +1994,10 @@ no-warden pass seven named direct HTTP cases (1106 counted requests,
 3 password logins), excluding 3
 registrations/6 registration requests per target.
 The [pinned declaration](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L1021) remains separate from that runtime executable.
-All full-upstream-parity flags remain false.
+All full-upstream-parity flags remain false. A separate seven-case routing probe
+verifies canonical PUT and three percent-encoded static-segment forms reach the
+bulk handler. Invalid encoded paths and POST controls remain non-mutating;
+the native 422 versus local 404 fallback difference is explicitly unimplemented.
 
 Required exact `ciphers` and `collectionIds` arrays and the observed positional
 `[ciphers, collectionIds]` form are compared. Entire typed structure and every

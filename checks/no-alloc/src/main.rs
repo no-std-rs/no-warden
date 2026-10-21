@@ -2332,6 +2332,7 @@ pub extern "C" fn _start() -> ! {
             provider.account_present,
         ));
     }
+    black_box(classify(Method::Put, black_box("/api/ciphers/%73hare")));
     black_box(classify(Method::Post, black_box("/api/ciphers/purge")));
     black_box(classify(Method::Post, black_box("/api/sends/file/v2")));
     black_box(classify(
