@@ -57,7 +57,7 @@ wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
 The ledger records positive or restart HTTP evidence for 123 patterns, negative
-HTTP evidence for 122, 341 named HTTP cases, and 55 CLI command patterns. These are
+HTTP evidence for 122, 342 named HTTP cases, and 55 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -2170,3 +2170,10 @@ common/key/cipher revision preservation hold. Observed browser responses35/32
 and26 buckets each plus41 direct setup/control requests each are observations,
 not fixed budgets. No single-route, Owner/manage, attachment or general web claim;
 mandatory personal web10 is unchanged.
+
+The archive JavaScript follow-up passes all 62 local server tests, including
+16 mixed-selection cases. It replaces the stale whole-archive rollback
+assumption with strict eligible-item/private-state and foreign-state checks.
+All Rust/Cargo inputs, client fixture helpers and three executables are unchanged;
+the earlier HTTP/CLI/browser runs are retained with their original source
+attribution, rather than presented as fresh runs of the test-only follow-up.
