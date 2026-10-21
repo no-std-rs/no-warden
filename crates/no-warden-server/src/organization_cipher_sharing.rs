@@ -327,15 +327,20 @@ pub fn project(
     Ok(Some(doc))
 }
 
+// Bound candidate materialization to personal ownership and canonical membership
+// scopes. Historical collection associations do not choose the canonical scope;
+// membership status and effective grants remain independent core decisions.
+fn candidate_ids(db: &Connection, user: &str) -> rusqlite::Result<Vec<String>> {
+    let mut statement = db.prepare("SELECT id FROM items WHERE kind='cipher' AND (owner=?1 OR organization_id IN (SELECT organization_id FROM organization_memberships WHERE user_id=?1)) ORDER BY rowid")?;
+    statement
+        .query_map([user], |row| row.get::<_, String>(0))?
+        .collect()
+}
+
 pub fn list(db: &Connection, user: &str) -> rusqlite::Result<Vec<Value>> {
     // The core independently checks every candidate's membership and collection
     // facts; a SQL join cannot confer access or duplicate an item in the response.
-    let ids = {
-        let mut statement = db.prepare("SELECT id FROM items WHERE kind='cipher' AND (owner=?1 OR organization_id IS NOT NULL) ORDER BY rowid")?;
-        statement
-            .query_map([user], |row| row.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };
+    let ids = candidate_ids(db, user)?;
     let mut rows = Vec::new();
     for id in ids {
         if let Some(row) = project(db, user, &id, false)? {
@@ -678,6 +683,59 @@ mod tests {
             assert_eq!(bob["collectionIds"], json!(["old"]));
             assert_eq!(bob["edit"], true);
         }
+    }
+
+    #[test]
+    fn list_candidates_are_canonical_membership_scoped_and_core_checks_still_apply() {
+        let store = Store::open(":memory:").unwrap();
+        store.db.execute_batch(
+            "INSERT INTO accounts VALUES('alice','alice@example.test','{}','test','2026-01-01T00:00:00.000Z'),('bob','bob@example.test','{}','test','2026-01-01T00:00:00.000Z');
+             INSERT INTO organizations(id,name,billing_email) VALUES('historical','old','old@example.test'),('canonical','current','current@example.test'),('accepted','accepted','accepted@example.test'),('revoked','revoked','revoked@example.test'),('invited','invited','invited@example.test'),('foreign','foreign','foreign@example.test');
+             INSERT INTO organization_memberships(id,organization_id,user_id,key,role,status,access_all) VALUES('old-member','historical','alice','opaque',2,2,0),('current-member','canonical','alice','opaque',2,2,0),('accepted-member','accepted','alice','opaque',2,1,1),('revoked-member','revoked','alice','opaque',2,-1,1),('invited-member','invited','alice','opaque',2,0,1);
+             INSERT INTO organization_collections(id,organization_id,name) VALUES('old-collection','historical','opaque');
+             INSERT INTO organization_collection_users VALUES('old-collection','alice',0,0,0);",
+        ).unwrap();
+        for (id, owner, org, kind) in [
+            ("personal", Some("alice"), None, "cipher"),
+            ("other-personal", Some("bob"), None, "cipher"),
+            ("historical-grant", None, Some("canonical"), "cipher"),
+            ("ungranted", None, Some("canonical"), "cipher"),
+            ("accepted-cipher", None, Some("accepted"), "cipher"),
+            ("revoked-cipher", None, Some("revoked"), "cipher"),
+            ("invited-cipher", None, Some("invited"), "cipher"),
+            ("foreign-with-old-link", None, Some("foreign"), "cipher"),
+            ("personal-folder", Some("alice"), None, "folder"),
+        ] {
+            let document = json!({"id":id,"type":2,"name":ENCRYPTED,"notes":ENCRYPTED,"secureNote":{"type":0},"organizationId":org,"creationDate":REVISION,"revisionDate":REVISION});
+            store.db.execute("INSERT INTO items(id,owner,organization_id,kind,document,revision,created) VALUES(?1,?2,?3,?4,?5,?6,?6)",params![id,owner,org,kind,document.to_string(),REVISION]).unwrap();
+        }
+        // Existing historical associations never turn their organization into
+        // the canonical candidate scope, in either direction.
+        store.db.execute_batch("INSERT INTO organization_collection_ciphers VALUES('old-collection','historical-grant'),('old-collection','foreign-with-old-link');
+            WITH RECURSIVE n(v) AS (VALUES(1) UNION ALL SELECT v+1 FROM n WHERE v<100) INSERT INTO items(id,owner,organization_id,kind,document,revision,created) SELECT 'unrelated-'||v,NULL,'foreign','cipher','{}','r','r' FROM n;").unwrap();
+        assert_eq!(
+            candidate_ids(&store.db, "alice").unwrap(),
+            [
+                "personal",
+                "historical-grant",
+                "ungranted",
+                "accepted-cipher",
+                "revoked-cipher",
+                "invited-cipher"
+            ]
+        );
+        // Candidate selection is deliberately broader than admission. Core
+        // decisions still reject nonconfirmed members and ungranted sources.
+        let rows = list(&store.db, "alice").unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["personal", "historical-grant"]
+        );
+        assert_eq!(rows[1]["organizationId"], "canonical");
+        assert_eq!(rows[1]["collectionIds"], json!(["old-collection"]));
+        assert_eq!(rows[1]["edit"], true);
     }
 
     #[test]
