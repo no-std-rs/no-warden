@@ -742,21 +742,11 @@ async fn dispatch_with_peer(
             }
         }
         Route::OrganizationMemberPublicKeys(raw_org) => {
-            use no_warden::organization_member_public_keys::OrganizationMemberPublicKeysData;
             devices::access_binding(&store.db, &digest(bearer), &owner)?
                 .ok_or_else(unauthorized)?;
             let org = organization_invitations::path(&mut store, &owner, raw_org, uri.query())?;
             let input = organization_member_public_keys::Input::parse(&body)?;
-            // Decoding has already enforced the host's item/work budget.
-            let mut scratch = Vec::with_capacity(input.len());
-            scratch.resize_with(input.len(), || None);
-            let response = VaultService::new(&mut *store).get_org_member_public_keys(
-                &owner,
-                &org,
-                &input,
-                &mut scratch,
-            )?;
-            Ok(Json(response).into_response())
+            organization_member_public_keys::response(&mut store, &owner, &org, &input)
         }
         Route::OrganizationBulkConfirm(raw_org) => {
             use no_warden::organization_confirmations::OrganizationBulkConfirmData;

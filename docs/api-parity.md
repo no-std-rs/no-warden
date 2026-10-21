@@ -1623,6 +1623,16 @@ regression uses a lazy five-million-entry input without allocating that input.
 This is a host resource policy, not a verified upstream count boundary. The
 allocation-free core continues to accept caller-provided indexed batches.
 
+Before loading owned public-key snapshots, scoped SQL returns only the lengths
+of matched member IDs, account IDs and keys. The host charges every duplicate,
+counts UTF-8 bytes rather than characters, and adds 128 fixed bytes per row. More
+than 8 MiB of this unescaped result material rejects with 422 before result
+allocation. JSON escaping can expand encoded bytes; this is a local memory
+budget, not a verified upstream byte limit or an exact encoded-response cap.
+The regression enters the same host response path with repeated control/Unicode
+keys, checks its byte boundary and scoped omission, and preserves account/vault
+state.
+
 An existing account without a public key retains its row with `key: null`.
 Portable modern registration with `keys: null` and an invited passwordless
 placeholder verify this independently of missing-row omission. The individual

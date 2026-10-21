@@ -159,3 +159,48 @@ fn public_key_read_failures_do_not_mutate_state_or_return_a_successful_prefix() 
         "Public-key failure changed state"
     );
 }
+
+#[test]
+fn public_key_result_budget_counts_duplicate_rows_and_utf8_bytes_before_materialization() {
+    let mut store = fixture(":memory:");
+    let organization = org(&store);
+    store.db.execute("INSERT INTO organization_memberships VALUES('member',?1,'bob','wrapped-org-key',2,2,0)",[&organization]).unwrap();
+    // Controls and multibyte characters distinguish raw bytes from SQLite's
+    // character length, and duplicate IDs exercise output amplification.
+    let public_key = "\0雪\\".repeat(512);
+    store.db.execute("UPDATE accounts SET document=json_set(document,'$.keys',json_object('publicKey',?1,'encryptedPrivateKey','retained-private-key')) WHERE id='bob'",[&public_key]).unwrap();
+    let row_charge = PUBLIC_KEY_ROW_CHARGE + "member".len() + "bob".len() + public_key.len();
+    let limit = MAX_PUBLIC_KEY_RESULT_MATERIAL / row_charge;
+    assert!(limit > 1 && limit < MAX_PUBLIC_KEY_IDS);
+    let before = snapshot(&store);
+    let allowed = Input::parse(&serde_json::to_vec(&json!({"ids":vec!["member";limit]})).unwrap())
+        .unwrap_or_else(|_| panic!("Boundary fixture rejected"));
+    allowed
+        .validate_result_budget(&store, &organization)
+        .unwrap_or_else(|_| panic!("Byte boundary rejected"));
+    let excess = Input::parse(&serde_json::to_vec(&json!({"ids":vec!["member";limit+1]})).unwrap())
+        .unwrap_or_else(|_| panic!("Boundary fixture rejected"));
+    let error = match response(&mut store, "alice", &organization, &excess) {
+        Err(error) => error,
+        Ok(_) => panic!("Duplicate response bytes must be bounded"),
+    };
+    assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error.1, "Public-key result exceeds the host byte budget");
+    let foreign = create_org(&mut store, "bob");
+    excess
+        .validate_result_budget(&store, &foreign)
+        .unwrap_or_else(|_| panic!("Foreign IDs must be omitted"));
+    // Exclude the deliberate foreign organization setup from preservation checks.
+    let after_setup = snapshot(&store);
+    excess
+        .validate_result_budget(&store, &organization)
+        .expect_err("Budget must remain enforced");
+    assert!(
+        snapshot(&store) == after_setup,
+        "Budget preflight changed account or vault state"
+    );
+    assert!(
+        before != after_setup,
+        "Independent scope setup was not applied"
+    );
+}

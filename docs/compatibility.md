@@ -1387,7 +1387,12 @@ row. Empty and synthetic future-format keys remain exact. An actual 1025-item
 batch passes. The Linux host separately limits requests to 4,096 IDs while
 decoding, before allocating results or running member-key lookups. Its 422
 rejection beyond that local work budget is not claimed as upstream behavior;
-the allocation-free core itself has no intrinsic batch count cap.
+the allocation-free core itself has no intrinsic batch count cap. A scoped
+length-only SQL preflight additionally charges every duplicate and UTF-8
+ID/key byte plus 128 bytes per matched row against 8 MiB of unescaped result
+material, rejecting 422 before owned key snapshots. Escaping can expand JSON
+bytes; this host memory policy is not an upstream byte-limit claim or an exact
+encoded-response cap.
 
 The actual matrix includes all four known target statuses and Owner/Admin/
 Manager/User roles. Accepted Admin, confirmed Manager/User and revoked Admin
