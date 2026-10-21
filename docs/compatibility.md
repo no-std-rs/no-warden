@@ -56,7 +56,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Single member revoke/restore | Bodyless status transitions preserve keys/grants and recover selective visibility | Six matching HTTP cases and 31 matching CLI observation commands on both actual targets; no mutation caller or trace claim |
 | Organization member public-key batches | Ordered scoped public-only rows, null-key retention and unfiltered target states/roles | Six matching HTTP cases (431 requests) and 16 matching official CLI fingerprint/decryption commands on both targets; no bulk CLI caller or browser trace claim |
 | Organization member mini-details | Seven-field read-only metadata, unfiltered names/native states, restricted Manager admission | Six matching HTTP cases (619 requests) and 18 matching official CLI observation commands on both targets; no mini CLI caller/browser trace |
-| Single organization-cipher sharing | Sequential collection-prefix effects, confirmed canonical membership and historical grants, viewer annotations and route-specific shared reads | Six matching HTTP cases (423 requests) and 21 actual CLI move/fresh-cache decryption commands per target; no route trace/attachment/bulk/full-parity claim |
+| Single organization-cipher sharing | Sequential collection-prefix effects, confirmed canonical membership and historical grants, viewer annotations and route-specific shared reads | Seven matching HTTP cases (538 requests) and 21 actual CLI move/fresh-cache decryption commands per target; no route trace/attachment/bulk/full-parity claim |
 | Single organization-collection update/delete | Complete grant replacement, opaque names, whitespace external-ID clearing and preserved cipher data | Allocation-free core and local rollback/cascade tests; six matching HTTP cases and twenty matching official CLI commands on both actual targets |
 | Organization-scoped collection list/create/single access-details | Confirmed manager authorization, exact projections, opaque names/external IDs and reference validation | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers; atomic local provider tests |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
@@ -1493,7 +1493,7 @@ archive state belongs to each viewer. Default personal/shared TOTP capability is
 true. Native success has thirty known fields, but remains opaque adapter JSON,
 not complete typed response coverage.
 
-Both no-warden and Vaultwarden 1.37.4 pass six HTTP cases/423
+Both no-warden and Vaultwarden 1.37.4 pass seven HTTP cases/538
 counted requests, excluding 4 registration
 requests; 2 password logins and 2
 refreshes remain explicit. The separate official CLI 2026.10.0 suite executes

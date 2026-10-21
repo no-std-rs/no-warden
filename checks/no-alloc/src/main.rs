@@ -234,6 +234,13 @@ impl Storage for PurgeProbe {
 impl CipherReadStorage for PurgeProbe {}
 impl OrganizationCipherSharingStorage for PurgeProbe {
     type ShareId = &'static str;
+    fn sharing_revision_is_older(
+        &mut self,
+        source: &CipherSharingSource<Self::ShareId>,
+        requested: &str,
+    ) -> Result<bool, ()> {
+        Ok(source.revision == "embedded-source-revision" && requested == "embedded-old-revision")
+    }
     fn sharing_source(
         &mut self,
         id: &str,
@@ -1457,7 +1464,7 @@ pub extern "C" fn _start() -> ! {
         // The real sharing service retains an association prefix after a later
         // missing selection, then reaches the sealed payload phase on success.
         let share = serde_json_core::from_slice::<CipherShareRequest<'_, 2>>(black_box(
-            br#"{"collectionIds":["embedded-share-collection","missing"],"cipher":{"type":2,"organizationId":"embedded-org","encryptedFor":"embedded-owner","name":"2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","notes":"2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","secureNote":{"type":0},"key":null}}"#,
+            br#"{"collectionIds":["embedded-share-collection","missing"],"cipher":{"type":2,"organizationId":"embedded-org","encryptedFor":"embedded-owner","name":"2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","notes":"2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","secureNote":{"type":0},"key":null,"lastKnownRevisionDate":"embedded-old-revision"}}"#,
         ));
         if let Ok((request, _)) = share {
             let _ = black_box(organization_service.share_cipher(
@@ -1470,10 +1477,24 @@ pub extern "C" fn _start() -> ! {
                 organization_service.storage().sharing_associations,
                 organization_service.storage().shared_cipher,
             ));
+            let mut stale = request.cipher.clone();
+            stale.last_known_revision_date = Some(black_box("embedded-old-revision"));
             let _ = black_box(organization_service.share_cipher(
                 "embedded-owner",
                 "embedded-share-source",
-                &request.cipher,
+                &stale,
+                ["embedded-share-collection"].as_slice(),
+            ));
+            black_box((
+                organization_service.storage().sharing_associations,
+                organization_service.storage().shared_cipher,
+            ));
+            let mut current = request.cipher.clone();
+            current.last_known_revision_date = None;
+            let _ = black_box(organization_service.share_cipher(
+                "embedded-owner",
+                "embedded-share-source",
+                &current,
                 ["embedded-share-collection"].as_slice(),
             ));
             black_box((

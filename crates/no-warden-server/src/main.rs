@@ -128,6 +128,7 @@ impl IntoResponse for Failure {
                 "Cipher doesn't exist"
                     | "Cipher is not owned by user"
                     | "Cannot add this cipher to the selected collection"
+                    | "Cipher revision is older than the stored revision"
             )
         {
             return password_login::error_response(self.0, self.1);

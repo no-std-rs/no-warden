@@ -109,7 +109,7 @@ invoke the pinned official Bitwarden CLI as an external process.
   configured-group/backend, adjacent member-edit or full-parity claim.
 - [x] Single organization-cipher sharing subset: allocation-free sequential
   association plans and verified current/historical grant decisions, private annotations,
-  six matching actual HTTP cases (423 requests) and 21
+  seven matching actual HTTP cases (538 requests) and 21
   matching official CLI move/fresh owner/recipient decryption commands per target.
   Attachment-bearing moves, general shared editing/lifecycle, bulk/import/admin,
   configured policy/group/backend and full API parity remain open.

@@ -440,6 +440,17 @@ fn advance_cipher(
 
 impl OrganizationCipherSharingStorage for Store {
     type ShareId = String;
+    fn sharing_revision_is_older(
+        &mut self,
+        source: &CipherSharingSource<String>,
+        requested: &str,
+    ) -> rusqlite::Result<bool> {
+        let current = chrono::DateTime::parse_from_rfc3339(&source.revision)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+        Ok(chrono::DateTime::parse_from_rfc3339(requested)
+            .ok()
+            .is_some_and(|requested| requested < current))
+    }
     fn sharing_source(
         &mut self,
         id: &str,
@@ -491,7 +502,10 @@ impl OrganizationCipherSharingStorage for Store {
         recheck_source(&tx, plan.owner(), plan.cipher_id(), plan.source_revision())?;
         if let Some(org) = plan.target_organization() {
             let member = membership(&tx, plan.owner(), org)?;
-            let rows = associated_collections(&tx, plan.owner(), plan.cipher_id())?;
+            // Historical links remain readable after a successful move, but
+            // cannot replace live authority to write into its destination.
+            let mut rows = associated_collections(&tx, plan.owner(), plan.cipher_id())?;
+            rows.retain(|row| row.organization_id == org);
             let access = resolve_cipher_access(
                 plan.owner(),
                 CipherOwnership::Organization {
@@ -555,6 +569,116 @@ impl OrganizationCipherSharingStorage for Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ENCRYPTED: &str = "2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    const REVISION: &str = "2026-01-01T00:00:00.000Z";
+
+    #[test]
+    fn final_share_rechecks_target_grants_without_using_historical_authority() {
+        for revoke in [
+            "DELETE FROM organization_collection_users WHERE collection_id='target' AND user_id='alice';",
+            "UPDATE organization_collection_users SET read_only=1 WHERE collection_id='target' AND user_id='alice';",
+        ] {
+            let mut store = Store::open(":memory:").unwrap();
+            store.db.execute_batch(
+                "INSERT INTO accounts VALUES('alice','alice@example.test','{}','test','2026-01-01T00:00:00.000Z'),('bob','bob@example.test','{}','test','2026-01-01T00:00:00.000Z');
+                 INSERT INTO organizations(id,name,billing_email) VALUES('old-org','old','old@example.test'),('target-org','target','target@example.test');
+                 INSERT INTO organization_memberships(id,organization_id,user_id,key,role,status,access_all) VALUES('alice-old','old-org','alice','opaque',2,2,0),('alice-target','target-org','alice','opaque',2,2,0),('bob-old','old-org','bob','opaque',2,2,0),('bob-target','target-org','bob','opaque',2,2,0);
+                 INSERT INTO organization_collections(id,organization_id,name) VALUES('old','old-org','opaque'),('target','target-org','opaque');
+                 INSERT INTO organization_collection_users VALUES('old','alice',0,0,0),('target','alice',0,0,0),('old','bob',0,0,0);",
+            ).unwrap();
+            let original = json!({"id":"cipher","type":2,"name":ENCRYPTED,"notes":ENCRYPTED,"secureNote":{"type":0},"key":null,"favorite":true,"folderId":null,"creationDate":REVISION,"revisionDate":REVISION,"organizationId":null});
+            store.db.execute(
+                "INSERT INTO items(id,owner,kind,document,revision,created) VALUES('cipher','alice','cipher',?1,?2,?2)",
+                params![original.to_string(),REVISION],
+            ).unwrap();
+            let input = |org: &str, ids: &[&str]| {
+                let mut document = original.clone();
+                document["organizationId"] = json!(org);
+                document["encryptedFor"] = json!("alice");
+                document["lastKnownRevisionDate"] = json!(REVISION);
+                Input::parse(
+                    &serde_json::to_vec(&json!({"collectionIds":ids,"cipher":document})).unwrap(),
+                )
+                .unwrap_or_else(|_| panic!("Valid sharing fixture rejected"))
+            };
+            // An earlier failed move leaves a real, independently writable
+            // historical association while the cipher is still personal.
+            assert!(
+                input("old-org", &["old", "missing"])
+                    .execute(&mut store, "alice", "cipher")
+                    .is_err()
+            );
+            let before: (String, String) = store
+                .db
+                .query_row(
+                    "SELECT document,revision FROM items WHERE id='cipher'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            let account_before: String = store
+                .db
+                .query_row("SELECT revision FROM accounts WHERE id='alice'", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            // This committed association-side effect changes permission before
+            // the separate final transaction, without a timing-dependent test.
+            store.db.execute_batch(&format!(
+                "CREATE TRIGGER revoke_target_after_association AFTER UPDATE OF revision ON accounts WHEN NEW.id='alice' BEGIN {revoke} END;"
+            )).unwrap();
+            assert!(
+                input("target-org", &["target"])
+                    .execute(&mut store, "alice", "cipher")
+                    .is_err(),
+                "Historical grants must not replace revoked destination authority in the final transaction"
+            );
+            let after: (Option<String>, Option<String>, String, String) = store
+                .db
+                .query_row(
+                    "SELECT owner,organization_id,document,revision FROM items WHERE id='cipher'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .unwrap();
+            assert_eq!(after, (Some("alice".into()), None, before.0, before.1));
+            assert_eq!(store.db.query_row("SELECT count(*) FROM organization_collection_ciphers WHERE cipher_id='cipher'",[],|r|r.get::<_,usize>(0)).unwrap(),2);
+            assert_eq!(
+                store
+                    .db
+                    .query_row(
+                        "SELECT count(*) FROM cipher_annotations WHERE cipher_id='cipher'",
+                        [],
+                        |r| r.get::<_, usize>(0)
+                    )
+                    .unwrap(),
+                0
+            );
+            assert_ne!(
+                store
+                    .db
+                    .query_row("SELECT revision FROM accounts WHERE id='alice'", [], |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .unwrap(),
+                account_before
+            );
+            // Restoring actual destination authority permits retry. Historical
+            // access for another confirmed canonical member remains intact.
+            store.db.execute_batch("DROP TRIGGER revoke_target_after_association;
+                INSERT INTO organization_collection_users VALUES('target','alice',0,0,0) ON CONFLICT(collection_id,user_id) DO UPDATE SET read_only=0;").unwrap();
+            assert!(
+                input("target-org", &["target"])
+                    .execute(&mut store, "alice", "cipher")
+                    .is_ok()
+            );
+            let bob = project(&store.db, "bob", "cipher", true).unwrap().unwrap();
+            assert_eq!(bob["organizationId"], "target-org");
+            assert_eq!(bob["collectionIds"], json!(["old"]));
+            assert_eq!(bob["edit"], true);
+        }
+    }
 
     #[test]
     fn sharing_selection_budget_precedes_every_association_mutation() {

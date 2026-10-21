@@ -57,7 +57,7 @@ wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
 The ledger records positive or restart HTTP evidence for 116 patterns, negative
-HTTP evidence for 115, 311 named HTTP cases, and 54 CLI command patterns. These are
+HTTP evidence for 115, 312 named HTTP cases, and 54 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -1840,7 +1840,7 @@ backend, timing, concurrency or durability variants. The RISC-V consumer links
 the real decoder/service/prefix/final/access paths with fixed storage; firmware
 is not executed and no opaque adapter serializer is implied by that link.
 
-Both actual targets pass six HTTP cases: 423 counted requests,
+Both actual targets pass seven HTTP cases: 538 counted requests,
 2 password logins and 2 refreshes,
 excluding 2 registrations/4
 registration requests. The separate official CLI 2026.10.0 comparison executes
@@ -1850,6 +1850,14 @@ logins, excluding 4 registration requests.
 It decrypts the same-ID item immediately and after owner sync/fresh-cache login,
 then in a fresh confirmed selective recipient cache, including collection
 decryption. These totals are separate from the unchanged 120-command baseline.
+
+A valid older client revision rejects the final payload phase after successful
+association/account-revision steps persist. Equal, future, malformed, missing and
+null revisions follow the measured accepted controls. Selection errors win before
+the final revision guard; null organization runs the same guard without association
+steps. Timestamp parsing stays in the provider; the core controls the final phase.
+The final SQLite transaction rechecks live destination grants in the target
+organization, retaining historical links for independently verified later reads.
 
 The [pinned CLI command](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/admin-console/commands/share.command.ts#L88)
 delegates to the bundled SDK `share_cipher`/`put_share` path. The paired runner

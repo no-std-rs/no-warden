@@ -13,9 +13,9 @@ use serde_json::{Value, json};
 use std::{collections::BTreeSet, fs, io::Read};
 use uuid::Uuid;
 
-pub const CASE_COUNT: usize = 6;
-// Setup39 + guards73 + admission80 + prefix68 + projections65 + aliases72 + preservation26.
-pub const HTTP_REQUEST_COUNT: usize = 423;
+pub const CASE_COUNT: usize = 7;
+// Original6 cases423 + revision-phase case115 (12 fresh trials96 + alias reads15 + controls4).
+pub const HTTP_REQUEST_COUNT: usize = 538;
 const NOTE: &str = "Independent sharing contract Ω\0";
 type Case = fn(&mut Suite) -> Result<(), Error>;
 const CASES: [(&str, Case); CASE_COUNT] = [
@@ -42,6 +42,10 @@ const CASES: [(&str, Case); CASE_COUNT] = [
     (
         "organization_cipher_sharing_revoke_restore_and_preserved_personal_authority",
         preservation,
+    ),
+    (
+        "organization_cipher_sharing_revision_dates_follow_collection_effects",
+        revision_phase,
     ),
 ];
 const FIELDS: [&str; 30] = [
@@ -273,6 +277,14 @@ enum Form {
     OuterOrg,
     BadPath,
     ChangedAnnotations,
+    RevisionOlder,
+    RevisionFuture,
+    RevisionMalformed,
+    RevisionMissing,
+    RevisionNull,
+    NullOrgRevisionOlder,
+    MissingOrgRevisionOlder,
+    NullOrgRevisionEqual,
 }
 struct Trial {
     id: String,
@@ -347,7 +359,7 @@ impl Suite {
     fn receipt(&mut self, status: &str) -> Result<(), Error> {
         write_receipt(
             &mut self.receipt,
-            &json!({"schemaVersion":1,"status":status,"passedCases":self.passed.len(),"expectedCases":CASE_COUNT,"cases":self.passed,"httpRequests":self.http.owner.requests,"expectedHttpRequests":HTTP_REQUEST_COUNT,"passwordCredentialAttempts":self.http.owner.logins,"refreshRequests":self.http.refreshes,"fixtureRegistrations":2,"fixtureRegistrationHttpRequests":4,"attachmentBearingMoveTested":false,"configuredPolicies":false,"groupsConfigured":false,"smtpEnabled":false,"browserTraceClaimed":false,"cliCallerClaimed":false,"capturedRouteTrace":false,"fullParityClaimed":false,"businessErrorTextAsserted":false,"personalOrganizationUseTotpBeforeOrganizations":self.personal_totp_before,"personalOrganizationUseTotpAfterOrganizations":[self.controls[0]["organizationUseTotp"],self.controls[1]["organizationUseTotp"]],"orderedPrefixSideEffectsAsserted":true,"aliasSpecificCollectionProjectionAsserted":true,"crossOrganizationRetryAsserted":true,"historicalIdsRetainedForOwnerAsserted":true,"oldGrantDoesNotAuthorizeRetryTargetAsserted":false,"canonicalConfirmedMemberHistoricalGrantAccessAsserted":true,"freshRestrictedManagerWithoutGrantDeniedAsserted":true,"retryOrdinaryUserHistoricalGrantPaired":true,"retryRevisionFanoutAsserted":true,"retryBOnlyRecipientPaired":false}),
+            &json!({"schemaVersion":1,"status":status,"passedCases":self.passed.len(),"expectedCases":CASE_COUNT,"cases":self.passed,"httpRequests":self.http.owner.requests,"expectedHttpRequests":HTTP_REQUEST_COUNT,"passwordCredentialAttempts":self.http.owner.logins,"refreshRequests":self.http.refreshes,"fixtureRegistrations":2,"fixtureRegistrationHttpRequests":4,"attachmentBearingMoveTested":false,"configuredPolicies":false,"groupsConfigured":false,"smtpEnabled":false,"browserTraceClaimed":false,"cliCallerClaimed":false,"capturedRouteTrace":false,"fullParityClaimed":false,"businessErrorTextAsserted":false,"personalOrganizationUseTotpBeforeOrganizations":self.personal_totp_before,"personalOrganizationUseTotpAfterOrganizations":[self.controls[0]["organizationUseTotp"],self.controls[1]["organizationUseTotp"]],"orderedPrefixSideEffectsAsserted":true,"aliasSpecificCollectionProjectionAsserted":true,"crossOrganizationRetryAsserted":true,"historicalIdsRetainedForOwnerAsserted":true,"oldGrantDoesNotAuthorizeRetryTargetAsserted":false,"canonicalConfirmedMemberHistoricalGrantAccessAsserted":true,"freshRestrictedManagerWithoutGrantDeniedAsserted":true,"retryOrdinaryUserHistoricalGrantPaired":true,"retryRevisionFanoutAsserted":true,"retryBOnlyRecipientPaired":false,"revisionDateGuardOlderOnlyAsserted":true,"revisionDateGuardAfterCollectionEffectsAsserted":true,"revisionDateGuardSelectionErrorPrecedenceAsserted":true,"revisionDateGuardPersonalNullOrganizationBranchAsserted":true}),
         )
     }
     fn token(&self, index: usize) -> String {
@@ -385,20 +397,51 @@ impl Suite {
         let path = format!("/api/ciphers/{id}");
         let before = self.http.json(Method::GET, &path, &source_token, None)?;
         let before_revisions = self.revisions()?;
-        let encrypted = fixture::encrypt(NOTE.as_bytes(), &self.orgs[org].key)
-            .map_err(|_| Error("Sharing target encryption failed"))?;
+        let encrypted = if matches!(
+            form,
+            Form::NullOrgRevisionOlder | Form::MissingOrgRevisionOlder | Form::NullOrgRevisionEqual
+        ) {
+            fixture::encrypted_fixture_value(
+                &self.accounts[source].fixture,
+                &self.accounts[source].password,
+                NOTE.as_bytes(),
+            )
+            .map_err(|_| Error("Sharing personal-update encryption failed"))?
+        } else {
+            fixture::encrypt(NOTE.as_bytes(), &self.orgs[org].key)
+                .map_err(|_| Error("Sharing target encryption failed"))?
+        };
         let mut payload = json!({"type":2,"organizationId":self.orgs[org].id,"encryptedFor":self.accounts[source].user_id,"name":encrypted,"notes":encrypted,"secureNote":{"type":0},"favorite":true,"folderId":folder,"key":null,"lastKnownRevisionDate":before["revisionDate"]});
         match form {
-            Form::MissingOrg => {
+            Form::MissingOrg | Form::MissingOrgRevisionOlder => {
                 payload.as_object_mut().unwrap().remove("organizationId");
             }
-            Form::NullOrg => payload["organizationId"] = Value::Null,
+            Form::NullOrg | Form::NullOrgRevisionOlder | Form::NullOrgRevisionEqual => {
+                payload["organizationId"] = Value::Null;
+            }
             Form::ForeignOrg => payload["organizationId"] = json!(self.orgs[1].id),
             Form::BodyId => payload["id"] = json!(Uuid::new_v4().to_string()),
             Form::ChangedAnnotations => {
                 payload["favorite"] = json!(false);
                 payload["folderId"] = Value::Null;
             }
+            _ => {}
+        }
+        match form {
+            Form::RevisionOlder | Form::NullOrgRevisionOlder | Form::MissingOrgRevisionOlder => {
+                payload["lastKnownRevisionDate"] = json!("2000-01-01T00:00:00.000Z");
+            }
+            Form::RevisionFuture => {
+                payload["lastKnownRevisionDate"] = json!("2999-01-01T00:00:00.000Z");
+            }
+            Form::RevisionMalformed => payload["lastKnownRevisionDate"] = json!("not-a-date"),
+            Form::RevisionMissing => {
+                payload
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("lastKnownRevisionDate");
+            }
+            Form::RevisionNull => payload["lastKnownRevisionDate"] = Value::Null,
             _ => {}
         }
         let mut body = json!({"collectionIds":ids,"cipher":payload});
@@ -960,6 +1003,181 @@ fn preservation(s: &mut Suite) -> Result<(), Error> {
     }
     Ok(())
 }
+
+// Native older-only rejection is a final payload guard: prior successful links
+// and account revision fanout remain durable, while cipher data stays personal.
+// This is distinct from an adapter's live source-revision concurrency check.
+fn revision_phase(s: &mut Suite) -> Result<(), Error> {
+    let target = s.orgs[0].id.clone();
+    let valid = s.orgs[0].collection_id.clone();
+    let foreign = s.orgs[1].collection_id.clone();
+    let folder = s.folders[0].clone();
+    for form in [
+        Form::Standard, // Exact current revision.
+        Form::RevisionFuture,
+        Form::RevisionMalformed,
+        Form::RevisionMissing,
+        Form::RevisionNull,
+    ] {
+        let trial = s.trial(
+            0,
+            0,
+            0,
+            std::slice::from_ref(&valid),
+            form,
+            Some(folder.clone()),
+        )?;
+        require(
+            trial.before_revisions[0] != trial.after_revisions[0]
+                && trial.before_revisions[1] != trial.after_revisions[1]
+                && trial.before["revisionDate"] != trial.after["revisionDate"]
+                && trial.before["creationDate"] == trial.after["creationDate"],
+            "Accepted revision form lost payload or account revision effects",
+        )?;
+        let payload = trial.payload.clone();
+        trial.success(Some(&target), std::slice::from_ref(&valid), Some(&folder))?;
+        for field in ["name", "notes"] {
+            require(
+                fixture::decrypt(text(&payload[field])?, &s.orgs[0].key)
+                    .map_err(|_| Error("Sharing revision ciphertext decryption failed"))?
+                    == NOTE.as_bytes(),
+                "Accepted revision form changed encrypted content",
+            )?;
+        }
+    }
+    let message = |reply: &Reply| -> Result<Value, Error> {
+        let value: Value = serde_json::from_slice(&reply.bytes)
+            .map_err(|_| Error("Sharing rejection category was not JSON"))?;
+        require(
+            value["message"].is_string(),
+            "Sharing rejection category missing",
+        )?;
+        // Compare categories only within a target; never log native error text.
+        Ok(value["message"].clone())
+    };
+    let mut older_message = None;
+    let mut foreign_message = None;
+    for (ids, form, freshness_error) in [
+        (vec![valid.clone()], Form::RevisionOlder, true),
+        (
+            vec![valid.clone(), foreign.clone()],
+            Form::RevisionOlder,
+            false,
+        ),
+        (vec![valid.clone(), foreign.clone()], Form::Standard, false),
+    ] {
+        let mut trial = s.trial(0, 0, 0, &ids, form, Some(folder.clone()))?;
+        let category = message(&trial.reply)?;
+        if freshness_error {
+            older_message = Some(category);
+        } else if let Some(previous) = &foreign_message {
+            require(
+                previous == &category,
+                "Freshness ran before collection rejection",
+            )?;
+        } else {
+            foreign_message = Some(category);
+        }
+        trial.reply.rejected(400)?;
+        trial.before["collectionIds"] = json!([valid]);
+        require(
+            trial.before == trial.after
+                && trial.before_revisions[0] != trial.after_revisions[0]
+                && trial.before_revisions[1] != trial.after_revisions[1],
+            "Revision or selection rejection lost prior associations or rewrote cipher data",
+        )?;
+        let sync = s.get(0, "/api/sync")?;
+        let list = s.get(0, "/api/ciphers")?;
+        require(
+            unique_cipher(&sync["ciphers"], &trial.id)? == &trial.after
+                && unique_cipher(&list["data"], &trial.id)? == &trial.after,
+            "Rejected sharing prefix changed Owner alias projection",
+        )?;
+        let recipient = s.token(1);
+        s.http
+            .raw(
+                Method::GET,
+                &format!("/api/ciphers/{}", trial.id),
+                &recipient,
+                None,
+            )?
+            .rejected(400)?;
+        let sync = s.get(1, "/api/sync")?;
+        let list = s.get(1, "/api/ciphers")?;
+        absent(&sync["ciphers"], &trial.id)?;
+        absent(&list["data"], &trial.id)?;
+    }
+    require(
+        older_message != foreign_message,
+        "Revision and collection rejection categories collapsed",
+    )?;
+    let trial = s.trial(
+        0,
+        0,
+        0,
+        &[foreign, valid.clone()],
+        Form::RevisionOlder,
+        Some(folder.clone()),
+    )?;
+    require(
+        Some(message(&trial.reply)?) == foreign_message,
+        "Older revision hid first collection rejection",
+    )?;
+    trial.unchanged(400)?;
+    for form in [Form::NullOrgRevisionOlder, Form::MissingOrgRevisionOlder] {
+        let trial = s.trial(
+            0,
+            0,
+            0,
+            std::slice::from_ref(&valid),
+            form,
+            Some(folder.clone()),
+        )?;
+        require(
+            Some(message(&trial.reply)?) == older_message,
+            "Personal branch older-date rejection category differed",
+        )?;
+        trial.unchanged(400)?;
+    }
+    let trial = s.trial(
+        0,
+        0,
+        0,
+        std::slice::from_ref(&valid),
+        Form::NullOrgRevisionEqual,
+        Some(folder.clone()),
+    )?;
+    require(
+        trial.before_revisions[0] != trial.after_revisions[0]
+            && trial.before_revisions[1] == trial.after_revisions[1]
+            && trial.before["revisionDate"] != trial.after["revisionDate"]
+            && trial.before["creationDate"] == trial.after["creationDate"],
+        "Personal null-organization branch added target revision effects",
+    )?;
+    let payload = trial.payload.clone();
+    trial.success(None, &[], Some(&folder))?;
+    let key = fixture::fixture_user_key(&s.accounts[0].fixture, &s.accounts[0].password)
+        .map_err(|_| Error("Sharing personal revision key unwrap failed"))?;
+    require(
+        fixture::decrypt(text(&payload["notes"])?, &key)
+            .map_err(|_| Error("Sharing personal revision decryption failed"))?
+            == NOTE.as_bytes(),
+        "Personal null-organization revision path changed encrypted content",
+    )?;
+    for actor in 0..2 {
+        let control = s.get(
+            actor,
+            &format!("/api/ciphers/{}", s.accounts[actor].cipher_id),
+        )?;
+        let keys = s.get(actor, "/api/accounts/keys")?;
+        require(
+            control == s.controls[actor] && keys == s.keys[actor],
+            "Revision sharing changed personal controls or account keys",
+        )?;
+    }
+    Ok(())
+}
+
 fn setup() -> Result<Suite, Error> {
     let mut http = Http::new()?;
     let accounts = vec![
