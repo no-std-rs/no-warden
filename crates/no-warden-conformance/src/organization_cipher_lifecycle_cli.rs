@@ -449,6 +449,14 @@ pub fn run() -> Result<(), Error> {
                     &accounts[viewer].token,
                     None,
                 )?;
+                require(
+                    if deleted {
+                        doc["deletedDate"].is_string()
+                    } else {
+                        doc["deletedDate"].is_null()
+                    },
+                    "Lifecycle CLI direct viewer deletion state differed",
+                )?;
                 let mut wanted = baseline[viewer].clone();
                 if lifecycle {
                     wanted["deletedDate"] = doc["deletedDate"].clone();
@@ -470,7 +478,13 @@ pub fn run() -> Result<(), Error> {
             let v = c.json(&["get", "item", &owner.cipher_id], cache, session)?;
             check(&v, actor, deleted, archived)?;
             if deleted {
-                let rows = c.json(&["list", "items", "--trash"], cache, session)?;
+                // Pinned ListCommand applies Trash AND Archive filters together.
+                let args: &[&str] = if archived {
+                    &["list", "items", "--trash", "--archived"]
+                } else {
+                    &["list", "items", "--trash"]
+                };
+                let rows = c.json(args, cache, session)?;
                 let row = rows
                     .as_array()
                     .and_then(|a| a.iter().find(|v| v["id"] == owner.cipher_id))
