@@ -656,9 +656,9 @@ selected personal item before an atomic commit; missing or inaccessible members
 return 400. Native errors can retain earlier effects; those other lifecycle
 batches retain stronger local rollback. Selected archive/unarchive instead use
 READ-first, separately committed steps with eligible durable subsets, described
-in [shared archive annotations](#shared-cipher-archive-annotations). Existing
-single-item trash/restore/permanent-delete handlers retain their earlier 404
-policy. These narrower permission and failure contracts remain explicit limits.
+in [shared archive annotations](#shared-cipher-archive-annotations). Shared single-item Trash/restore/permanent deletion now follows the
+[current-WRITE contract](#shared-single-cipher-trash-restore-and-permanent-deletion),
+including business400 denials and native POSTrestore404. These narrower permission and failure contracts remain explicit limits.
 
 Archive state is independent of trash state. Archive/unarchive updates the
 account revision without changing the cipher's revision. Ordinary cipher
@@ -1626,3 +1626,11 @@ Both actual targets pass six HTTP cases/605 requests plus 4 registrations and a 
 ## Shared cipher archive annotations
 
 Six paired HTTP cases/1115 requests plus four registrations and actual CLI 39/57 direct setup/control plus four registrations verify this secure-note subset. Owner/readonly recipient archive/unarchive and fresh decryption preserve private/common state; single current-reader and selected actor-only revisions differ. Mixed invalid selections may retain an eligible subset. No captured trace, single-route CLI caller, general browser, capacity/concurrency or full endpoint parity claim. See [limits](api-parity.md#shared-cipher-archive-annotations).
+
+## Shared single-cipher Trash, restore and permanent deletion
+
+Six paired actual HTTP cases/812 counted requests plus four registrations and actual CLI 63/101 direct setup/control plus four registrations verify this attachment-free secure-note subset. Owner/writable recipient Trash/restore, deleted+archived priority, selected unarchive and fresh decryption preserve private/common/key state. Backend readonly-manage WRITE differs from false GET flags. Current-reader revisions, exact empty replies/known30 Restore and POSTrestore404 are scoped controls. No captured CLI trace, shared permanent-delete CLI, general browser/concurrency/capacity or full endpoint claim. See [limits](api-parity.md#shared-single-cipher-trash-restore-and-permanent-deletion).
+
+## Shared selected-cipher Trash, restore and permanent deletion
+
+6pairedHTTP/4648+12registration and actualCLIobserver47/62+4registration verify currentWRITE/privatearchive/opaque/currentREADERS contracts with durable authorized partial subsets. Separate strict paired writableRecipient two-note Web multi-select proof uses4emptycontexts and4ids-only mutations, exactRestore list rows; mandatorypersonalWeb10 unchanged. No productionselectedCLI mutationcaller/capturedtrace/order/concurrency/capacity/attachments/groups/fullparity claim. See [limits](api-parity.md#shared-selected-cipher-trash-restore-and-permanent-deletion).
