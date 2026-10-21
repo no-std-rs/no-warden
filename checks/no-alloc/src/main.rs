@@ -14,6 +14,10 @@ use no_warden::{
     devices::{DeviceRecord, PendingDeviceAuthRequest},
     domains::{DomainProjection, DomainSettingsView, GlobalDomain},
     identity::Secret,
+    organization_cipher_archive::{
+        CipherArchiveOperation, CipherArchiveRevisionEffect, CipherArchiveStorage,
+        ValidatedCipherArchive,
+    },
     organization_cipher_bulk_sharing::{
         CipherBulkSharingData, OrganizationCipherBulkSharingStorage, ValidatedCipherBulkShare,
         ValidatedCipherBulkShareAssociation, resolve_bulk_cipher_source_write_access,
@@ -159,6 +163,11 @@ struct PurgeProbe {
     partial_favorite: bool,
     partial_folder: bool,
     partial_account_revision: u64,
+    archive_annotations: [Option<u64>; 2],
+    archive_actor_revision: u64,
+    archive_reader_revision: u64,
+    archive_clock: u64,
+    archive_commits: usize,
 }
 impl PurgeProbe {
     fn organization_record(&self) -> OrganizationRecord<'_> {
@@ -358,6 +367,95 @@ impl CipherCollectionAccessData for PartialFacts {
                 manage: false,
             },
         })
+    }
+}
+// Separate archive consumer: shared readonly and personal source facts remain
+// stack-owned; no common cipher or encrypted document mutation exists here.
+impl CipherArchiveStorage for PurgeProbe {
+    type ArchiveId = &'static str;
+    type ArchiveAccess = PartialFacts;
+    fn cipher_archive_source(
+        &mut self,
+        cipher: &str,
+    ) -> Result<Option<CipherSharingSource<Self::ArchiveId>>, ()> {
+        Ok(match cipher {
+            "embedded-archive-shared" => Some(CipherSharingSource {
+                id: "embedded-archive-shared",
+                owner_id: None,
+                organization_id: Some("embedded-org"),
+                revision: "unchanged-archive-revision",
+            }),
+            "embedded-archive-personal" => Some(CipherSharingSource {
+                id: "embedded-archive-personal",
+                owner_id: Some("embedded-owner"),
+                organization_id: None,
+                revision: "unchanged-archive-revision",
+            }),
+            _ => None,
+        })
+    }
+    fn cipher_archive_membership(
+        &mut self,
+        actor: &str,
+        org: &str,
+    ) -> Result<Option<CipherSharingMembership<Self::ArchiveId>>, ()> {
+        self.cipher_partial_membership(actor, org)
+    }
+    fn cipher_archive_collections(
+        &mut self,
+        _: &str,
+        source: &CipherSharingSource<Self::ArchiveId>,
+    ) -> Result<Self::ArchiveAccess, ()> {
+        Ok(PartialFacts {
+            shared: source.organization_id.is_some(),
+        })
+    }
+    fn commit_cipher_archive(
+        &mut self,
+        plan: &ValidatedCipherArchive<'_, Self::ArchiveId>,
+    ) -> Result<(), ()> {
+        // Every live admission precedes even the first staged annotation change.
+        for index in 0..plan.len() {
+            let target = plan.target(index).ok_or(())?;
+            let source = self.cipher_archive_source(target.cipher_id())?.ok_or(())?;
+            let member = match source.organization_id {
+                Some(org) => self.cipher_archive_membership(plan.actor(), org)?,
+                None => None,
+            };
+            let access = self.cipher_archive_collections(plan.actor(), &source)?;
+            target
+                .validate_live(
+                    &source,
+                    member.as_ref().map(CipherSharingMembership::view),
+                    &access,
+                )
+                .map_err(|_| ())?;
+        }
+        let mut annotations = self.archive_annotations;
+        let mut clock = self.archive_clock;
+        let mut shared = false;
+        for index in 0..plan.len() {
+            let target = plan.target(index).ok_or(())?;
+            let slot = match target.cipher_id() {
+                "embedded-archive-shared" => 0,
+                "embedded-archive-personal" => 1,
+                _ => return Err(()),
+            };
+            shared |= target.organization_id().is_some();
+            clock += 1;
+            annotations[slot] = match plan.operation() {
+                CipherArchiveOperation::Archive => Some(clock),
+                CipherArchiveOperation::Unarchive => None,
+            };
+        }
+        self.archive_annotations = annotations;
+        self.archive_clock = clock;
+        self.archive_actor_revision += 1;
+        if shared && plan.revision_effect() == CipherArchiveRevisionEffect::CurrentReaders {
+            self.archive_reader_revision += 1;
+        }
+        self.archive_commits += 1;
+        Ok(())
     }
 }
 impl CipherPartialStorage for PurgeProbe {
@@ -1890,6 +1988,11 @@ pub extern "C" fn _start() -> ! {
             partial_favorite: true,
             partial_folder: false,
             partial_account_revision: 0,
+            archive_annotations: [None; 2],
+            archive_actor_revision: 0,
+            archive_reader_revision: 0,
+            archive_clock: 0,
+            archive_commits: 0,
         };
         let organization = OrganizationCreateRequest {
             billing_email: "owner@example.com",
@@ -1930,6 +2033,36 @@ pub extern "C" fn _start() -> ! {
                     organization_service.storage().partial_account_revision,
                 ));
             }
+        }
+        // Existing bounded ID decoder + real opt-in archive service. Duplicate
+        // and empty selections, late missing admission and SINGLE fanout all link.
+        for body in [
+            br#"{"ids":["embedded-archive-shared","embedded-archive-personal","embedded-archive-shared"]}"#.as_slice(),
+            br#"{"ids":[]}"#.as_slice(),
+            br#"{"ids":["embedded-archive-shared","missing"]}"#.as_slice(),
+        ] {
+            if let Ok((request, _)) = serde_json_core::from_slice::<CipherIdsRequest<'_, 3>>(black_box(body)) {
+                let mut ids = [""; 3];
+                let mut sources = [const { None }; 3];
+                let result = organization_service.archive_selected_ciphers("embedded-owner", CipherArchiveOperation::Archive, request.ids.iter().copied(), &mut ids, &mut sources);
+                black_box((result.is_ok(), organization_service.storage().archive_commits, organization_service.storage().archive_actor_revision, organization_service.storage().archive_reader_revision));
+            }
+        }
+        for operation in [
+            CipherArchiveOperation::Archive,
+            CipherArchiveOperation::Unarchive,
+        ] {
+            let result = organization_service.archive_cipher(
+                "embedded-owner",
+                black_box("embedded-archive-shared"),
+                operation,
+            );
+            black_box((
+                result.is_ok(),
+                organization_service.storage().archive_annotations,
+                organization_service.storage().archive_actor_revision,
+                organization_service.storage().archive_reader_revision,
+            ));
         }
         // The real sharing service retains an association prefix after a later
         // missing selection, then reaches the sealed payload phase on success.

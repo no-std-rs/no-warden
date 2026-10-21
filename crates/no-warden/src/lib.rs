@@ -29,6 +29,7 @@ pub mod error;
 pub mod identity;
 pub mod import;
 pub mod organization_bulk_member_status;
+pub mod organization_cipher_archive;
 pub mod organization_cipher_bulk_sharing;
 pub mod organization_cipher_collections;
 pub mod organization_cipher_partial;

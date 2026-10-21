@@ -70,3 +70,6 @@ pub mod transport;
 pub mod user_key_id;
 pub mod user_key_id_cli;
 pub mod webauthn_credentials;
+
+pub mod organization_cipher_archive;
+pub mod organization_cipher_archive_cli;

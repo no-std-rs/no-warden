@@ -15,6 +15,7 @@ mod domains;
 mod organization_bulk_confirmations;
 mod organization_bulk_member_removal;
 mod organization_bulk_member_status;
+mod organization_cipher_archive;
 mod organization_cipher_bulk_sharing;
 mod organization_cipher_collections;
 mod organization_cipher_partial;
@@ -382,10 +383,20 @@ async fn dispatch_http(
     let bulk = classified == Some(Route::CipherBulkShare);
     let collections = matches!(classified, Some(Route::CipherCollectionsUpdate(_)));
     let partial = matches!(classified, Some(Route::CipherPartial(_)));
+    let archive = matches!(
+        classified,
+        Some(
+            Route::CipherArchive(_)
+                | Route::CipherUnarchive(_)
+                | Route::CipherBulkArchive
+                | Route::CipherBulkUnarchive
+        )
+    );
     match dispatch_with_peer(app, method, uri, headers, body, peer.ip()).await {
         Err(error) if bulk => Ok(organization_cipher_bulk_sharing::render_error(error)),
         Err(error) if collections => Ok(organization_cipher_collections::render_error(error)),
         Err(error) if partial => Ok(organization_cipher_partial::render_error(error)),
+        Err(error) if archive => Ok(organization_cipher_archive::render_error(error)),
         result => result,
     }
 }
@@ -1213,10 +1224,14 @@ async fn dispatch_with_peer(
         Route::CipherBulkTrash => cipher_bulk(route, &owner, &body, &mut store),
         Route::CipherBulkRestore => cipher_bulk(route, &owner, &body, &mut store),
         Route::CipherBulkDelete => cipher_bulk(route, &owner, &body, &mut store),
-        Route::CipherBulkArchive => cipher_bulk(route, &owner, &body, &mut store),
-        Route::CipherBulkUnarchive => cipher_bulk(route, &owner, &body, &mut store),
-        Route::CipherArchive(_) => cipher_bulk(route, &owner, &body, &mut store),
-        Route::CipherUnarchive(_) => cipher_bulk(route, &owner, &body, &mut store),
+        Route::CipherBulkArchive
+        | Route::CipherBulkUnarchive
+        | Route::CipherArchive(_)
+        | Route::CipherUnarchive(_) => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            organization_cipher_archive::dispatch(route, &owner, &body, &mut store)
+        }
         Route::CipherImport => {
             let document: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
             let folders: Vec<ImportFolderRequest<'_>> = document
