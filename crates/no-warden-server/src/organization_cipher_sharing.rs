@@ -154,12 +154,18 @@ fn selected_collection(
     )
     .optional()
 }
+fn associated_collections_sql() -> String {
+    format!(
+        "{COLLECTION_FACTS} JOIN organization_collection_ciphers l ON l.collection_id=c.id WHERE l.cipher_id=?2 ORDER BY c.rowid"
+    )
+}
+
 fn associated_collections(
     db: &Connection,
     user: &str,
     id: &str,
 ) -> rusqlite::Result<Vec<CipherSharingCollection<String>>> {
-    let mut statement = db.prepare(&format!("{COLLECTION_FACTS} JOIN organization_collection_ciphers l ON l.collection_id=c.id WHERE l.cipher_id=?2 ORDER BY c.rowid"))?;
+    let mut statement = db.prepare(&associated_collections_sql())?;
     statement
         .query_map(params![user, id], collection)?
         .collect()
@@ -328,10 +334,10 @@ pub fn project(
 }
 
 // Bound candidate materialization to personal ownership and canonical membership
-// scopes. Historical collection associations do not choose the canonical scope;
-// membership status and effective grants remain independent core decisions.
+// scopes with confirmed membership. Historical collection associations do not
+// choose the canonical scope; core status and grant checks still decide access.
 fn candidate_ids(db: &Connection, user: &str) -> rusqlite::Result<Vec<String>> {
-    let mut statement = db.prepare("SELECT id FROM items WHERE kind='cipher' AND (owner=?1 OR organization_id IN (SELECT organization_id FROM organization_memberships WHERE user_id=?1)) ORDER BY rowid")?;
+    let mut statement = db.prepare("SELECT id FROM items WHERE kind='cipher' AND (owner=?1 OR organization_id IN (SELECT organization_id FROM organization_memberships WHERE user_id=?1 AND status=2)) ORDER BY rowid")?;
     statement
         .query_map([user], |row| row.get::<_, String>(0))?
         .collect()
@@ -715,17 +721,13 @@ mod tests {
             WITH RECURSIVE n(v) AS (VALUES(1) UNION ALL SELECT v+1 FROM n WHERE v<100) INSERT INTO items(id,owner,organization_id,kind,document,revision,created) SELECT 'unrelated-'||v,NULL,'foreign','cipher','{}','r','r' FROM n;").unwrap();
         assert_eq!(
             candidate_ids(&store.db, "alice").unwrap(),
-            [
-                "personal",
-                "historical-grant",
-                "ungranted",
-                "accepted-cipher",
-                "revoked-cipher",
-                "invited-cipher"
-            ]
+            ["personal", "historical-grant", "ungranted"]
         );
-        // Candidate selection is deliberately broader than admission. Core
-        // decisions still reject nonconfirmed members and ungranted sources.
+        // Confirmed membership bounds materialization, while core decisions still
+        // reject ungranted sources and independently verify current status.
+        for id in ["accepted-cipher", "revoked-cipher", "invited-cipher"] {
+            assert!(project(&store.db, "alice", id, false).unwrap().is_none());
+        }
         let rows = list(&store.db, "alice").unwrap();
         assert_eq!(
             rows.iter()
@@ -736,6 +738,59 @@ mod tests {
         assert_eq!(rows[1]["organizationId"], "canonical");
         assert_eq!(rows[1]["collectionIds"], json!(["old-collection"]));
         assert_eq!(rows[1]["edit"], true);
+    }
+
+    #[test]
+    fn cipher_associations_are_indexed_on_new_and_existing_stores() {
+        let store = Store::open(":memory:").unwrap();
+        store.db.execute_batch(
+            "INSERT INTO accounts VALUES('alice','alice@example.test','{}','test','2026-01-01T00:00:00.000Z');
+             INSERT INTO organizations(id,name,billing_email) VALUES('org','opaque','org@example.test');
+             WITH RECURSIVE n(v) AS (VALUES(0) UNION ALL SELECT v+1 FROM n WHERE v<1000)
+             INSERT INTO items(id,owner,organization_id,kind,document,revision,created) SELECT 'cipher-'||v,NULL,'org','cipher','{}','r','r' FROM n;
+             INSERT INTO organization_collections(id,organization_id,name) SELECT 'collection-'||id,'org','opaque' FROM items;
+             INSERT INTO organization_collection_ciphers SELECT 'collection-'||id,id FROM items;",
+        ).unwrap();
+        let lookup = || {
+            let mut statement = store.db.prepare(&associated_collections_sql()).unwrap();
+            let ids = statement
+                .query_map(params!["alice", "cipher-0"], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            assert_eq!(ids, ["collection-cipher-0"]);
+            statement.get_status(rusqlite::StatementStatus::FullscanStep)
+        };
+        assert_eq!(
+            lookup(),
+            0,
+            "new stores must avoid scanning unrelated associations"
+        );
+        // Recreate a pre-index nonempty store, then run the same idempotent
+        // initialization used on reopening it. Existing links remain intact.
+        store
+            .db
+            .execute_batch("DROP INDEX organization_collection_ciphers_cipher")
+            .unwrap();
+        assert!(lookup() >= 1000);
+        for _ in 0..2 {
+            store
+                .db
+                .execute_batch(crate::organization_collections::SCHEMA)
+                .unwrap();
+            assert_eq!(lookup(), 0);
+            assert_eq!(
+                store
+                    .db
+                    .query_row(
+                        "SELECT count(*) FROM organization_collection_ciphers",
+                        [],
+                        |r| r.get::<_, usize>(0)
+                    )
+                    .unwrap(),
+                1001
+            );
+        }
     }
 
     #[test]
