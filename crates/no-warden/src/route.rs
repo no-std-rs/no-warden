@@ -55,6 +55,7 @@ pub enum Route<'a> {
     OrganizationCreate,
     OrganizationGet(&'a str),
     OrganizationMembers(&'a str),
+    OrganizationMemberMiniDetails(&'a str),
     OrganizationInvite(&'a str),
     OrganizationMemberPublicKeys(&'a str),
     OrganizationMemberConfirm(&'a str, &'a str),
@@ -249,6 +250,16 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                     }
                     return match (method, action) {
                         (Get, "users") => Some(OrganizationMembers(organization)),
+                        (Get, "users/mini-details") => {
+                            Some(OrganizationMemberMiniDetails(organization))
+                        }
+                        (Get, action)
+                            if action.strip_prefix("users/").is_some_and(|segment| {
+                                encoded_literal_matches(segment, b"mini-details")
+                            }) =>
+                        {
+                            Some(OrganizationMemberMiniDetails(organization))
+                        }
                         (Delete, "users") => Some(OrganizationBulkMemberDelete(organization)),
                         (Post, "users/invite") => Some(OrganizationInvite(organization)),
                         (Post, "users/public-keys") => {
@@ -470,6 +481,33 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
     }
 }
 
+// Rocket matches percent-encoded static segment characters before its ranked
+// dynamic member UUID route. Compare this literal without decoding any IDs.
+fn encoded_literal_matches(segment: &str, literal: &[u8]) -> bool {
+    fn hex(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+    let mut input = segment.bytes();
+    for expected in literal {
+        let decoded = match input.next() {
+            Some(b'%') => match (input.next().and_then(hex), input.next().and_then(hex)) {
+                (Some(high), Some(low)) => Some(high * 16 + low),
+                _ => None,
+            },
+            byte => byte,
+        };
+        if decoded != Some(*expected) {
+            return false;
+        }
+    }
+    input.next().is_none()
+}
+
 fn valid_segment(segment: &str) -> bool {
     !segment.is_empty()
         && segment != "."
@@ -508,6 +546,54 @@ mod tests {
         ] {
             assert_eq!(classify(Method::Post, uri), None);
         }
+    }
+
+    #[test]
+    fn mini_member_literal_takes_precedence_over_dynamic_member_get() {
+        for org in ["org", "bad.id", "%30org", "malformed%"] {
+            let uri = std::format!(
+                "/api/organizations/{org}/users/mini-details/?includeCollections=true"
+            );
+            let route = Route::OrganizationMemberMiniDetails(org);
+            assert_eq!(classify(Method::Get, &uri), Some(route));
+            assert!(route.requires_authentication());
+            assert_eq!(classify(Method::Post, &uri), None);
+            assert_eq!(classify(Method::Put, &uri), None);
+            assert_eq!(
+                classify(Method::Delete, &uri),
+                Some(Route::OrganizationMemberDelete(org, "mini-details"))
+            );
+            assert_eq!(
+                classify(
+                    Method::Get,
+                    &std::format!("/api/organizations/{org}/users/member")
+                ),
+                Some(Route::OrganizationMember(org, "member"))
+            );
+        }
+        assert_eq!(
+            classify(Method::Get, "/api/organizations//users/mini-details"),
+            None
+        );
+        assert_eq!(
+            classify(
+                Method::Get,
+                "/api/organizations/org/users/mini-details/extra"
+            ),
+            None
+        );
+        for literal in ["%6dini-details", "mini%2ddetails", "%6D%69ni-details"] {
+            assert_eq!(
+                classify(
+                    Method::Get,
+                    &std::format!("/api/organizations/org/users/{literal}")
+                ),
+                Some(Route::OrganizationMemberMiniDetails("org"))
+            );
+        }
+        assert!(!encoded_literal_matches("mini%2fdetails", b"mini-details"));
+        assert!(!encoded_literal_matches("mini%2", b"mini-details"));
+        assert!(!encoded_literal_matches("mini-details%", b"mini-details"));
     }
 
     #[test]
@@ -630,7 +716,7 @@ mod tests {
         }
         assert_eq!(
             classify(Method::Get, "/api/organizations/org/users/mini-details"),
-            None
+            Some(Route::OrganizationMemberMiniDetails("org"))
         );
         assert_eq!(
             classify(Method::Post, "/api/organizations/org/users/confirm"),
@@ -821,8 +907,6 @@ mod tests {
         }
         for path in [
             "/api/organizations//users/member",
-            "/api/organizations/org/users/mini-details",
-            "/api/organizations/org/users/mini-details/?includeGroups=true",
             "/api/organizations/org/users/member/details",
         ] {
             assert_eq!(classify(Method::Get, path), None);
@@ -856,7 +940,6 @@ mod tests {
         for path in [
             "/api/organizations//users",
             "/api/organizations/org/users/member/unsupported",
-            "/api/organizations/org/users/mini-details",
             "/api/organizations/org/users/member/details",
         ] {
             assert_eq!(classify(Method::Get, path), None);

@@ -1,7 +1,7 @@
 //! Independently authored official CLI confirmed-owner member discovery proof.
 //! Calls are established by pinned source; this runner captures no HTTP trace.
 use crate::{
-    capture, organization_collections,
+    capture, organization_collections, organization_member_mini_details as mini,
     organization_members::{self, AVATAR, MEMBER_NAME},
     organization_owner::{self, Http, Organization},
     text_sends::{TextSendsError as Error, receipt_file, require, text, write_receipt},
@@ -20,6 +20,47 @@ use tempfile::TempDir;
 
 pub const COMMAND_COUNT: usize = 18;
 pub const DIRECT_HTTP_REQUEST_COUNT: usize = 18;
+#[derive(Clone, Copy)]
+pub(crate) enum MemberObservation {
+    Full,
+    Mini,
+}
+impl MemberObservation {
+    fn request_count(self) -> usize {
+        DIRECT_HTTP_REQUEST_COUNT + if matches!(self, Self::Mini) { 3 } else { 0 }
+    }
+    fn receipt_environment(self) -> &'static str {
+        match self {
+            Self::Full => "BW_ORGANIZATION_MEMBERS_CLI_RECEIPT",
+            Self::Mini => "BW_ORGANIZATION_MEMBER_MINI_DETAILS_CLI_RECEIPT",
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Full => "organization-members",
+            Self::Mini => "organization-member-mini-details",
+        }
+    }
+    fn observe(
+        self,
+        http: &mut Http,
+        org: &Organization,
+        account: &organization_owner::Account,
+        cli_row: &Value,
+    ) -> Result<(), Error> {
+        if matches!(self, Self::Mini) {
+            let value = http.json(
+                reqwest::Method::GET,
+                &mini::path(&org.id),
+                &account.token,
+                None,
+            )?;
+            let expected = json!({"object":"organizationUserUserMiniDetails","id":cli_row["id"],"userId":account.user_id,"email":cli_row["email"],"name":cli_row["name"],"status":cli_row["status"],"type":cli_row["type"]});
+            mini::check_projection(&value, &[expected])?;
+        }
+        Ok(())
+    }
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AlreadyConfirmedResponse {
@@ -39,6 +80,7 @@ fn validate_already_confirmed(exit_code: Option<i32>, output: &[u8]) -> Result<(
     )
 }
 struct Cli {
+    observation: MemberObservation,
     binary: PathBuf,
     environment: BTreeMap<OsString, OsString>,
     commands: usize,
@@ -57,10 +99,13 @@ impl Drop for Cli {
 }
 impl Cli {
     fn receipt(&mut self, status: &str) -> Result<(), Error> {
-        write_receipt(
-            &mut self.receipt,
-            &json!({"schemaVersion":1,"status":status,"commands":self.commands,"expectedCommands":COMMAND_COUNT,"cliVersion":"2026.10.0","cliPasswordLoginCommands":self.logins,"alreadyConfirmedChecks":self.confirmed_checks,"expectedAlreadyConfirmedChecks":2,"successfulConfirmationClaimed":false,"directPasswordLoginRequests":1,"directHttpRequests":self.direct_requests,"expectedDirectHttpRequests":DIRECT_HTTP_REQUEST_COUNT,"fixtureRegistrations":1,"fixtureRegistrationHttpRequests":2,"separateFromBaseline120":true,"clientInternalRequestsCounted":false,"capturedRouteTrace":false}),
-        )
+        let mut value = json!({"schemaVersion":1,"status":status,"commands":self.commands,"expectedCommands":COMMAND_COUNT,"cliVersion":"2026.10.0","cliPasswordLoginCommands":self.logins,"alreadyConfirmedChecks":self.confirmed_checks,"expectedAlreadyConfirmedChecks":2,"successfulConfirmationClaimed":false,"directPasswordLoginRequests":1,"directHttpRequests":self.direct_requests,"expectedDirectHttpRequests":self.observation.request_count(),"fixtureRegistrations":1,"fixtureRegistrationHttpRequests":2,"separateFromBaseline120":true,"clientInternalRequestsCounted":false,"capturedRouteTrace":false});
+        if matches!(self.observation, MemberObservation::Mini) {
+            value["cliMiniDetailsCallerClaimed"] = json!(false);
+            value["browserTraceClaimed"] = json!(false);
+            value["directMiniDetailsReads"] = json!(3);
+        }
+        write_receipt(&mut self.receipt, &value)
     }
     fn command(
         &mut self,
@@ -229,6 +274,9 @@ fn normalize_cli(mut value: Value) -> Result<Value, Error> {
     Ok(value)
 }
 pub fn run() -> Result<(), Error> {
+    run_mode(MemberObservation::Full)
+}
+pub(crate) fn run_mode(observation: MemberObservation) -> Result<(), Error> {
     let cache = private_dir("no-warden-members-cli-")?;
     let fresh = private_dir("no-warden-members-cli-fresh-")?;
     let tls = private_dir("no-warden-members-cli-tls-")?;
@@ -243,6 +291,7 @@ pub fn run() -> Result<(), Error> {
     )?;
     let membership_id = organization_members::membership_id(&profile, &organization.id)?.to_owned();
     let mut expected_member = json!({"object":"org-member","id":membership_id,"email":account.fixture["email"],"name":profile["name"],"status":2,"type":0,"twoFactorEnabled":false});
+    observation.observe(&mut http, &organization, &account, &expected_member)?;
     let mut expected_personal = normalize_cli(http.personal(&account.token)?)?;
     let proxy = if http.server.starts_with("http:") {
         Some(
@@ -284,13 +333,14 @@ pub fn run() -> Result<(), Error> {
         );
     }
     let mut c = Cli {
+        observation,
         binary,
         environment,
         commands: 0,
         logins: 0,
         confirmed_checks: 0,
         direct_requests: None,
-        receipt: receipt_file("BW_ORGANIZATION_MEMBERS_CLI_RECEIPT")?,
+        receipt: receipt_file(observation.receipt_environment())?,
         finished: false,
     };
     c.receipt("running")?;
@@ -355,6 +405,7 @@ pub fn run() -> Result<(), Error> {
         single == full_rows[0],
         "Member CLI single-member control differed from list member",
     )?;
+    observation.observe(&mut http, &organization, &account, &expected_member)?;
     // No intervening sync: the real command must report the fresh server name.
     // Its seven-field public output does not include avatarColor; the HTTP control above does.
     c.members(&organization, &expected_member, cache.path(), &session)?;
@@ -384,6 +435,7 @@ pub fn run() -> Result<(), Error> {
     )?;
     c.note(&account.cipher_id, fresh.path(), &session)?;
     c.command(&["logout"], fresh.path(), Some(&session))?;
+    observation.observe(&mut http, &organization, &account, &expected_member)?;
     require(
         normalize_cli(http.personal(&account.token)?)? == expected_personal,
         "Member CLI flow changed unrelated personal keys, ciphertext or settings",
@@ -393,14 +445,15 @@ pub fn run() -> Result<(), Error> {
             && c.logins == 2
             && c.confirmed_checks == 2
             && http.logins == 1
-            && http.requests == DIRECT_HTTP_REQUEST_COUNT,
+            && http.requests == observation.request_count(),
         "Member CLI command or identity budget differed",
     )?;
     c.direct_requests = Some(http.requests);
     c.receipt("passed")?;
     c.finished = true;
     println!(
-        "PASS organization-members CLI: {COMMAND_COUNT} commands, 2 CLI logins, 1 direct setup login"
+        "PASS {} CLI: {COMMAND_COUNT} commands, 2 CLI logins, 1 direct setup login",
+        observation.label()
     );
     Ok(())
 }

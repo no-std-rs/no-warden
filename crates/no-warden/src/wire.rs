@@ -2118,6 +2118,10 @@ impl core::fmt::Debug for OrganizationCreateRequest<'_> {
 pub type OrganizationMemberListResponse<L> =
     crate::organization_members::OrganizationMemberListResponse<L>;
 
+/// Minimal seven-field member rows inside the explicit list envelope.
+pub type OrganizationMemberMiniDetailsResponse<L> =
+    crate::organization_member_mini_details::OrganizationMemberMiniDetailsResponse<L>;
+
 /// Single public membership response backed by the same caller-owned indexed view.
 pub type OrganizationMemberResponse<L> = crate::organization_members::OrganizationMemberResponse<L>;
 

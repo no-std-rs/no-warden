@@ -131,6 +131,8 @@ jobs:
           target/conformance/no-warden-http-conformance --suite organization-bulk-member-status-cli
           target/conformance/no-warden-http-conformance --suite organization-member-public-keys
           target/conformance/no-warden-http-conformance --suite organization-member-public-keys-cli
+          target/conformance/no-warden-http-conformance --suite organization-member-mini-details
+          target/conformance/no-warden-http-conformance --suite organization-member-mini-details-cli
           target/conformance/no-warden-http-conformance --suite account-kdf-cli
           target/conformance/no-warden-http-conformance --suite account-password-cli
           bash tools/e2e.sh

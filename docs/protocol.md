@@ -1821,9 +1821,9 @@ Organization path/query selection retains the existing guard order; there is
 no target-member query fallback. Valid missing and foreign membership IDs both
 return 400 with `The specified user isn't a member of the organization`,
 because lookup is scoped to both organization and membership. GET bodies are
-ignored. The rank-one `users/mini-details` route remains a distinct
-unimplemented handler; other method-only literals do not shadow the rank-two
-GET member route.
+ignored. The rank-one `users/mini-details` route has a separate
+[verified mini projection](api-parity.md#organization-member-mini-details-subset);
+other method-only literals do not shadow the rank-two GET member route.
 
 The direct response reuses all nineteen member fields and privacy rules from
 [member discovery](#organization-member-discovery), without a list envelope.

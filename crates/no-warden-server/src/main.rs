@@ -17,6 +17,7 @@ mod organization_bulk_member_status;
 mod organization_collections;
 mod organization_confirmations;
 mod organization_invitations;
+mod organization_member_mini_details;
 mod organization_member_public_keys;
 mod organization_member_removal;
 mod organization_member_status;
@@ -869,6 +870,15 @@ async fn dispatch_with_peer(
             let query = organization_members::detail_query(uri.query());
             Ok(
                 Json(VaultService::new(&mut *store).get_org_member(&owner, &org, &member, &query)?)
+                    .into_response(),
+            )
+        }
+        Route::OrganizationMemberMiniDetails(raw) => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let org = organization_members::path(&mut store, &owner, raw, uri.query())?;
+            Ok(
+                Json(VaultService::new(&mut *store).list_org_member_mini_details(&owner, &org)?)
                     .into_response(),
             )
         }

@@ -55,6 +55,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Bulk member removal | Ordered independent item commits, exact results and intentional self-removal continuation | Six matching HTTP cases and 25 matching official CLI state/decryption commands after HTTP setup on both targets; no bulk caller or trace claim |
 | Single member revoke/restore | Bodyless status transitions preserve keys/grants and recover selective visibility | Six matching HTTP cases and 31 matching CLI observation commands on both actual targets; no mutation caller or trace claim |
 | Organization member public-key batches | Ordered scoped public-only rows, null-key retention and unfiltered target states/roles | Six matching HTTP cases (431 requests) and 16 matching official CLI fingerprint/decryption commands on both targets; no bulk CLI caller or browser trace claim |
+| Organization member mini-details | Seven-field read-only metadata, unfiltered names/native states, restricted Manager admission | Six matching HTTP cases (619 requests) and 18 matching official CLI observation commands on both targets; no mini CLI caller/browser trace |
 | Single organization-collection update/delete | Complete grant replacement, opaque names, whitespace external-ID clearing and preserved cipher data | Allocation-free core and local rollback/cascade tests; six matching HTTP cases and twenty matching official CLI commands on both actual targets |
 | Organization-scoped collection list/create/single access-details | Confirmed manager authorization, exact projections, opaque names/external IDs and reference validation | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers; atomic local provider tests |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
@@ -1425,3 +1426,40 @@ association checks have local evidence, not complete upstream backend timing
 parity. Configured policies/groups/SMTP, automatic confirmation, dangling-account
 HTTP and imported unknown states, full transport/error variants and general
 sharing remain open. This handler remains partial.
+## Organization member mini-details
+
+The rank-one mini-details GET has a separate seven-field projection:
+membership `id`, account `userId`, `email`, string `name`, `type`, `status`, and
+`object: "organizationUserUserMiniDetails"`, inside the exact three-field list.
+All native target states remain included. Manager role 3 projects as type 4;
+actual account names remain visible independently of the richer member-list
+filter. Native invited placeholders expose their stored email name, and live
+Unicode/NUL and empty-name updates are preserved.
+
+Confirmed Owner/Admin/Manager authority is independent of `access_all`; a
+restricted Manager admitted here still receives 404 from the richer list.
+Ordinary User and Accepted/Revoked Admin actors are denied. Current-device,
+organization/path/query admission, ignored GET bodies/irrelevant query flags,
+encoded static literals, scope and read-preservation checks are compared.
+The adjacent reference PUT UUID behavior belongs to the unimplemented member-edit
+family and is excluded from this GET-only matched matrix.
+
+Both no-warden and Vaultwarden 1.37.4 pass six focused HTTP cases:
+619 counted requests plus 6 registration
+requests, 2 password logins and 2
+refreshes per target. The separate official CLI 2026.10.0 observer passes
+18 commands on each, with 21 direct HTTP requests
+plus 2 registration requests,
+2 CLI logins and 1 direct
+setup login. Three mini GET controls compare metadata around the existing full-
+member CLI live-name/fresh-cache flow. The existing argv patterns and two
+already-confirmed negatives are reused.
+
+Bundled shared mini API/model source is distinct from a production CLI caller,
+browser mini flow or captured request trace. No such attribution is claimed.
+The reusable core and linked no-allocator consumer use minimal stable indexed
+records, without keys or ACL traversal. Imported unknown states, configured
+groups/policies, dangling-account/backend variants, full failure/transport
+semantics, editing and general sharing remain partial. See the
+[API parity notes](api-parity.md#organization-member-mini-details-subset) for scope
+and the actual/source evidence distinction.

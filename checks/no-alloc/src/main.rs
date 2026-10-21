@@ -29,6 +29,9 @@ use no_warden::{
         InvitationPolicy, InvitationTarget, InviteCommit, OrganizationInvitationStorage,
         OrganizationInviteData, ValidatedOrganizationInvite,
     },
+    organization_member_mini_details::{
+        OrganizationMemberMiniData, OrganizationMemberMiniRecord, OrganizationMemberMiniStorage,
+    },
     organization_member_public_keys::{
         OrganizationMemberPublicKeyLookup, OrganizationMemberPublicKeyRecord,
         OrganizationMemberPublicKeyStorage,
@@ -838,7 +841,7 @@ impl OrganizationMemberListData for OrganizationMembersProbe<'_> {
         }
     }
     fn get(&self, index: usize) -> Option<OrganizationMemberRecord<'_>> {
-        if index >= self.len() {
+        if index >= OrganizationMemberListData::len(self) {
             return None;
         }
         let index = self.1.unwrap_or(index);
@@ -895,6 +898,32 @@ impl OrganizationMemberListData for OrganizationMembersProbe<'_> {
 impl OrganizationMemberStorage for PurgeProbe {
     type Members<'a> = OrganizationMembersProbe<'a>;
     fn organization_members(&mut self, org: &str) -> Result<Self::Members<'_>, ()> {
+        if org != "embedded-org" {
+            return Err(());
+        }
+        Ok(OrganizationMembersProbe(self, None))
+    }
+}
+impl OrganizationMemberMiniData for OrganizationMembersProbe<'_> {
+    fn len(&self) -> usize {
+        OrganizationMemberListData::len(self)
+    }
+    fn get(&self, index: usize) -> Option<OrganizationMemberMiniRecord<'_>> {
+        let row = OrganizationMemberListData::get(self, index)?;
+        Some(OrganizationMemberMiniRecord {
+            membership_id: row.membership_id,
+            organization_id: row.organization_id,
+            user_id: row.user_id,
+            email: row.email,
+            name: row.name.unwrap_or(""),
+            role: row.role,
+            status: row.status,
+        })
+    }
+}
+impl OrganizationMemberMiniStorage for PurgeProbe {
+    type MiniMembers<'a> = OrganizationMembersProbe<'a>;
+    fn organization_member_mini_details(&mut self, org: &str) -> Result<Self::MiniMembers<'_>, ()> {
         if org != "embedded-org" {
             return Err(());
         }
@@ -1408,6 +1437,19 @@ pub extern "C" fn _start() -> ! {
                 "embedded-added-collection",
             ));
         }
+        // The mini view has its own provider/serializer and never traverses ACLs.
+        if let Ok(response) =
+            organization_service.list_org_member_mini_details("embedded-owner", "embedded-org")
+        {
+            let _ = black_box(serde_json_core::to_slice(
+                &response,
+                &mut organization_output,
+            ));
+        }
+        black_box(classify(
+            Method::Get,
+            "/api/organizations/embedded-org/users/mini-details",
+        ));
         for query in [
             OrganizationMemberQuery::default(),
             OrganizationMemberQuery {

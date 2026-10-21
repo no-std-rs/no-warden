@@ -1111,3 +1111,26 @@ Both outputs matched Node crypto, and runtime debug/overflow checks remained
 enabled. This is a fixture microbenchmark; total CI runtime also includes real
 client processes and HTTP/server work. KDF parameters and security policies are
 unchanged.
+## Organization member mini-details
+
+The Rust `organization-member-mini-details` suite compares the read-only
+`GET /api/organizations/{org_id}/users/mini-details` contract on both actual
+servers: six cases and 619 requests, excluding three registration fixtures.
+Confirmed Owners, Admins and Managers can read every target membership state;
+restricted Managers do not need full collection access. Exact seven-field rows
+preserve account names, including invited placeholder names, map Manager type
+to 4, and include revoked targets. Tests cover scope, guard precedence, ignored
+body/query values, encoded literals, exact envelopes and preserved authority.
+
+The separate `organization-member-mini-details-cli` observer passes 18 official
+CLI commands and 21 direct HTTP requests per target. Three direct mini reads
+are compared with full-member CLI metadata and fresh names; real note and
+collection decryption survives fresh-cache login. These commands do not call
+the mini endpoint. The existing full-member observer retains its original
+18-command/18-request mode and receipt schema.
+
+The allocation-free core uses a stable minimal provider view and sealed list
+projection, without loading keys or requiring a fixed member limit. Provider
+order does not promise a portable server sort. The adjacent PUT member-edit
+family, groups, notifications and full organization parity remain open; static
+web collection-dialog callers are not executed browser evidence for this route.

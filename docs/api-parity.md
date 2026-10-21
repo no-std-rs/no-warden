@@ -39,25 +39,25 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 120 routed patterns, 63 with typed requests, 113 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 121 routed patterns, 63 with typed requests, 114 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 117 partial and 177 unimplemented. Query/rank/configuration
+status: 118 partial and 176 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
 
-58 local patterns have some typed response representation, including
+59 local patterns have some typed response representation, including
 the domain settings projections and empty mutation response, explicit API-key
 responses, and attachment responses. Bulk cipher lists use the generic `ListResponse`
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 114 patterns, negative
-HTTP evidence for 113, 299 named HTTP cases, and 53 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 115 patterns, negative
+HTTP evidence for 114, 305 named HTTP cases, and 53 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -1351,7 +1351,8 @@ One additional source handler reads an organization-scoped member through an
 opt-in allocation-free provider and sealed direct nineteen-field response.
 Confirmed Owner/Admin admission differs from the list's manager/full-access
 gate. A member's valid missing and foreign IDs have the same scoped 400 error;
-the separate rank-one mini-details handler remains unimplemented. Query
+the separate rank-one mini-details handler is covered by the
+[mini-details subset](#organization-member-mini-details-subset). Query
 options preserve their absence so collection inclusion can inherit the group
 flag.
 
@@ -1695,3 +1696,75 @@ APIs, imported unknown statuses, actual dangling-account/backend failure cases,
 and complete error/transport/body-limit parity remain open. Synthetic local
 provider tests do not establish those actual-server variants. General sharing
 and the full upstream API remain unfinished.
+## Organization member mini-details subset
+
+`GET /api/organizations/{org_id}/users/mini-details` adds the distinct
+rank-one read before the UUID-based member-detail route. Actual Vaultwarden
+1.37.4 black-box observations establish the response, admission and state matrix;
+the pinned server inventory remains a separate source revision. This one handler
+is partial and the full upstream API remains unfinished.
+
+The envelope has exactly `data`, `object: "list"` and `continuationToken: null`.
+Every row has exactly `id` (membership identity), `userId` (account identity),
+`email`, `name`, `type`, `status` and `object: "organizationUserUserMiniDetails"`.
+All native Invited 0, Accepted 1, Confirmed 2 and Revoked -1 target states remain
+included. Stored Manager role 3 projects as type 4. Provider order is preserved;
+the observed SQLite insertion order is not claimed for other backends.
+
+Mini names come from the account, independently of the full member projection's
+status-based name visibility. A native passwordless invitation placeholder has
+its email as its stored name, so mini returns that string while the richer member
+row exposes null. Actual live Unicode/NUL and empty-name profile updates remain strings.
+Revoked target reads retain the existing account name. No key, credential, avatar,
+permission, collection/group or other rich account field appears.
+
+Current-device, confirmed Owner/Admin/Manager admission precedes UUID guards.
+A confirmed restricted Manager without `access_all` can read mini rows; the
+regular nineteen-field member list still returns 404 for that actor. Ordinary
+Users and Accepted/Revoked Admin actors are denied. Foreign/uppercase organization
+paths fail admission; a malformed path with an authorized organization query
+reaches the separate 422 path guard. A valid path wins conflicting query values.
+
+GET bodies are ignored, including invalid JSON/UTF-8 and different media types.
+`includeGroups`, `includeCollections` and unknown query values cannot change the
+seven-field projection. Trailing slashes and encoded static mini-details letters
+or hyphens are matched before the UUID-member route. POST/PATCH unsupported
+methods and the existing DELETE UUID fallback are compared. Reference PUT 422 is
+an observation of the adjacent still-unimplemented member-edit family and is
+excluded from matched GET claims; this slice adds no PUT route or artificial
+fallback for that unimplemented service.
+
+`OrganizationMemberMiniStorage` supplies a stable minimal indexed view through
+`OrganizationMemberMiniData` and `OrganizationMemberMiniRecord`. The core service
+checks confirmed manager authority and validates every row's completeness and
+organization before lending the sealed exact serializer. It applies no full-list
+`access_all` gate and allocates no member buffer. The adapter owns a minimal SQL
+account/membership join, without loading key material or traversing ACLs. Its lock
+covers admission/read/projection. The bare-metal link consumer exercises the real
+provider/service/serializer with stack-owned data; firmware is linked, not run.
+
+Both actual targets pass six focused HTTP cases: 619 counted
+requests, 2 password logins and 2
+refreshes, excluding 3 modern registrations and
+6 registration requests. Explicit setup confirmations,
+status transitions and three profile-name writes establish fixture states; the
+mini reads preserve accounts, personal ciphertext, keys, revisions, memberships,
+grants, organization and device/session authority.
+
+A separate official CLI 2026.10.0 comparison passes 18 commands on
+both targets, with 21 direct HTTP requests, 2
+CLI password logins and 1 direct setup login,
+excluding 2 registration requests for one fixture.
+The existing shared observer adds three explicitly direct mini GETs around
+initial, live-name and fresh-cache checks. Production CLI commands continue to
+use full member/detail discovery; its two strict already-confirmed controls do
+not establish successful confirmation or a mini caller. Existing command forms
+are reused, and focused totals are separate from the 120-command baseline.
+
+The [pinned shared client method](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/admin-console/src/common/organization-user/services/default-organization-user-api.service.ts#L81-L92)
+and mini response model are bundled source evidence, not proof of CLI reachability
+or actual browser execution of this GET. No captured route trace, new command form
+or web-vault mini-flow compatibility is inferred. Configured groups/policies,
+imported unknown roles/statuses, dangling-account/backend/error behavior,
+concurrency/transport limits, cross-backend ordering, member editing and sharing
+remain open. Local provider tests and linked firmware do not close those variants.
