@@ -214,17 +214,21 @@ await test("standalone adapter enforces authentication, isolation, and JSON pres
   assert.equal(typeof created.id, "string");
 
   await t.test("another user cannot read, edit, trash, restore, or delete the cipher", async () => {
+    const aliceBefore = await vaultState(aliceToken);
+    const bobBefore = await vaultState(bobToken);
     for (const operation of [
-      { method: "GET", suffix: "" },
-      { method: "PUT", suffix: "", body: cipher(bob) },
-      { method: "PUT", suffix: "/delete" },
-      { method: "PUT", suffix: "/restore" },
-      { method: "DELETE", suffix: "" },
+      { method: "GET", suffix: "", statuses: [400] },
+      { method: "PUT", suffix: "", body: cipher(bob), statuses: [403, 404] },
+      { method: "PUT", suffix: "/delete", statuses: [400] },
+      { method: "PUT", suffix: "/restore", statuses: [400] },
+      { method: "DELETE", suffix: "", statuses: [400] },
     ]) {
       denied(await request(`/api/ciphers/${created.id}${operation.suffix}`, {
         method: operation.method, token: bobToken, body: operation.body,
-      }), `cross-user ${operation.method} ${operation.suffix}`, operation.method === "GET" ? [400] : [403, 404]);
+      }), `cross-user ${operation.method} ${operation.suffix}`, operation.statuses);
     }
+    unchanged(await vaultState(aliceToken), aliceBefore, "Cross-user denials must preserve the owner's entire vault and revision");
+    unchanged(await vaultState(bobToken), bobBefore, "Cross-user denials must preserve the acting user's entire vault and revision");
     const own = ok(await request(`/api/ciphers/${created.id}`, { token: aliceToken }), "owner read");
     assert.equal(own.name, alice.registration.key);
     assert.equal(own.deletedDate ?? null, null);
@@ -914,14 +918,11 @@ await test("cipher archive lifecycle preserves per-owner metadata and encrypted 
   });
 });
 
-await test("standalone bulk transactions preserve opaque JSON and roll back mixed invalid selections (local provider guarantee)", async () => {
-  const owner = await account("Atomic bulk owner");
-  const other = await account("Atomic bulk foreign owner");
+await test("selected lifecycle and archive transitions preserve opaque stored JSON", async () => {
+  const owner = await account("Opaque selected lifecycle owner");
   const token = owner.token.access_token;
-  const otherToken = other.token.access_token;
   const extension = { opaque: '{"quoted":"\\\\ café 🔐","nested":[true,null,7]}', sealed: owner.registration.key };
   const own = await lifecycleFixture(owner, { futureProtocolExtension: extension });
-  const foreign = await lifecycleFixture(other);
   for (const path of ["delete", "restore", "archive", "unarchive"]) {
     ok(await request(`/api/ciphers/${path}`, { method: "PUT", token, body: { ids: [own.id, own.id] } }), "opaque bulk transition");
     const fetched = ok(await request(`/api/ciphers/${own.id}`, { token }), "opaque bulk read");
@@ -929,14 +930,83 @@ await test("standalone bulk transactions preserve opaque JSON and roll back mixe
     unchanged((await vaultState(token)).ciphers.find(item => item.id === own.id).futureProtocolExtension, extension,
       "Sync must retain opaque JSON after a bulk action");
   }
-  const before = await vaultState(token);
+});
+
+await test("selected lifecycle errors preserve only completed eligible steps (local provider guarantee)", async () => {
+  const owner = await account("Selected lifecycle owner");
+  const other = await account("Selected lifecycle foreign owner");
+  const token = owner.token.access_token;
+  const otherToken = other.token.access_token;
+  const folder = ok(await request("/api/folders", {
+    method: "POST", token, body: { name: owner.registration.key },
+  }), "selected lifecycle folder");
+  const foreign = await lifecycleFixture(other, { favorite: true });
+  await lifecycleFixture(owner, { folderId: folder.id });
+  const protectedAccount = async bearer => {
+    const profile = ok(await request("/api/accounts/profile", { token: bearer }), "selected lifecycle profile");
+    delete profile.revisionDate;
+    return { profile, keys: ok(await request("/api/accounts/keys", { token: bearer }), "selected lifecycle keys") };
+  };
   const foreignBefore = await vaultState(otherToken);
+  const foreignAccount = await protectedAccount(otherToken);
+  const ownerAccount = await protectedAccount(token);
   for (const action of bulkActions) {
-    for (const invalid of [foreign.id, randomUUID()]) {
-      for (const ids of [[own.id, invalid], [invalid, own.id]]) {
-        assert.equal((await request(action.path, { method: action.method, token, body: { ids } })).status, 400);
-        unchanged(await vaultState(token), before, "A rejected local bulk transaction must leave every owned cipher and revision unchanged");
-        unchanged(await vaultState(otherToken), foreignBefore, "A rejected local bulk transaction must preserve foreign data");
+    for (const priorDeleted of [false, true]) {
+      for (const foreignTarget of [false, true]) {
+        for (const reverse of [false, true]) {
+          // Each trial has a fresh eligible source. Neither input order nor a
+          // particular distribution of completed eligible steps is prescribed.
+          const own = await lifecycleFixture(owner, {
+            folderId: folder.id, favorite: true, archivedDate: "2026-02-01T00:00:00.123456Z",
+            key: owner.registration.key,
+            futureProtocolExtension: { sealed: owner.registration.key, future: [null, "opaque"] },
+          });
+          if (priorDeleted) emptyLifecycle(await request(`/api/ciphers/${own.id}/delete`, {
+            method: "PUT", token,
+          }), "selected lifecycle prior Trash");
+          const invalid = foreignTarget ? foreign.id : randomUUID();
+          const before = await vaultState(token);
+          const prior = before.ciphers.find(item => item.id === own.id);
+          assert(prior, "The eligible source must exist before the mixed selection");
+          await delay(5);
+          const ids = reverse ? [invalid, own.id] : [own.id, invalid];
+          assert.equal((await request(action.path, { method: action.method, token, body: { ids } })).status, 400);
+          const after = await vaultState(token);
+          const current = after.ciphers.find(item => item.id === own.id);
+          const advanced = after.revision !== before.revision;
+          assert(Number.isSafeInteger(before.revision) && Number.isSafeInteger(after.revision) && after.revision >= before.revision,
+            "A rejected selection must never regress the account revision");
+          if (!advanced) {
+            unchanged(after, before, "An uncommitted eligible step must preserve the entire owned vault");
+          } else if (action.kind === "hard") {
+            assert.equal(current, undefined, "A completed permanent deletion must remove its eligible source");
+            unchanged(after, { ...before, revision: after.revision, ciphers: before.ciphers.filter(item => item.id !== own.id) },
+              "A completed deletion must preserve other ciphers and folders");
+            assert.equal((await request(`/api/ciphers/${own.id}`, { token })).status, 400,
+              "A permanently deleted eligible source must be unavailable to GET");
+          } else {
+            assert(current, "Trash and Restore must retain the eligible source");
+            assert(Date.parse(current.revisionDate) > Date.parse(prior.revisionDate),
+              "Every completed Trash or Restore step must advance the cipher revision, including repeats");
+            if (action.kind === "soft") {
+              assert.equal(current.deletedDate, current.revisionDate, "A completed Trash step must set its new deletion date");
+            } else {
+              assert.equal(current.deletedDate, null, "A completed Restore step must clear its deletion date");
+            }
+            unchanged(after, {
+              ...before, revision: after.revision,
+              ciphers: before.ciphers.map(item => item.id === own.id
+                ? { ...item, deletedDate: current.deletedDate, revisionDate: current.revisionDate } : item),
+            }, "Only the completed eligible source lifecycle fields and account revision may change");
+          }
+          if (current) unchanged(ok(await request(`/api/ciphers/${own.id}`, { token }), "selected lifecycle opaque GET"), current,
+            "GET and sync must agree on all opaque and private fields after a mixed lifecycle error");
+          assert.equal((await request(`/api/ciphers/${invalid}`, { token })).status, 400,
+            "The invalid target must remain unreadable after any completed eligible step");
+          unchanged(await protectedAccount(token), ownerAccount, "Lifecycle errors must preserve account keys and nonrevision profile fields");
+          unchanged(await vaultState(otherToken), foreignBefore, "Lifecycle errors must preserve the entire foreign vault and revision");
+          unchanged(await protectedAccount(otherToken), foreignAccount, "Lifecycle errors must preserve foreign account data and keys");
+        }
       }
     }
   }
