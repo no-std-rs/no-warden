@@ -427,8 +427,8 @@ impl Suite {
             Some(&json!({"favorite":false,"folderId":self.folders[1]})),
         )?;
         let docs = self.snapshot(id)?.documents;
-        for actor in 0..2 {
-            let d = docs[actor]
+        for (actor, doc) in docs.iter().enumerate() {
+            let d = doc
                 .as_ref()
                 .ok_or(Error("Lifecycle private fixture lacks reader"))?;
             require(
