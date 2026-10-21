@@ -1612,3 +1612,7 @@ Fourteen core tests, the static-route precedence test, twelve host regressions
 and the real fixed-storage noalloc decoder/prefix/final/source-access link
 exercise provide local contracts;
 firmware is linked rather than executed, and these are not upstream backend proofs.
+
+## Organization cipher collection reassignment
+
+Both actual targets pass six HTTP cases/522 requests and a separate actual CLI 2026.10.0 28-command/25-directHTTP comparison. Owner and writable recipient mutate item collections and recover the same decrypted note after sync/fresh caches. Protected old links, nonnull lost-read response, unchanged cipher revision/private annotations, and bounded unordered partial failures are covered. No formal trace/browser, legacy/admin alias, groups/policy/attachment or full-parity claim. See [API notes](api-parity.md#organization-cipher-collection-reassignment) for exact limits and host-only resource policies.

@@ -130,3 +130,5 @@ invoke the pinned official Bitwarden CLI as an external process.
 - [ ] Two-factor authentication, passkeys, SSO and administrative APIs.
 - [ ] Full import/export compatibility, remaining formats and variants, and upstream protocol regression fixtures.
 - [ ] Security audit, abuse controls, migration policy and production deployment.
+
+- [x] PUT collections_v2 subset: allocation-free scoped reassignment/unique-order validation, protected old links and lost-read operation response; six actual HTTP cases/522 requests plus separate Owner/recipient item-collections CLI28/25. Native invalid-subset order, aliases/admin/groups/policies/attachments/full parity remain open.

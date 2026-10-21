@@ -39,13 +39,13 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 126 routed patterns, 65 with typed requests, 119 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 127 routed patterns, 66 with typed requests, 120 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 123 partial and 171 unimplemented. Query/rank/configuration
+status: 124 partial and 170 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
@@ -56,8 +56,8 @@ responses, and attachment responses. Bulk cipher lists use the generic `ListResp
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 120 patterns, negative
-HTTP evidence for 119, 323 named HTTP cases, and 54 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 121 patterns, negative
+HTTP evidence for 120, 329 named HTTP cases, and 55 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -2019,3 +2019,48 @@ Fourteen core tests, the static-route precedence test, twelve host regressions
 and the real fixed-storage noalloc decoder/prefix/final/source-access link
 exercise provide local contracts;
 firmware is linked rather than executed, and these are not upstream backend proofs.
+
+## Organization cipher collection reassignment
+
+`PUT /api/ciphers/{cipher_id}/collections_v2` reassigns collection links for the
+measured attachment-free secure-note/direct-grant subset. The reusable core uses
+owned scoped snapshots, complete unique selection-order validation and sealed
+Add/Finish plans. Encrypted documents, cipher revision and private annotations
+are preserved; only links and eligible account revisions change. A restricted
+actor cannot select readonly targets even with manage, and cannot remove omitted
+readonly/manage or unassigned old links. Full actors can clear all links.
+
+All successes return exactly `object: "optionalCipherDetails"`, `unavailable:
+false`, and a nonnull 30-field `cipherDetails`, even after the actor removes its
+last readable link. That immediate projection preserves prior encrypted bytes,
+revision and annotations with false access flags; subsequent GET/list/sync deny
+or omit the item. The response scope grants no persistent read authority.
+
+Native repeated identical invalid selections produced different partial subsets.
+Tests require valid committed additions, retained old links and corresponding
+account fanout, without an input-prefix, hash/RNG or distribution claim. A later
+rejection skips removals. Local Add transactions and final rollback/live checks
+are tested local guarantees, not native concurrency or backend parity.
+
+Both actual Vaultwarden 1.37.4 and no-warden pass six HTTP cases/522 counted
+requests plus 4 registration requests each. Separate actual CLI 2026.10.0 runs
+pass 28 commands/25 direct HTTP plus 4 registration requests each,
+executing Owner and writable recipient `bw edit item-collections`, then sync and
+fresh-cache decryption for both. Four CLI logins and 2 direct logins are distinct.
+The formal Rust TLS adapter captures no route trace or internal request count.
+The earlier native-only research traced exactly 2 `collections_v2` PUTs; that is
+not paired captured-trace or actual browser evidence.
+
+The core has no intrinsic count/ID cap or allocator dependency. Host-local
+prewrite policies bound 4096 IDs, 4096 existing links, 4096 memberships, 8 MiB charged
+selection material and 64 MiB checked comparison/fanout work; they are not native
+capacity limits. Linked noalloc firmware exercises real decoder/service/response
+scope without allocator/std/undefined symbols; it is not executed on hardware.
+
+Only the PUT v2 route is implemented. POST/legacy/admin aliases, bulk-collections,
+attachments, configured groups/policies, historical cross-org grants, broader
+cipher/lifecycle/backend/order and full upstream parity remain open. Protocol
+[declarations](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L792)
+remain separate from runtime build 7c188967e7a467b19b2757bc3326f9cf3ccae327;
+client/SDK pins are b449ac1d255784380d75ef026343198891286be7 and
+c5e53d3e82ab80fdc9fd79ebd74058399a6444b6. All full-parity flags remain false.
