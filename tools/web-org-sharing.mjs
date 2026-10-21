@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Independently authored MIT OR Apache-2.0 actual-browser organization smoke.
-// Preparation copy only: no paired compatibility claim until both real runs pass.
+// Paired receipts are emitted only after both real runs complete successfully.
 import assert from 'node:assert/strict';
 import {createHash,randomBytes} from 'node:crypto';
 import {readFile,writeFile,mkdtemp,rm,mkdir,copyFile} from 'node:fs/promises';

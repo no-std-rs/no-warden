@@ -210,48 +210,36 @@ phases and tighten an existing HTTP case; they do not add an implemented route,
 a named HTTP case or a complete endpoint-parity claim.
 
 
-## Organization-sharing extension prepared on 2026-10-21
+## Organization-owner sharing in the whole portable comparison
 
-`bash tools/web-compat.sh --organization-sharing` retains every mandatory personal
-vault check above, then runs `tools/web-org-sharing.mjs` against both servers.
-The future CI invocation enables this explicit extension. This unpublished harness
-slice depends on the separately queued organization-read and bulk-sharing backend
-slices; its base checkout alone does not implement the complete flow.
+CI unconditionally runs `bash tools/web-compat.sh --organization-sharing`. It
+retains all ten mandatory personal-vault checks first, then executes the same
+strict owner organization flow against both servers. The no-argument local
+command remains the personal-vault comparison.
 
-The same strict actual browser flow creates a personal secure note, creates an
-organization and collection through the UI, selects the note's Assign to collections
-menu, and assigns the new collection. It requires exactly one successful
-`PUT /api/ciphers/share`, zero single-cipher share calls, immediate decrypted-note
-equality, and decrypted equality after closing the context and logging in through
-the ordinary controls in a new empty context. It requires successful organization
-cipher-details, collection-details, default-group and mini-details reads. Unknown
-API observations, non-200 browser responses and unexpected writes fail the check.
-Background polling counts remain recorded observations rather than fixed protocol
-requirements. Registration is native HTTP setup and is counted separately.
+The extension creates a personal secure note, organization and collection through
+ordinary UI controls, assigns the note to that collection with exactly one
+successful `PUT /api/ciphers/share`, then checks immediate decrypted equality and
+decrypted equality after ordinary login/sync in a fresh empty browser context.
+Successful organization-cipher, collection-details, default-group and mini-details
+reads are required. Unknown API observations, non-200 responses or unexpected
+writes fail. Native registration HTTP setup is separate from browser evidence.
+Background counts are observations rather than fixed protocol budgets.
 
-An isolated combined integration from base `8493f5847aa7e5543c2ac68e019d1595dbb7df60`
-with the frozen queued read and bulk runtime patches passed this actual paired
-flow against Vaultwarden `1.37.4` using the unchanged pinned Vaultwarden Web
-`2026.7.0`, Chromium `149.0.7827.55` and Playwright `1.64.1`. It observed 43 browser
-responses on the reference and 41 on the local adapter, each in 24 phase buckets,
-with zero suppressed or non-200 observations. Native registration setup used three
-reference requests and one local request. Both targets passed the seven UI
-checkpoints and two ordinary login contexts. The exact tested host binary SHA-256
-was `8a4666ba60096b518740f7355cf19ce823efbbedb263698971a73251a0c723e3`.
-The proof index is `/tmp/no-warden-web-org-integration-artifacts-20261021/proof-index.json`;
-its bound source and runtime receipts distinguish that combined integration from
-this backend-free future harness branch.
+The fresh whole portable comparison passed both personal and organization scopes
+against Vaultwarden1.37.4 and the current adapter using the unchanged pinned
+Vaultwarden Web2026.7.0, Chromium149.0.7827.55 and Playwright1.64.1. The earlier
+combined integration proof from base8493f584 remains separate historical evidence;
+its request counts and binary are not relabeled as this checkout.
 
-The harness receives the same backend/proxy URL and browser-module overrides as
-the existing smoke. `BW_WEB_ORG_MODE=paired` selects both targets;
-`BW_WEB_ORG_MODE=reference` is available for explicit reference exploration and is
-not the CI mode. `BW_WEB_OUTPUT` selects a directory for sanitized JSON receipts.
-It preserves the original pins, liveness/post-bind readiness and cleanup controls.
-
-This proves one owner's attachment-free secure-note assignment and fresh-context
-read/decryption in the measured default configuration. It does not establish
-organization cipher Save/edit, shared lifecycle, recipient browser, group
-administration, policy, attachment, notification or full upstream API parity.
-No credentials, keys, decrypted values, bodies, screenshots, HAR, browser storage
-state or browser console output are retained. All disposable integration servers,
-databases, private logs, browser contexts, TLS and font fixtures were cleaned.
+`BW_WEB_ORG_MODE=paired` runs both targets when invoking the organization runner
+directly; explicit `reference` exploration cannot supply paired evidence.
+`BW_WEB_OUTPUT` selects a private sanitized receipt directory. The wrapper
+preserves the verified pins, live target/post-bind readiness and owned fixture
+cleanup, and blocks external browser traffic. Neither runner uses storageState
+or evaluation to bypass ordinary account/vault UI. No browser CLI execution is
+claimed. These checks cover only one owner's attachment-free secure-note sharing
+and fresh-context decryption; recipient browser, general shared Save/edit, shared
+lifecycle, attachments, configured groups/policies, notifications and full API
+parity remain unverified. No raw bodies, credentials, decrypted values, headers,
+query strings, console, screenshots, HAR or browser storage are persisted.

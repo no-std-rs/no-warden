@@ -2019,3 +2019,22 @@ Fourteen core tests, the static-route precedence test, twelve host regressions
 and the real fixed-storage noalloc decoder/prefix/final/source-access link
 exercise provide local contracts;
 firmware is linked rather than executed, and these are not upstream backend proofs.
+
+## Paired organization-owner browser sharing
+
+The same pinned Vaultwarden Web2026.7.0, Chromium149.0.7827.55 and
+Playwright1.64.1 now execute the whole portable CI comparison on both actual
+servers. The unchanged mandatory ten-check personal-vault suite runs first; the
+organization extension then creates a personal secure note, organization and
+collection using ordinary UI controls, assigns that note with exactly one
+`PUT /api/ciphers/share`200, and verifies decrypted equality immediately and
+after ordinary login/sync in a fresh empty browser context. Registration is
+native HTTP setup, separately counted from browser observations.
+
+This is one confirmed owner's attachment-free secure-note assignment in the
+default configuration. Background method/path/status counts are observations,
+not fixed protocol budgets. No recipient-browser, general shared Save/edit,
+shared lifecycle, attachment, configured-group/policy, CLI-execution or full API
+parity claim follows. The earlier combined-runtime proof remains historical
+and separate from this fresh whole portable harness run. No route or named
+HTTP-case count is added by these browser phases.

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
 import http from "node:http";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -49,4 +49,12 @@ test("unknown browser extension selectors fail before disposable infrastructure 
   const result = await childResult("bash", [script, "--unknown-selector"], process.env);
   assert.equal(result.code, 2);
   assert.equal(result.output.trim(), "Usage: tools/web-compat.sh [--organization-sharing]");
+});
+
+test("whole portable CI preserves both strict browser scopes and shell failure propagation", async () => {
+  const { validateWebComparisonExecution } = await import("./check-api-coverage.mjs");
+  const workflow = await readFile(new URL("../.github/workflows/web-client.yml", import.meta.url), "utf8");
+  const setup = await readFile(new URL("./web-compat.sh", import.meta.url), "utf8");
+  validateWebComparisonExecution(workflow, setup);
+  for (const changed of [setup.replace("BW_WEB_VAULT_MODE=both", "BW_WEB_VAULT_MODE=login"), setup.replace("BW_WEB_ORG_MODE=paired", "BW_WEB_ORG_MODE=reference"), setup.replace("node tools/web-compat.mjs", "node tools/web-compat.mjs || true"), setup.replace("node tools/web-org-sharing.mjs", "node tools/web-org-sharing.mjs || true")]) assert.throws(() => validateWebComparisonExecution(workflow, changed));
 });

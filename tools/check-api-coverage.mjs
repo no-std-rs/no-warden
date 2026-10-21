@@ -46,6 +46,31 @@ export function sourceHashes(root = repositoryRoot) {
   ]));
 }
 
+// Both actual-browser scopes are mandatory in the reviewed CI invocation. The
+// optional local extension follows the unconditional personal suite and inherits
+// shell failure propagation; polling observations do not become fixed budgets.
+export function validateWebComparisonExecution(workflow, setup) {
+  assert(/^\s*run:\s*bash tools\/web-compat\.sh --organization-sharing\s*$/m.test(workflow), "Web comparison workflow must invoke both browser scopes");
+  assert(!/^\s*(?:if|continue-on-error)\s*:/m.test(workflow), "Web comparison workflow must execute unconditionally and fail on error");
+  assert(/^set -euo pipefail$/m.test(setup), "Web comparison setup must propagate failures");
+  assert(/^  1:--organization-sharing\) web_ci_organization_sharing=true ;;$/m.test(setup), "Web comparison setup must enable its mandatory CI extension");
+  const personal = "BW_WEB_VAULT_MODE=both node tools/web-compat.mjs";
+  const organization = "  BW_WEB_ORG_MODE=paired node tools/web-org-sharing.mjs";
+  assert.equal(setup.split(personal).length, 2, "Web comparison setup must retain one mandatory personal invocation");
+  assert.equal(setup.split(organization).length, 2, "Web comparison setup must retain one paired organization invocation");
+  assert(new RegExp("^" + personal.replaceAll(".", "\\.") + "$", "m").test(setup), "Web comparison setup must not ignore personal failure");
+  const tail = setup.slice(setup.indexOf(personal) + personal.length);
+  const extension = [
+    'if [[ "$web_ci_organization_sharing" == true ]]; then',
+    '  FONTCONFIG_FILE="$web_ci_root/fonts.conf" \\',
+    '  BW_WEB_CHROMIUM="$web_ci_root/browser/chrome-linux64/chrome" \\',
+    organization,
+    'fi',
+    '',
+  ].join("\n");
+  assert.equal(tail.replace(/^(?:\n|#[^\n]*\n)*/, ""), extension, "Web comparison setup must run personal then paired organization and propagate either failure");
+}
+
 export function validateCoverage(coverage, hashes = sourceHashes(), readSource = path => readFileSync(join(repositoryRoot, path), "utf8"), comparisonReceipts = process.env.API_COMPARISON_RECEIPTS ? JSON.parse(readFileSync(process.env.API_COMPARISON_RECEIPTS, "utf8")) : {}, cliTraceReceipts = process.env.API_CLI_TRACE_RECEIPTS ? JSON.parse(readFileSync(process.env.API_CLI_TRACE_RECEIPTS, "utf8")) : {}) {
   assert.equal(coverage.schema_version, 1);
   assert.match(coverage.snapshot_commit, /^[a-f0-9]{40}$/);
@@ -224,14 +249,29 @@ export function validateCoverage(coverage, hashes = sourceHashes(), readSource =
     chromium_executable_sha256: pins.chromium.executableSha256, playwright_version: pins.playwrightVersion,
   })) assert.equal(web[field], expected, `Web evidence pin differs: ${field}`);
   const workflow = readSource(web.ci_workflow);
-  assert(/^\s*run:\s*bash tools\/web-compat\.sh\s*$/m.test(workflow), "Web comparison workflow must invoke its executable setup");
-  assert(!/^\s*(?:if|continue-on-error)\s*:/m.test(workflow), "Web comparison workflow must execute unconditionally and fail on error");
+  validateWebComparisonExecution(workflow, readSource(web.setup));
   assert.equal(web.playwright_version, JSON.parse(readSource("tools/web-compat/package-lock.json")).packages["node_modules/playwright-core"].version);
   assert.equal(web.playwright_version, JSON.parse(readSource("tools/web-compat/package.json")).dependencies["playwright-core"]);
   assert.deepEqual(web.paired_checks, ["passwordLogin", "initialSync", "authenticatedProfile", "vaultNavigation", "lock", "passwordUnlockAndSync", "reloadLocksVault", "itemRoundtrip", "trashRestore", "permanentDelete"]);
   assert.deepEqual(web.no_warden_only_checks, []);
   for (const operation of web.paired_browser_http_shapes) assert(rows.has(operation), `Unknown browser-observed route: ${operation}`);
   assert.equal(new Set(web.paired_browser_http_shapes).size, web.paired_browser_http_shapes.length);
+  const organization = web.organization_owner_sharing;
+  assert(organization && typeof organization === "object", "Organization browser evidence must remain separate and explicit");
+  assert.equal(organization.runner, "tools/web-org-sharing.mjs", "Organization browser runner must identify its executable source");
+  for (const source of [organization.runner, "tools/web-org-sharing.test.mjs"]) assert(Object.hasOwn(hashes, source), `Unaudited organization browser source: ${source}`);
+  assert.equal(organization.setup, web.setup);
+  assert.equal(organization.ci_workflow, web.ci_workflow);
+  assert.equal(organization.pins, web.pins);
+  assert.equal(organization.actual_paired_browser_execution, true);
+  assert.equal(organization.registration_setup, "native HTTP, separate from browser observations");
+  assert.equal(organization.background_counts, "observations, not fixed protocol budgets");
+  assert.equal(organization.exact_successful_bulk_put_per_target, 1);
+  assert.equal(organization.fresh_empty_contexts_per_target, 2);
+  assert.deepEqual(organization.paired_checks, ["initial-ordinary-login-sync", "personal-note-created-before-organization", "organization-and-collection-created-by-ui", "actual-ui-bulk-share-200", "immediate-decrypted-note-equality", "fresh-ordinary-login-sync", "fresh-context-decrypted-note-equality"]);
+  for (const field of ["cli_execution_claimed", "recipient_browser_claimed", "general_shared_save_claimed", "shared_lifecycle_claimed", "attachments_claimed", "configured_groups_claimed", "full_parity_claimed"]) assert.equal(organization[field], false, `Organization browser scope exceeded: ${field}`);
+  assert.deepEqual(organization.paired_browser_mutations, ["POST /api/ciphers", "POST /api/organizations", "POST /api/organizations/{id}/collections", "PUT /api/ciphers/share"]);
+  for (const operation of organization.paired_browser_mutations) assert([...rows.values()].some(route => `${route.method} ${routeShape(route.path)}` === `${operation.split(" ")[0]} ${routeShape(operation.split(" ")[1])}`), `Unknown organization browser mutation: ${operation}`);
   return { ...counts, fully_verified_upstream_operations: coverage.routes.filter(r => r.full_upstream_parity_verified).length };
 }
 

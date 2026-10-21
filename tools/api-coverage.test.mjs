@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { coveragePath, multilineRouteArm, sourceHashes, validateCoverage } from "./check-api-coverage.mjs";
+import { coveragePath, multilineRouteArm, sourceHashes, validateCoverage, validateWebComparisonExecution } from "./check-api-coverage.mjs";
 
 const snapshot = JSON.parse(readFileSync(coveragePath, "utf8"));
 
@@ -61,6 +61,51 @@ for (const [label, mutate] of [
   });
 }
 
+for (const [label, mutate] of [
+  ["missing personal scope", text => text.replace("BW_WEB_VAULT_MODE=both node tools/web-compat.mjs", "true")],
+  ["login-only personal scope", text => text.replace("BW_WEB_VAULT_MODE=both", "BW_WEB_VAULT_MODE=login")],
+  ["ignored personal failure", text => text.replace("node tools/web-compat.mjs", "node tools/web-compat.mjs || true")],
+  ["reference-only organization scope", text => text.replace("BW_WEB_ORG_MODE=paired", "BW_WEB_ORG_MODE=reference")],
+  ["ignored organization failure", text => text.replace("node tools/web-org-sharing.mjs", "node tools/web-org-sharing.mjs || true")],
+  ["skipped organization scope", text => text.replace('if [[ "$web_ci_organization_sharing" == true ]]; then', "if false; then")],
+  ["disabled failure propagation", text => text.replace("set -euo pipefail", "set -uo pipefail")],
+  ["disabled mandatory CI extension", text => text.replace("1:--organization-sharing) web_ci_organization_sharing=true", "1:--organization-sharing) web_ci_organization_sharing=false")],
+]) {
+  test(`rejects ${label} after setup source hashes are refreshed`, () => {
+    const file = "tools/web-compat.sh";
+    const original = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+    const changed = mutate(original); assert.notEqual(changed, original);
+    const hashes = sourceHashes(), data = structuredClone(snapshot);
+    hashes[file] = data.source_sha256[file] = createHash("sha256").update(changed).digest("hex");
+    const readSource = path => path === file ? changed : readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+    assert.throws(() => validateCoverage(data, hashes, readSource), /Web comparison setup/);
+  });
+}
+
+test("organization CI extension retains mandatory personal then paired execution", () => {
+  validateWebComparisonExecution(readFileSync(new URL("../.github/workflows/web-client.yml", import.meta.url), "utf8"), readFileSync(new URL("./web-compat.sh", import.meta.url), "utf8"));
+});
+
+for (const [label, mutate] of [
+  ["missing organization CI selector", text => text.replace(" --organization-sharing", "")],
+  ["suppressed whole comparison failure", text => text.replace(" --organization-sharing", " --organization-sharing || true")],
+]) {
+  test(`rejects ${label}`, () => {
+    const workflow = readFileSync(new URL("../.github/workflows/web-client.yml", import.meta.url), "utf8");
+    assert.throws(() => validateWebComparisonExecution(mutate(workflow), readFileSync(new URL("./web-compat.sh", import.meta.url), "utf8")), /Web comparison workflow/);
+  });
+}
+
+for (const [label, mutate] of [
+  ["missing organization record", data => { delete data.web_client_evidence_sources.organization_owner_sharing; }],
+  ["reference-only organization evidence", data => { data.web_client_evidence_sources.organization_owner_sharing.actual_paired_browser_execution = false; }],
+  ["missing fresh-context decryption", data => { data.web_client_evidence_sources.organization_owner_sharing.paired_checks.pop(); }],
+  ["invented recipient browser evidence", data => { data.web_client_evidence_sources.organization_owner_sharing.recipient_browser_claimed = true; }],
+  ["invented browser CLI execution", data => { data.web_client_evidence_sources.organization_owner_sharing.cli_execution_claimed = true; }],
+]) {
+  test(`rejects ${label}`, () => { const data = structuredClone(snapshot); mutate(data); assert.throws(() => validateCoverage(data)); });
+}
+
 test("multiline route alternatives cite the arrow on the final adjacent pattern", () => {
   const source = "    Route::MemberRestore(org, member)\n    | Route::MemberRestoreLegacy(org, member)\n    | Route::MemberRestoreVNext(org, member) => {\n        restore();\n    }";
   assert(multilineRouteArm(source, 1, "MemberRestore"));
@@ -106,6 +151,7 @@ for (const [name, mutate] of [
 test("source enumeration includes the runtime and real-client checks", () => {
   const hashes = sourceHashes();
   assert(Object.hasOwn(hashes, "crates/no-warden/src/lib.rs"));
+  for (const file of ["tools/web-org-sharing.mjs", "tools/web-org-sharing.test.mjs"]) assert(Object.hasOwn(hashes, file));
   assert(Object.hasOwn(hashes, "crates/no-warden/src/account_keys.rs"));
   assert(Object.hasOwn(hashes, "crates/no-warden/src/account_profile.rs"));
   assert(Object.hasOwn(hashes, "crates/no-warden/src/domains.rs"));
