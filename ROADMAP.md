@@ -95,6 +95,12 @@ invoke the pinned official Bitwarden CLI as an external process.
   optional revoke versus required restore IDs and preserved grants. The
   separately verified CLI observer, configured-policy and event/backend
   limitations are recorded in the compatibility documentation.
+- [x] Organization member public-key lookup subset: allocation-free scoped
+  nullable-key snapshots, ordered duplicates and unfiltered target states/roles,
+  six matching actual HTTP cases (431 requests) and 16 matching official CLI
+  fingerprint/decryption observation commands on both targets. No CLI bulk
+  caller, browser execution of this endpoint, automatic confirmation, configured
+  policy/group or full-parity claim.
 - [ ] Attachments, Sends, event notifications and websocket transport.
 - [ ] Two-factor authentication, passkeys, SSO and administrative APIs.
 - [ ] Full import/export compatibility, remaining formats and variants, and upstream protocol regression fixtures.

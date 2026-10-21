@@ -54,6 +54,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Single member removal | Scoped membership/grant cleanup and last-owner protection with retained account authority | Six matching HTTP cases and 25 matching official CLI state/decryption commands after HTTP setup on both targets; no removal caller, trace or offline erasure claim |
 | Bulk member removal | Ordered independent item commits, exact results and intentional self-removal continuation | Six matching HTTP cases and 25 matching official CLI state/decryption commands after HTTP setup on both targets; no bulk caller or trace claim |
 | Single member revoke/restore | Bodyless status transitions preserve keys/grants and recover selective visibility | Six matching HTTP cases and 31 matching CLI observation commands on both actual targets; no mutation caller or trace claim |
+| Organization member public-key batches | Ordered scoped public-only rows, null-key retention and unfiltered target states/roles | Six matching HTTP cases (431 requests) and 16 matching official CLI fingerprint/decryption commands on both targets; no bulk CLI caller or browser trace claim |
 | Single organization-collection update/delete | Complete grant replacement, opaque names, whitespace external-ID clearing and preserved cipher data | Allocation-free core and local rollback/cascade tests; six matching HTTP cases and twenty matching official CLI commands on both actual targets |
 | Organization-scoped collection list/create/single access-details | Confirmed manager authorization, exact projections, opaque names/external IDs and reference validation | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers; atomic local provider tests |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
@@ -1374,3 +1375,53 @@ web bootstrap bundles. Playwright-core 1.64.1 is locked separately. A dedicated
 Linux x64 CI job runs the same disposable HTTPS comparison. Fresh anonymous
 image acquisition and the supplied-cache path both pass locally; inherited
 browser/HTTP debug modes are suppressed before credentials are created.
+
+## Organization member bulk public-key lookup
+
+The scoped public-key POST requires confirmed Owner/Admin authority and a
+canonical required `ids` string list. Its three-field list contains ordered,
+duplicate-preserving four-field `organizationUserPublicKeyResponseModel` rows:
+membership `id`, account `userId`, nullable `key`, and `object`. Missing scoped
+memberships are omitted; an existing null-key account retains its explicit null
+row. Empty and synthetic future-format keys remain exact. An actual 1025-item
+batch passes. The Linux host separately limits requests to 4,096 IDs while
+decoding, before allocating results or running member-key lookups. Its 422
+rejection beyond that local work budget is not claimed as upstream behavior;
+the allocation-free core itself has no intrinsic batch count cap. A scoped
+length-only SQL preflight additionally charges every duplicate and UTF-8
+ID/key byte plus 128 bytes per matched row against 8 MiB of unescaped result
+material, rejecting 422 before owned key snapshots. Escaping can expand JSON
+bytes; this host memory policy is not an upstream byte-limit claim or an exact
+encoded-response cap.
+
+The actual matrix includes all four known target statuses and Owner/Admin/
+Manager/User roles. Accepted Admin, confirmed Manager/User and revoked Admin
+actors remain denied; eligible Owners/Admins can read revoked targets. Portable
+registration with `keys: null` establishes nullable-key behavior without SQL
+bypasses, while the individual public-key GET returns 404 for that null key.
+Whole-body/path/authentication/schema guards and read snapshots preserve account,
+vault, key, revision, membership, grant, organization and session state.
+
+Both no-warden and Vaultwarden 1.37.4 pass six focused HTTP cases: 431 counted
+requests plus ten registration requests for five fixtures, two password logins
+and two refreshes. A separate official CLI 2026.10.0 comparison passes 16 commands
+on each, with 32 direct HTTP requests plus four registration requests, two CLI
+password logins and two direct setup logins. It checks bulk/individual/registered
+key equality, three cached/remote fingerprint equalities and distinct accounts,
+then decrypts a personal note and recipient organization collection.
+
+The CLI uses cached or individual public-key lookups; this is observation of
+compatible key material, not a CLI bulk caller or an endpoint trace. The web
+2026.7.0 bulk-confirm caller is static source-map evidence, not an executed
+browser flow for this POST. Pinned server/client revisions and the allocation-
+free provider/snapshot boundary are detailed in
+[API parity notes](api-parity.md#organization-member-bulk-public-key-lookup-subset).
+The source pin and runtime release remain distinct; focused totals are not
+combined with the 120-command baseline.
+
+Core and linked no-allocator consumers preserve the missing-account/null-key
+distinction without HTTP/SQL/crypto dependencies. Safe provider errors and
+association checks have local evidence, not complete upstream backend timing
+parity. Configured policies/groups/SMTP, automatic confirmation, dangling-account
+HTTP and imported unknown states, full transport/error variants and general
+sharing remain open. This handler remains partial.

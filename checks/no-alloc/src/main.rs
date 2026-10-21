@@ -29,6 +29,10 @@ use no_warden::{
         InvitationPolicy, InvitationTarget, InviteCommit, OrganizationInvitationStorage,
         OrganizationInviteData, ValidatedOrganizationInvite,
     },
+    organization_member_public_keys::{
+        OrganizationMemberPublicKeyLookup, OrganizationMemberPublicKeyRecord,
+        OrganizationMemberPublicKeyStorage,
+    },
     organization_member_removal::{
         OrganizationBulkMemberRemovalStorage, OrganizationMemberRemovalBatchAuthority,
         OrganizationMemberRemovalRecord, OrganizationMemberRemovalStorage,
@@ -76,14 +80,14 @@ use no_warden::{
         OrganizationBulkMemberRemovalRequest, OrganizationBulkMemberRestoreRequest,
         OrganizationBulkMemberRevokeRequest, OrganizationCollectionCreateRequest,
         OrganizationConfirmRequest, OrganizationCreateRequest, OrganizationInviteCollection,
-        OrganizationInvitePermissions, OrganizationInviteRequest, OrganizationPlanType,
-        PasswordLoginRequest, PasswordOrOtpRequest, PreloginKdfSettings, PreloginRequest,
-        PreloginResponse, ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest,
-        RegistrationAuthentication, RegistrationCredentials, RegistrationFinishRequest,
-        RegistrationFinishResponse, RegistrationUnlock, RegistrationVerificationRequest,
-        RegistrationVerificationToken, SecretVerificationRequest, SendAccessTokenRequest,
-        SendFileData, TextSendRequest, UserKeyIdRequest, UserPublicKeyResponse,
-        WebAuthnCredentialsResponse,
+        OrganizationInvitePermissions, OrganizationInviteRequest,
+        OrganizationMemberPublicKeysRequest, OrganizationPlanType, PasswordLoginRequest,
+        PasswordOrOtpRequest, PreloginKdfSettings, PreloginRequest, PreloginResponse,
+        ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest, RegistrationAuthentication,
+        RegistrationCredentials, RegistrationFinishRequest, RegistrationFinishResponse,
+        RegistrationUnlock, RegistrationVerificationRequest, RegistrationVerificationToken,
+        SecretVerificationRequest, SendAccessTokenRequest, SendFileData, TextSendRequest,
+        UserKeyIdRequest, UserPublicKeyResponse, WebAuthnCredentialsResponse,
     },
 };
 
@@ -581,6 +585,26 @@ impl OrganizationMemberStatusStorage for PurgeProbe {
         self.confirmed = status == 2;
         self.revision += 1;
         Ok(())
+    }
+}
+impl OrganizationMemberPublicKeyStorage for PurgeProbe {
+    type Id = &'static str;
+    type PublicKey = &'static str;
+    fn member_public_key(
+        &mut self,
+        organization: &str,
+        membership: &str,
+    ) -> OrganizationMemberPublicKeyLookup<Self::Id, Self::PublicKey, ()> {
+        Ok((organization == "embedded-org"
+            && membership == "embedded-invited-member"
+            && self.invited[0]
+            && !self.member_removed)
+            .then_some(OrganizationMemberPublicKeyRecord {
+                membership_id: "embedded-invited-member",
+                organization_id: "embedded-org",
+                user_id: "existing-account",
+                public_key: Some("embedded-public-key"),
+            }))
     }
 }
 impl OrganizationMemberRemovalStorage for PurgeProbe {
@@ -1547,6 +1571,34 @@ pub extern "C" fn _start() -> ! {
         black_box(classify(
             Method::Post,
             "/api/organizations/embedded-org/users/embedded-invited-member/confirm",
+        ));
+        // Owned provider snapshots, ordered duplicates and the explicit nullable
+        // projection all compile and link without a global allocator.
+        let public_keys =
+            serde_json_core::from_slice::<OrganizationMemberPublicKeysRequest<'_, 3>>(black_box(
+                br#"{"ids":["missing","embedded-invited-member","embedded-invited-member"]}"#,
+            ));
+        if let Ok((request, _)) = public_keys {
+            let mut snapshots = core::array::from_fn::<_, 3, _>(|_| None);
+            if let Ok(response) = organization_service.get_org_member_public_keys(
+                "embedded-owner",
+                "embedded-org",
+                &request,
+                &mut snapshots,
+            ) {
+                let _ = black_box(serde_json_core::to_slice(
+                    &response,
+                    &mut organization_output,
+                ));
+                black_box((
+                    response.len(),
+                    response.get(1).map(|row| row.public_key().map(str::len)),
+                ));
+            }
+        }
+        black_box(classify(
+            Method::Post,
+            "/api/organizations/embedded-org/users/public-keys",
         ));
         // Status-only operations keep the existing opaque wrapped key and personal
         // authority in stack-owned storage while revoking/restoring the same member.

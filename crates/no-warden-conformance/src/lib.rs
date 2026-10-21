@@ -36,6 +36,8 @@ pub mod organization_confirmations;
 pub mod organization_confirmations_cli;
 pub mod organization_invites;
 pub mod organization_invites_cli;
+pub mod organization_member_public_keys;
+pub mod organization_member_public_keys_cli;
 pub mod organization_member_removal;
 pub mod organization_member_removal_cli;
 pub mod organization_member_status;
