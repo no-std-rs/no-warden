@@ -32,6 +32,7 @@ pub mod organization_bulk_member_status;
 pub mod organization_cipher_archive;
 pub mod organization_cipher_bulk_sharing;
 pub mod organization_cipher_collections;
+pub mod organization_cipher_lifecycle;
 pub mod organization_cipher_partial;
 pub mod organization_cipher_sharing;
 pub mod organization_collection_mutations;

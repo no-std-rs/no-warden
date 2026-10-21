@@ -26,6 +26,9 @@ use no_warden::{
         OrganizationCipherCollectionsStorage, ValidatedCipherCollectionAdd,
         ValidatedCipherCollectionsFinish,
     },
+    organization_cipher_lifecycle::{
+        CipherLifecycleOperation, CipherLifecycleStorage, ValidatedCipherLifecycle,
+    },
     organization_cipher_partial::{
         CipherPartialFolder, CipherPartialStorage, ValidatedCipherPartial,
     },
@@ -168,6 +171,10 @@ struct PurgeProbe {
     archive_reader_revision: u64,
     archive_clock: u64,
     archive_commits: usize,
+    lifecycle_present: bool,
+    lifecycle_deleted: bool,
+    lifecycle_revision: u64,
+    lifecycle_account_revisions: [u64; 3],
 }
 impl PurgeProbe {
     fn organization_record(&self) -> OrganizationRecord<'_> {
@@ -367,6 +374,112 @@ impl CipherCollectionAccessData for PartialFacts {
                 manage: false,
             },
         })
+    }
+}
+// Separate single lifecycle consumer. Owned fixed snapshots admit current
+// readonly+manage WRITE independently of the unchanged advertised READ flags.
+struct LifecycleFacts {
+    shared: bool,
+}
+impl CipherCollectionAccessData for LifecycleFacts {
+    fn len(&self) -> usize {
+        usize::from(self.shared)
+    }
+    fn get(&self, index: usize) -> Option<CipherCollectionAccessRecord<'_>> {
+        (self.shared && index == 0).then_some(CipherCollectionAccessRecord {
+            cipher_organization_id: Some("embedded-org"),
+            collection: CipherSharingCollection {
+                id: "embedded-lifecycle-collection",
+                user_id: "embedded-owner",
+                organization_id: "embedded-org",
+                assigned: true,
+                read_only: true,
+                hide_passwords: false,
+                manage: true,
+            },
+        })
+    }
+}
+fn lifecycle_token(revision: u64) -> &'static str {
+    match revision {
+        0 => "lifecycle-revision-0",
+        1 => "lifecycle-revision-1",
+        2 => "lifecycle-revision-2",
+        3 => "lifecycle-revision-3",
+        4 => "lifecycle-revision-4",
+        5 => "lifecycle-revision-5",
+        6 => "lifecycle-revision-6",
+        _ => "lifecycle-revision-later",
+    }
+}
+impl CipherLifecycleStorage for PurgeProbe {
+    type LifecycleId = &'static str;
+    type LifecycleAccess = LifecycleFacts;
+    fn cipher_lifecycle_source(
+        &mut self,
+        cipher: &str,
+    ) -> Result<Option<CipherSharingSource<Self::LifecycleId>>, ()> {
+        if !self.lifecycle_present {
+            return Ok(None);
+        }
+        Ok(match cipher {
+            "embedded-lifecycle-personal" => Some(CipherSharingSource {
+                id: "embedded-lifecycle-personal",
+                owner_id: Some("embedded-owner"),
+                organization_id: None,
+                revision: lifecycle_token(self.lifecycle_revision),
+            }),
+            "embedded-lifecycle-shared" => Some(CipherSharingSource {
+                id: "embedded-lifecycle-shared",
+                owner_id: None,
+                organization_id: Some("embedded-org"),
+                revision: lifecycle_token(self.lifecycle_revision),
+            }),
+            _ => None,
+        })
+    }
+    fn cipher_lifecycle_membership(
+        &mut self,
+        actor: &str,
+        org: &str,
+    ) -> Result<Option<CipherSharingMembership<Self::LifecycleId>>, ()> {
+        self.cipher_partial_membership(actor, org)
+    }
+    fn cipher_lifecycle_collections(
+        &mut self,
+        _: &str,
+        source: &CipherSharingSource<Self::LifecycleId>,
+    ) -> Result<Self::LifecycleAccess, ()> {
+        Ok(LifecycleFacts {
+            shared: source.organization_id.is_some(),
+        })
+    }
+    fn commit_cipher_lifecycle(&mut self, plan: &ValidatedCipherLifecycle<'_>) -> Result<(), ()> {
+        let source = self.cipher_lifecycle_source(plan.cipher_id())?.ok_or(())?;
+        let member = match source.organization_id {
+            Some(org) => self.cipher_lifecycle_membership(plan.actor(), org)?,
+            None => None,
+        };
+        let facts = self.cipher_lifecycle_collections(plan.actor(), &source)?;
+        plan.validate_live(
+            &source,
+            member.as_ref().map(CipherSharingMembership::view),
+            &facts,
+        )
+        .map_err(|_| ())?;
+        // Provider counters stand in for its clock and current-reader table.
+        // Other archive/favorite/folder fields on this probe remain untouched.
+        self.lifecycle_revision += 1;
+        self.lifecycle_account_revisions[0] += 1;
+        if source.organization_id.is_some() {
+            self.lifecycle_account_revisions[1] += 1;
+        }
+        match plan.operation() {
+            CipherLifecycleOperation::Trash => self.lifecycle_deleted = true,
+            CipherLifecycleOperation::Restore => self.lifecycle_deleted = false,
+            CipherLifecycleOperation::PermanentDelete => self.lifecycle_present = false,
+        }
+        Ok(())
     }
 }
 // Separate archive consumer: shared readonly and personal source facts remain
@@ -2021,6 +2134,10 @@ pub extern "C" fn _start() -> ! {
             archive_reader_revision: 0,
             archive_clock: 0,
             archive_commits: 0,
+            lifecycle_present: true,
+            lifecycle_deleted: false,
+            lifecycle_revision: 0,
+            lifecycle_account_revisions: [0; 3],
         };
         let organization = OrganizationCreateRequest {
             billing_email: "owner@example.com",
@@ -2090,6 +2207,47 @@ pub extern "C" fn _start() -> ! {
                 organization_service.storage().archive_annotations,
                 organization_service.storage().archive_actor_revision,
                 organization_service.storage().archive_reader_revision,
+            ));
+        }
+        // Real bodyless single lifecycle service with owned fixed snapshots:
+        // personal owner, readonly+manage shared repeats, live recheck and delete.
+        for (cipher, operation) in [
+            (
+                "embedded-lifecycle-personal",
+                CipherLifecycleOperation::Restore,
+            ),
+            ("embedded-lifecycle-shared", CipherLifecycleOperation::Trash),
+            ("embedded-lifecycle-shared", CipherLifecycleOperation::Trash),
+            (
+                "embedded-lifecycle-shared",
+                CipherLifecycleOperation::Restore,
+            ),
+            (
+                "embedded-lifecycle-shared",
+                CipherLifecycleOperation::Restore,
+            ),
+            (
+                "embedded-lifecycle-shared",
+                CipherLifecycleOperation::PermanentDelete,
+            ),
+            (
+                "embedded-lifecycle-shared",
+                CipherLifecycleOperation::Restore,
+            ),
+        ] {
+            let result = organization_service.mutate_cipher_lifecycle(
+                "embedded-owner",
+                black_box(cipher),
+                operation,
+            );
+            black_box((
+                result.is_ok(),
+                organization_service.storage().lifecycle_present,
+                organization_service.storage().lifecycle_deleted,
+                organization_service.storage().lifecycle_revision,
+                organization_service.storage().lifecycle_account_revisions,
+                organization_service.storage().archive_annotations,
+                organization_service.storage().partial_favorite,
             ));
         }
         // The real sharing service retains an association prefix after a later
