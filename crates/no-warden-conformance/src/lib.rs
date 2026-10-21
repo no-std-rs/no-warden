@@ -28,6 +28,8 @@ pub mod organization_bulk_member_removal;
 pub mod organization_bulk_member_removal_cli;
 pub mod organization_bulk_member_status;
 pub mod organization_bulk_member_status_cli;
+pub mod organization_cipher_sharing;
+pub mod organization_cipher_sharing_cli;
 pub mod organization_collection_mutations;
 pub mod organization_collection_mutations_cli;
 pub mod organization_collections;

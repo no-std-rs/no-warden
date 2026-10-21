@@ -39,13 +39,13 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 121 routed patterns, 63 with typed requests, 114 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 122 routed patterns, 64 with typed requests, 115 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 118 partial and 176 unimplemented. Query/rank/configuration
+status: 119 partial and 175 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
@@ -56,8 +56,8 @@ responses, and attachment responses. Bulk cipher lists use the generic `ListResp
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 115 patterns, negative
-HTTP evidence for 114, 305 named HTTP cases, and 53 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 116 patterns, negative
+HTTP evidence for 115, 311 named HTTP cases, and 54 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -1774,3 +1774,87 @@ or web-vault mini-flow compatibility is inferred. Configured groups/policies,
 imported unknown roles/statuses, dangling-account/backend/error behavior,
 concurrency/transport limits, cross-backend ordering, member editing and sharing
 remain open. Local provider tests and linked firmware do not close those variants.
+
+## Single organization-cipher sharing subset
+
+`PUT /api/ciphers/{cipher_id}/share` adds the single attachment-free
+secure-note sharing subset. Existing personal create/update/import remain
+organization-rejecting services. The [pinned PUT declaration](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L1001)
+and its separate POST/bulk aliases remain distinct from the actual Vaultwarden
+1.37.4 runtime used for paired comparisons. This PUT is partial; full API parity
+remains false.
+
+The required `collectionIds`/`cipher` wrapper accepts the measured PascalCase and
+mixed outer aliases. The host bounds decoding to 4096 selected IDs and rejects
+an excess with 422 before any association transaction. This is a local work
+budget, not a verified upstream count limit or a total response-byte bound. Native confirmed writable User, readonly/manage, hidden-
+password, restricted Manager and full-access fixtures have distinct admission.
+Accepted/revoked/nonmember or foreign-source controls fail. Empty selection and
+duplicates are measured separately. Missing/null inner `organizationId` follows
+the observed personal-payload update branch; the path ID remains authoritative.
+
+Collection association is sequential. `[valid, foreign-or-missing]` returns 400
+after retaining its valid prefix and advancing source/recipient account revisions,
+while source ownership, ciphertext, key, cipher revision, favorite and folder
+remain unchanged. The submitted replacement payload is not applied. Invalid-first
+selection has no measured mutation. Only the final sealed phase replaces opaque
+payload and canonical ownership; a whole-share atomic rollback is not claimed.
+
+Historical collection links can survive a retry into another organization.
+Confirmed membership in the cipher's current organization remains required.
+Such a member can gain access through a linked collection grant from the older
+organization; paired User and Manager see their older granted collection ID.
+A fresh current-organization cipher without a grant remains inaccessible to the
+restricted Manager. Eligible full viewers retain every linked ID. Association
+scope, actual collection organization and viewer grants stay distinct.
+The final paired HTTP suite includes retained full-viewer historical IDs,
+confirmed current-organization Manager/User access via an older collection grant,
+fresh restricted Manager denial without a grant and retry revision fanout. The separate B-only
+selective-recipient result remains native reference-only evidence.
+
+Readonly recipient single GET returns `collectionIds: []`, while list/sync include
+the associated visible ID. All three have edit/delete/restore false and password
+visibility true. Writable hide-password grants instead preserve edit/delete/
+restore and set `viewPassword` false. Folder/favorite/archive annotations belong
+to each viewer. The measured default personal/shared `organizationUseTotp` is
+true; arbitrary configured capability policies remain unverified. Success uses
+thirty known `cipherDetails` fields for these inputs, but response projection is
+adapter JSON rather than a complete borrowed typed serializer. Unknown opaque
+extensions are preserved independently of measured request-only metadata removal.
+
+`CipherShareRequest` is an optional caller-bounded borrowed wrapper.
+`CipherShareIdsData` also accepts uncapped stable views. Owned `AsRef<str>` source,
+membership and collection snapshots need no Clone/Debug/Serialize. The core
+validates associations, permissions and complete input; sealed association and
+payload plans leave persistence, clocks, HTTP and key wrapping in adapters.
+`resolve_cipher_access` is a pure allocation-free decision over confirmed current
+membership and verified associated grants, including historical collections.
+Each trusted association record carries the cipher's canonical organization
+separately from the collection's actual organization; viewer and association
+scope are still validated. Route-specific ID display remains separate. SQLite migration uses canonical personal
+owner XOR organization ownership, preserves opaque documents/child references,
+and keeps private annotations separate. Account cleanup preserves organization
+ciphers and other viewers while deleting only the departing user's annotations.
+Local transaction/reopen/rollback/live-authority checks do not prove upstream
+backend, timing, concurrency or durability variants. The RISC-V consumer links
+the real decoder/service/prefix/final/access paths with fixed storage; firmware
+is not executed and no opaque adapter serializer is implied by that link.
+
+Both actual targets pass six HTTP cases: 423 counted requests,
+2 password logins and 2 refreshes,
+excluding 2 registrations/4
+registration requests. The separate official CLI 2026.10.0 comparison executes
+`bw move` in 21 commands with 25 direct HTTP requests,
+3 CLI and 2 direct password
+logins, excluding 4 registration requests.
+It decrypts the same-ID item immediately and after owner sync/fresh-cache login,
+then in a fresh confirmed selective recipient cache, including collection
+decryption. These totals are separate from the unchanged 120-command baseline.
+
+The [pinned CLI command](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/admin-console/commands/share.command.ts#L88)
+delegates to the bundled SDK `share_cipher`/`put_share` path. The paired runner
+captures no endpoint trace or client-internal request count. A separate Node
+reference-only exploratory trace is not promoted into a local trace catalog.
+Browser flows, deprecated `share` alias, attachment-bearing moves, other item
+types, general shared edits/lifecycle, bulk/import/admin, configured policies/
+groups/SMTP, exhaustive errors and full API parity remain open.
