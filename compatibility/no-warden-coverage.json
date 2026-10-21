@@ -920,6 +920,8 @@
 
 },
 "source_sha256": {
+".github/workflows/ci.yml": "d44ac2c46d2f4285ac87699c93d41e5d8c000c125167ef3388c0ff5708fd070c",
+".github/workflows/client-shard.yml": "4bc4675e8783d86db1e2b8a08b9cb6f35394b3eeb15ac531b775b3476d3a251e",
 ".github/workflows/web-client.yml": "8fdec98f50580844f41c9890ae1b4385ff50c2c73b30ece4637d8a513e9f5679",
 "Cargo.lock": "7d907b21772efbd91957044e37246c19810af95378fee7b4cd0da6bb39e89e3f",
 "Cargo.toml": "394479d0b38a5c95418458fbe5c31ae8d7cc1887965380677539d951220a7e6a",
@@ -1090,9 +1092,11 @@
 "crates/no-warden/src/validation.rs": "16978772dec7ce528bfbd61598638727472e956cb0b2af7fddf1ea2b8ded3c45",
 "crates/no-warden/src/wire.rs": "e97428dc17a076f364dc7e45eada61fdb1dddd2e46a957895d29ed44f9c435fa",
 "tools/api-coverage.test.mjs": "55a43f2597d4c40fe0db8604fa0a300837a4024941ecb97ff931d7c10d6093b6",
-"tools/check-api-coverage.mjs": "f5b8be7ae6a4a7e53b5d962a9ee2ad6607286896a7ed5ebfe39eb52d1e8b8e8a",
+"tools/check-api-coverage.mjs": "5c2cec90d4777721c9061dfed3003afe4a50710108fe13f54897b5d0ec6df3f5",
 "tools/check-cli-inventory.mjs": "ee9101b057e862acffca44accc23295ea4ed95e6119e8f0c4b85e8d78834a031",
 "tools/cli-inventory.test.mjs": "6282eb84ca5a5989c029c2b0902fb3b6eb0c79a300e27198e151a07330ffbb1e",
+"tools/client-ci.mjs": "03055f4db858dc7f1b61b9b48eed19403325ac0d4d2f8e9e2b405f4eb182cae3",
+"tools/client-ci.test.mjs": "60f1b873188807e92beee695eeb2d162ff4a2ad175c13439e3ae393e6b90743a",
 "tools/discover-cli-requests.mjs": "db38517b99011051c706b63c8c28e662a3df63472b4c321c0febfe43d9097b4f",
 "tools/e2e.sh": "8e0eb31460366b847613fead2565c2542435182ffba65e797d48f4ffed393619",
 "tools/package-lock.json": "0f127d81a295476f141e11f478a8d026af876d3d519082c38a740aa635a7b5a4",

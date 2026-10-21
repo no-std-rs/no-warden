@@ -34,7 +34,7 @@ export function sourceHashes(root = repositoryRoot) {
     }
   }
   for (const directory of ["crates", "checks"]) walk(join(root, directory));
-  for (const file of ["Cargo.toml", "Cargo.lock", "tools/web-compat/package.json", "tools/web-compat/package-lock.json", "tools/web-compat/pins.json", ".github/workflows/web-client.yml"]) paths.push(join(root, file));
+  for (const file of ["Cargo.toml", "Cargo.lock", "tools/web-compat/package.json", "tools/web-compat/package-lock.json", "tools/web-compat/pins.json", ".github/workflows/web-client.yml", ".github/workflows/ci.yml", ".github/workflows/client-shard.yml"]) paths.push(join(root, file));
   // Include helpers and subprocess entry points as well as the test entry points.
   for (const entry of readdirSync(join(root, "tools"), { withFileTypes: true })) {
     if (entry.isFile() && (entry.name.endsWith(".mjs") || entry.name.endsWith(".sh") || ["package.json", "package-lock.json"].includes(entry.name))) {
