@@ -233,6 +233,12 @@ pub fn validate_cipher(request: &CipherRequest<'_>) -> Result<(), ApiError> {
             "Organization vaults are not supported by the personal-vault service.",
         ));
     }
+    validate_cipher_payload(request)
+}
+
+// Shared encrypted-field rules; ownership policy remains in each service.
+// Personal create/update/import retain the explicit organization rejection above.
+pub(crate) fn validate_cipher_payload(request: &CipherRequest<'_>) -> Result<(), ApiError> {
     if request.reprompt > 1 {
         return Err(ApiError::invalid(
             "reprompt",

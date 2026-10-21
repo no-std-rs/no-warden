@@ -14,6 +14,11 @@ use no_warden::{
     devices::{DeviceRecord, PendingDeviceAuthRequest},
     domains::{DomainProjection, DomainSettingsView, GlobalDomain},
     identity::Secret,
+    organization_cipher_sharing::{
+        CipherCollectionAccessRecord, CipherOwnership, CipherSharingCollection,
+        CipherSharingMembership, CipherSharingSource, OrganizationCipherSharingStorage,
+        ValidatedCipherShare, ValidatedCipherShareAssociation, resolve_cipher_access,
+    },
     organization_collection_mutations::{
         OrganizationCollectionMutationStorage, ValidatedCollectionDelete, ValidatedCollectionUpdate,
     },
@@ -75,8 +80,8 @@ use no_warden::{
         ApiKeyResponse, AttachmentRequest, AttachmentResponse, AttachmentUploadResponse,
         AuthRequestCreateRequest, AuthRequestListResponse, AuthRequestLoginRequest,
         AuthRequestResponse, AuthRequestUpdateRequest, AvatarUpdateRequest, CipherIdsRequest,
-        CipherRequest, ClientCredentialsRequest, DeviceListResponse, DevicePushTokenRequest,
-        DeviceResponse, DomainSettingsRequest, DomainSettingsResponse,
+        CipherRequest, CipherShareRequest, ClientCredentialsRequest, DeviceListResponse,
+        DevicePushTokenRequest, DeviceResponse, DomainSettingsRequest, DomainSettingsResponse,
         DomainSettingsUpdateResponse, FileSendRequest, FolderRequest, ImportRequest,
         InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
         MasterPasswordPolicy, MasterPasswordPolicyResponse, OrganizationBulkConfirmRequest,
@@ -127,6 +132,8 @@ struct PurgeProbe {
     confirmed_key_len: usize,
     member_removed: bool,
     member_status: i32,
+    sharing_associations: usize,
+    shared_cipher: bool,
 }
 impl PurgeProbe {
     fn organization_record(&self) -> OrganizationRecord<'_> {
@@ -225,6 +232,85 @@ impl Storage for PurgeProbe {
     }
 }
 impl CipherReadStorage for PurgeProbe {}
+impl OrganizationCipherSharingStorage for PurgeProbe {
+    type ShareId = &'static str;
+    fn sharing_source(
+        &mut self,
+        id: &str,
+    ) -> Result<Option<CipherSharingSource<Self::ShareId>>, ()> {
+        Ok(
+            (id == "embedded-share-source" && !self.shared_cipher).then_some(CipherSharingSource {
+                id: "embedded-share-source",
+                owner_id: Some("embedded-owner"),
+                organization_id: None,
+                revision: "embedded-source-revision",
+            }),
+        )
+    }
+    fn sharing_membership(
+        &mut self,
+        user: &str,
+        org: &str,
+    ) -> Result<Option<CipherSharingMembership<Self::ShareId>>, ()> {
+        Ok(
+            (user == "embedded-owner" && org == "embedded-org").then_some(
+                CipherSharingMembership {
+                    user_id: "embedded-owner",
+                    organization_id: "embedded-org",
+                    role: 0,
+                    status: 2,
+                    access_all: true,
+                },
+            ),
+        )
+    }
+    fn sharing_collection(
+        &mut self,
+        user: &str,
+        org: &str,
+        collection: &str,
+    ) -> Result<Option<CipherSharingCollection<Self::ShareId>>, ()> {
+        Ok((user == "embedded-owner"
+            && org == "embedded-org"
+            && collection == "embedded-share-collection")
+            .then_some(CipherSharingCollection {
+                id: "embedded-share-collection",
+                user_id: "embedded-owner",
+                organization_id: "embedded-org",
+                assigned: true,
+                read_only: false,
+                hide_passwords: false,
+                manage: false,
+            }))
+    }
+    fn associate_sharing_collection(
+        &mut self,
+        plan: &ValidatedCipherShareAssociation<'_>,
+    ) -> Result<(), ()> {
+        if plan.owner() != "embedded-owner"
+            || plan.cipher_id() != "embedded-share-source"
+            || plan.source_revision() != "embedded-source-revision"
+            || plan.target_organization() != "embedded-org"
+            || plan.collection_id() != "embedded-share-collection"
+        {
+            return Err(());
+        }
+        self.sharing_associations += 1;
+        Ok(())
+    }
+    fn commit_cipher_share(&mut self, plan: &ValidatedCipherShare<'_, '_>) -> Result<(), ()> {
+        if plan.owner() != "embedded-owner"
+            || plan.cipher_id() != "embedded-share-source"
+            || plan.source_revision() != "embedded-source-revision"
+            || plan.target_organization() != Some("embedded-org")
+            || plan.request().kind != 2
+        {
+            return Err(());
+        }
+        self.shared_cipher = true;
+        Ok(())
+    }
+}
 struct OrganizationProbeProfiles<'a>(&'a PurgeProbe);
 impl OrganizationProfileListData for OrganizationProbeProfiles<'_> {
     fn len(&self) -> usize {
@@ -1355,6 +1441,8 @@ pub extern "C" fn _start() -> ! {
             confirmed_key_len: 0,
             member_removed: false,
             member_status: 1,
+            sharing_associations: 0,
+            shared_cipher: false,
         };
         let organization = OrganizationCreateRequest {
             billing_email: "owner@example.com",
@@ -1366,6 +1454,67 @@ pub extern "C" fn _start() -> ! {
         };
         let mut organization_output = [0; 8192];
         let mut organization_service = VaultService::new(&mut provider);
+        // The real sharing service retains an association prefix after a later
+        // missing selection, then reaches the sealed payload phase on success.
+        let share = serde_json_core::from_slice::<CipherShareRequest<'_, 2>>(black_box(
+            br#"{"collectionIds":["embedded-share-collection","missing"],"cipher":{"type":2,"organizationId":"embedded-org","encryptedFor":"embedded-owner","name":"2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","notes":"2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","secureNote":{"type":0},"key":null}}"#,
+        ));
+        if let Ok((request, _)) = share {
+            let _ = black_box(organization_service.share_cipher(
+                "embedded-owner",
+                "embedded-share-source",
+                &request.cipher,
+                &request,
+            ));
+            black_box((
+                organization_service.storage().sharing_associations,
+                organization_service.storage().shared_cipher,
+            ));
+            let _ = black_box(organization_service.share_cipher(
+                "embedded-owner",
+                "embedded-share-source",
+                &request.cipher,
+                ["embedded-share-collection"].as_slice(),
+            ));
+            black_box((
+                organization_service.storage().sharing_associations,
+                organization_service.storage().shared_cipher,
+            ));
+        }
+        let readonly = [CipherCollectionAccessRecord {
+            cipher_organization_id: Some("embedded-org"),
+            collection: CipherSharingCollection {
+                id: "embedded-share-collection",
+                user_id: "embedded-reader",
+                organization_id: "embedded-historical-org",
+                assigned: true,
+                read_only: true,
+                hide_passwords: false,
+                manage: true,
+            },
+        }];
+        if let Ok(access) = resolve_cipher_access(
+            "embedded-reader",
+            CipherOwnership::Organization {
+                organization_id: "embedded-org",
+            },
+            Some(CipherSharingMembership {
+                user_id: "embedded-reader",
+                organization_id: "embedded-org",
+                role: 2,
+                status: 2,
+                access_all: false,
+            }),
+            readonly.as_slice(),
+        ) {
+            black_box((
+                access.readable(),
+                access.writable(),
+                access.view_password(),
+                access.delete(),
+                access.restore(),
+            ));
+        }
         if let Ok(response) =
             organization_service.create_organization("embedded-owner", &organization)
         {

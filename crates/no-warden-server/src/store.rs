@@ -199,7 +199,7 @@ impl Store {
         }
         #[cfg(unix)]
         restrict_database_files(path)?;
-        let db = Connection::open(path)?;
+        let mut db = Connection::open(path)?;
         db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS accounts(id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL COLLATE NOCASE, document TEXT NOT NULL, password TEXT NOT NULL, revision TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS items(id TEXT PRIMARY KEY, owner TEXT NOT NULL REFERENCES accounts(id), kind TEXT NOT NULL, document TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, revision TEXT NOT NULL, created TEXT NOT NULL);
@@ -224,6 +224,7 @@ impl Store {
         db.execute_batch(crate::organizations::SCHEMA)?;
         db.execute_batch(crate::organization_collections::SCHEMA)?;
         db.execute_batch(crate::organization_invitations::SCHEMA)?;
+        crate::cipher_ownership::initialize(&mut db)?;
         crate::sends::signing_key(&db)?;
         crate::prelogin::initialize(&db)?;
         // SQLite inherits the private database mode for new sidecars. Also
@@ -381,7 +382,10 @@ impl Store {
         let row: Option<(String, bool)> = self
             .db
             .query_row(
-                "SELECT owner,deleted FROM items WHERE id=?1 AND kind=?2",
+                // Personal-only core operations must fail their owner check for
+                // organization-owned rows, rather than treating a null account
+                // owner as a provider decoding failure.
+                "SELECT COALESCE(owner,''),deleted FROM items WHERE id=?1 AND kind=?2",
                 params![id, kind],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )

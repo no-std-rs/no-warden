@@ -1252,3 +1252,8 @@ official CLI observation comparison after HTTP setup. Restoring Invited zero
 has local SQL revision evidence; no HTTP revision claim is inferred. The CLI
 adds no mutation caller or trace. Event delivery, bulk status changes, policy
 administration, groups and organization cipher sharing remain outside this slice.
+
+The [organization cipher foundation](organization-cipher-foundation.md) adds an
+opt-in allocation-free provider, pure access decisions and canonical SQLite
+ownership. Its local tests and no-allocator link establish storage and core
+contracts; it adds no sharing HTTP route or client-compatibility claim.
