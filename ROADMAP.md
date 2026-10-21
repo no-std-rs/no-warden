@@ -113,6 +113,12 @@ invoke the pinned official Bitwarden CLI as an external process.
   matching official CLI move/fresh owner/recipient decryption commands per target.
   Attachment-bearing moves, general shared editing/lifecycle, bulk/import/admin,
   configured policy/group/backend and full API parity remain open.
+- [x] Organization web read subset: allocation-free scoped canonical cipher
+  metadata, aggregate 14-field collection access and provider-proved default
+  empty groups; six matching actual HTTP cases (156 requests) and 21 matching
+  official CLI observation commands. The organization creation/move browser
+  experiment is reference-only; no new CLI route caller, configured groups,
+  policy/attachment or full-parity claim.
 - [ ] Attachments, Sends, event notifications and websocket transport.
 - [ ] Two-factor authentication, passkeys, SSO and administrative APIs.
 - [ ] Full import/export compatibility, remaining formats and variants, and upstream protocol regression fixtures.

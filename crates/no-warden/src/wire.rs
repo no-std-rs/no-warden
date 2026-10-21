@@ -2151,6 +2151,13 @@ pub type OrganizationMemberListResponse<L> =
 pub type OrganizationMemberMiniDetailsResponse<L> =
     crate::organization_member_mini_details::OrganizationMemberMiniDetailsResponse<L>;
 
+/// Aggregate web collection details retain their separately measured projection.
+pub type OrganizationCollectionListDetailsResponse<L> =
+    crate::organization_web_reads::OrganizationCollectionDetailsResponse<L>;
+/// Only the provider-proved no-created-groups branch has a wire representation.
+pub type OrganizationEmptyGroupsResponse =
+    crate::organization_web_reads::OrganizationEmptyGroupsResponse;
+
 /// Single public membership response backed by the same caller-owned indexed view.
 pub type OrganizationMemberResponse<L> = crate::organization_members::OrganizationMemberResponse<L>;
 
@@ -2630,10 +2637,20 @@ impl<L: crate::organization_collections::CollectionListData> Serialize
 /// synthesized manage-all members are inserted. Internal associations never serialize.
 pub struct CollectionAccessDetailsResponse<D> {
     details: D,
+    unmanaged: Option<bool>,
 }
 impl<D> CollectionAccessDetailsResponse<D> {
     pub(crate) const fn new(details: D) -> Self {
-        Self { details }
+        Self {
+            details,
+            unmanaged: None,
+        }
+    }
+    pub(crate) const fn for_list(details: D) -> Self {
+        Self {
+            details,
+            unmanaged: Some(false),
+        }
     }
 }
 impl<D> core::fmt::Debug for CollectionAccessDetailsResponse<D> {
@@ -2647,7 +2664,7 @@ impl<D: crate::organization_collections::CollectionAccessData> Serialize
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
         let row = self.details.collection();
-        let mut map = serializer.serialize_map(Some(13))?;
+        let mut map = serializer.serialize_map(Some(13 + usize::from(self.unmanaged.is_some())))?;
         map.serialize_entry("id", row.collection.id)?;
         map.serialize_entry("organizationId", row.collection.organization_id)?;
         map.serialize_entry("name", row.collection.name)?;
@@ -2659,6 +2676,9 @@ impl<D: crate::organization_collections::CollectionAccessData> Serialize
         map.serialize_entry("hidePasswords", &row.hide_passwords)?;
         map.serialize_entry("manage", &row.manage)?;
         map.serialize_entry("assigned", &self.details.assigned())?;
+        if let Some(unmanaged) = self.unmanaged {
+            map.serialize_entry("unmanaged", &unmanaged)?;
+        }
         map.serialize_entry(
             "users",
             &CollectionAccessSelections {

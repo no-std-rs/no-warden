@@ -39,25 +39,25 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 122 routed patterns, 64 with typed requests, 115 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 125 routed patterns, 64 with typed requests, 118 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 119 partial and 175 unimplemented. Query/rank/configuration
+status: 122 partial and 172 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
 
-59 local patterns have some typed response representation, including
+62 local patterns have some typed response representation, including
 the domain settings projections and empty mutation response, explicit API-key
 responses, and attachment responses. Bulk cipher lists use the generic `ListResponse`
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 116 patterns, negative
-HTTP evidence for 115, 311 named HTTP cases, and 54 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 119 patterns, negative
+HTTP evidence for 118, 317 named HTTP cases, and 54 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -1858,3 +1858,97 @@ reference-only exploratory trace is not promoted into a local trace catalog.
 Browser flows, deprecated `share` alias, attachment-bearing moves, other item
 types, general shared edits/lifecycle, bulk/import/admin, configured policies/
 groups/SMTP, exhaustive errors and full API parity remain open.
+
+## Organization web read subset
+
+Three GETs support organization views used by the actual web client:
+`/api/ciphers/organization-details?organizationId=...`,
+`/api/organizations/{org_id}/collections/details`, and
+`/api/organizations/{org_id}/groups`. The last implements only the explicit
+provider-proved default with no created groups. All three handlers remain partial.
+Pinned [route declarations](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs)
+identify the protocol inventory; actual behavior comes from Vaultwarden 1.37.4.
+The image build is `7c188967e7a467b19b2757bc3326f9cf3ccae327`, separate from that
+inventory revision. The verified image-derived runtime binary SHA256 is
+`a5b13f4da66609b9a0c24fac68e3e1f83fbf23b512b5114a54c6fc4c92cf7a4e`.
+
+All successful envelopes have exactly `data`, `object: "list"`, and
+`continuationToken: null`. Organization ciphers require confirmed Owner/Admin
+or the measured full-access Custom fixture. Restricted Manager/Custom actors
+receive 404; User, accepted/revoked Admin and nonmembers receive 401. Only
+canonical organization-owned ciphers appear, even when the actor owns another
+organization. The exact 24-field known projection excludes ordinary cipher
+`archivedDate`, `edit`, `favorite`, `folderId`, `permissions` and `viewPassword`;
+`fields` and `passwordHistory` are arrays in the tested projection: absent and
+explicit-null inputs become empty arrays, while nonempty encrypted entries
+remain exact. Opaque encrypted
+payloads stay in the adapter and never round-trip through a partial core DTO.
+Unknown encrypted extensions remain preserved without an upstream parity claim.
+Attachments, other cipher types and complete response variants remain open.
+
+Collection-list details admit current confirmed managers. Owners/Admins and
+full-access Custom see all collections; the restricted legacy Manager sees only
+its assigned readonly collection, and restricted Custom with no grants sees an
+empty list. User/accepted or revoked Admin/nonmembers receive 401. Aggregate rows
+have exactly 14 known fields, adding only `unmanaged: false` to the separate
+13-field individual-detail projection. Individual details still omit that field.
+Aggregate `users` includes confirmed implicit full-access memberships plus direct grants,
+with exact `id`, `readOnly`, `hidePasswords`, `manage` rows and verified identity/
+flag sets. Accepted, invited passwordless and revoked Admin targets without direct grants
+are omitted; confirming/restoring Admin adds the implicit entry. Invited and
+revoked directly assigned Users retain their grant entries. These target states
+remain separate from current confirmed actor admission. Arbitrary
+nested ordering and configured groups are not established.
+
+The measured full-access Custom fixture requests role 4 and sets
+`createNewCollections`, `editAnyCollection`, and `deleteAnyCollection` true.
+Legacy requested Manager 3 serializes as wire role 4. These fixtures do not
+establish every custom permission combination or blanket Manager full access.
+Groups share the stronger cipher-list guard and return the exact empty envelope
+only when `OrganizationGroupPresence::NoCreatedGroups` is explicitly proved.
+Configured/unknown provider state fails closed as unsupported 403; this is a
+local safety boundary, not an upstream configured-group contract. The default
+adapter has no group storage/administration and refuses to fabricate an empty
+list if group-storage schema is present. Group CRUD, row models and ACLs remain
+separate work.
+
+The cipher query requires `organizationId`. Missing/empty/malformed/unknown/
+foreign/uppercase values deny 401; the first duplicate wins. Percent-encoded
+names/values and dotted/bracketed root names are accepted, unrelated query
+fields ignored. Collection/group path IDs remain exact and case-sensitive;
+unknown/foreign/uppercase IDs deny 401. `includeAccessDetails` true/false/invalid
+and unrelated queries do not alter the measured collection projection. This is
+bounded query evidence, not complete Rocket parsing or method/rank parity.
+
+`OrganizationWebReadsStorage` opts into stable indexed cipher metadata and
+borrowed collection access views. The allocation-free service applies current
+admission, validates canonical IDs, actor/scope and nested views, then lends
+sealed serializers/grants. The adapter holds the lock through projection and
+serialization. Cipher documents, HTTP queries, SQL and crypto stay adapters.
+The linked RISC-V consumer calls all three real services and serializes typed
+aggregate/empty responses into stack buffers without allocator/std/undefined
+symbols; firmware is linked rather than executed.
+
+Both actual targets pass six reusable HTTP cases: 156 counted requests,
+including two password logins and two refreshes, plus four registration requests
+for two accounts. Seven organizations cover positive/negative roles, accepted/
+confirmed/revoked/restored Admin states, query guards, two readable organization
+cipher scopes, direct/implicit grants and preserved ordinary ciphertext, keys,
+revisions and session authority. A separate official CLI 2026.10.0 observer
+passes 21 commands and 25 direct HTTP requests per target, including two CLI
+password logins and one direct login, plus two registration requests. Nine
+new-route reads are explicitly native harness calls. Actual CLI collection
+create/list/get/sync/cache/fresh and shared-note authenticated decryption prove
+usable state. No new CLI caller, command form, internal request count or captured
+route trace follows. The inherited 120-command baseline stays a separate suite.
+
+A separate reference-only owner UI experiment used Vaultwarden Web 2026.7.0,
+Chromium 149.0.7827.55 and Playwright 1.64.1. It created a personal note, then an
+organization and collection, assigned the note to that collection and reopened
+it. Its 32 allowlisted API responses included these three reads and the distinct
+bulk `PUT /api/ciphers/share` mutation. That UI experiment ran only against
+Vaultwarden; it is not paired browser compatibility for organization creation,
+these reads, or bulk sharing. The existing paired personal-web smoke retains its
+own narrower evidence. Configured policies/groups/SMTP, attachments, complete
+query/error/transport/failure/concurrency variants and full upstream parity
+remain unfinished.

@@ -21,7 +21,57 @@ use uuid::Uuid;
 
 pub const COMMAND_COUNT: usize = 19;
 pub const DIRECT_HTTP_REQUEST_COUNT: usize = 14;
+pub(crate) const WEB_COMMAND_COUNT: usize = COMMAND_COUNT + 2;
+pub(crate) const WEB_DIRECT_HTTP_REQUEST_COUNT: usize = DIRECT_HTTP_REQUEST_COUNT + 11;
+#[derive(Clone, Copy)]
+enum Observation {
+    Standard,
+    WebReads,
+}
+impl Observation {
+    fn commands(self) -> usize {
+        if matches!(self, Self::WebReads) {
+            WEB_COMMAND_COUNT
+        } else {
+            COMMAND_COUNT
+        }
+    }
+    fn requests(self) -> usize {
+        if matches!(self, Self::WebReads) {
+            WEB_DIRECT_HTTP_REQUEST_COUNT
+        } else {
+            DIRECT_HTTP_REQUEST_COUNT
+        }
+    }
+    fn receipt_environment(self) -> &'static str {
+        if matches!(self, Self::WebReads) {
+            "BW_WEB_ORGANIZATION_READS_CLI_RECEIPT"
+        } else {
+            "BW_ORGANIZATION_COLLECTIONS_CLI_RECEIPT"
+        }
+    }
+    fn observe(
+        self,
+        http: &mut Http,
+        account: &organization_owner::Account,
+        org: &Organization,
+        shared: Option<&Value>,
+        created: Option<&str>,
+    ) -> Result<(), Error> {
+        if matches!(self, Self::WebReads) {
+            crate::organization_web_reads::observe_owner(
+                http,
+                account,
+                org,
+                shared.ok_or(Error("Web CLI shared fixture missing"))?,
+                created,
+            )?;
+        }
+        Ok(())
+    }
+}
 struct Cli {
+    observation: Observation,
     binary: PathBuf,
     environment: BTreeMap<OsString, OsString>,
     commands: usize,
@@ -39,10 +89,15 @@ impl Drop for Cli {
 }
 impl Cli {
     fn receipt(&mut self, status: &str) -> Result<(), Error> {
-        write_receipt(
-            &mut self.receipt,
-            &json!({"schemaVersion":1,"status":status,"commands":self.commands,"expectedCommands":COMMAND_COUNT,"cliVersion":"2026.10.0","cliPasswordLoginCommands":self.logins,"directPasswordLoginRequests":1,"directHttpRequests":self.direct_requests,"expectedDirectHttpRequests":DIRECT_HTTP_REQUEST_COUNT,"fixtureRegistrations":1,"fixtureRegistrationHttpRequests":2,"separateFromBaseline120":true,"clientInternalRequestsCounted":false,"capturedRouteTrace":false}),
-        )
+        let mut value = json!({"schemaVersion":1,"status":status,"commands":self.commands,"expectedCommands":self.observation.commands(),"cliVersion":"2026.10.0","cliPasswordLoginCommands":self.logins,"directPasswordLoginRequests":1,"directHttpRequests":self.direct_requests,"expectedDirectHttpRequests":self.observation.requests(),"fixtureRegistrations":1,"fixtureRegistrationHttpRequests":2,"separateFromBaseline120":true,"clientInternalRequestsCounted":false,"capturedRouteTrace":false});
+        if matches!(self.observation, Observation::WebReads) {
+            value["cliWebOrganizationReadCallerClaimed"] = json!(false);
+            value["browserTraceClaimed"] = json!(false);
+            value["directOrganizationReadRequests"] = json!(9);
+            value["actualSharedItemFreshCacheDecryption"] = json!(status == "passed");
+            value["fullParityClaimed"] = json!(false);
+        }
+        write_receipt(&mut self.receipt, &value)
     }
     fn command(
         &mut self,
@@ -52,7 +107,7 @@ impl Cli {
     ) -> Result<String, Error> {
         self.commands += 1;
         require(
-            self.commands <= COMMAND_COUNT,
+            self.commands <= self.observation.commands(),
             "Collection CLI command budget exceeded",
         )?;
         if args.first() == Some(&"login") {
@@ -175,12 +230,28 @@ fn normalize_cli(mut value: Value) -> Result<Value, Error> {
     Ok(value)
 }
 pub fn run() -> Result<(), Error> {
+    run_mode(Observation::Standard)
+}
+pub(crate) fn run_web_reads() -> Result<(), Error> {
+    run_mode(Observation::WebReads)
+}
+fn run_mode(observation: Observation) -> Result<(), Error> {
     let cache = private_dir("no-warden-collection-cli-")?;
     let fresh = private_dir("no-warden-collection-cli-fresh-")?;
     let tls = private_dir("no-warden-collection-cli-tls-")?;
     let mut http = Http::new()?;
     let account = organization_owner::seed(&mut http)?;
     let organization = organization_collections::create_organization(&mut http, &account)?;
+    let shared = if matches!(observation, Observation::WebReads) {
+        Some(crate::organization_web_reads::share_fixture(
+            &mut http,
+            &account,
+            &organization,
+        )?)
+    } else {
+        None
+    };
+    observation.observe(&mut http, &account, &organization, shared.as_ref(), None)?;
     let before = normalize_cli(http.personal(&account.token)?)?;
     let proxy = if http.server.starts_with("http:") {
         Some(
@@ -222,12 +293,13 @@ pub fn run() -> Result<(), Error> {
         );
     }
     let mut c = Cli {
+        observation,
         binary,
         environment,
         commands: 0,
         logins: 0,
         direct_requests: None,
-        receipt: receipt_file("BW_ORGANIZATION_COLLECTIONS_CLI_RECEIPT")?,
+        receipt: receipt_file(observation.receipt_environment())?,
         finished: false,
     };
     c.receipt("running")?;
@@ -280,10 +352,25 @@ pub fn run() -> Result<(), Error> {
         "CLI collection creation response differed",
     )?;
     c.get(&organization, &id, cache.path(), &session)?;
+    observation.observe(
+        &mut http,
+        &account,
+        &organization,
+        shared.as_ref(),
+        Some(&id),
+    )?;
     c.list(&organization, &id, NAME, cache.path(), &session, false)?;
     c.command(&["sync"], cache.path(), Some(&session))?;
     c.list(&organization, &id, NAME, cache.path(), &session, true)?;
     c.note(&account.cipher_id, cache.path(), &session)?;
+    if let Some(shared) = &shared {
+        let value = c.json(
+            &["get", "item", text(&shared["id"])?],
+            cache.path(),
+            &session,
+        )?;
+        check_shared_cli(&value, shared, &organization)?;
+    }
     c.command(&["logout"], cache.path(), Some(&session))?;
     c.command(&["config", "server", &configured], fresh.path(), None)?;
     let session = c.command(&login, fresh.path(), None)?;
@@ -295,7 +382,22 @@ pub fn run() -> Result<(), Error> {
     c.list(&organization, &id, NAME, fresh.path(), &session, false)?;
     c.get(&organization, &id, fresh.path(), &session)?;
     c.note(&account.cipher_id, fresh.path(), &session)?;
+    if let Some(shared) = &shared {
+        let value = c.json(
+            &["get", "item", text(&shared["id"])?],
+            fresh.path(),
+            &session,
+        )?;
+        check_shared_cli(&value, shared, &organization)?;
+    }
     c.command(&["logout"], fresh.path(), Some(&session))?;
+    observation.observe(
+        &mut http,
+        &account,
+        &organization,
+        shared.as_ref(),
+        Some(&id),
+    )?;
     let detail = http.json(
         reqwest::Method::GET,
         &organization_collections::details_path(&organization.id, &id),
@@ -319,17 +421,32 @@ pub fn run() -> Result<(), Error> {
         "Collection CLI changed personal keys, ciphertext or settings",
     )?;
     require(
-        c.commands == COMMAND_COUNT
+        c.commands == observation.commands()
             && c.logins == 2
             && http.logins == 1
-            && http.requests == DIRECT_HTTP_REQUEST_COUNT,
+            && http.requests == observation.requests(),
         "Collection CLI command or login budget differed",
     )?;
     c.direct_requests = Some(http.requests);
     c.receipt("passed")?;
     c.finished = true;
-    println!(
-        "PASS organization-collections CLI: {COMMAND_COUNT} commands, 2 CLI logins, 1 direct setup login"
-    );
+    let label = if matches!(observation, Observation::WebReads) {
+        "web-organization-reads"
+    } else {
+        "organization-collections"
+    };
+    let count = observation.commands();
+    println!("PASS {label} CLI: {count} commands, 2 CLI logins, 1 direct setup login");
     Ok(())
+}
+
+fn check_shared_cli(value: &Value, shared: &Value, org: &Organization) -> Result<(), Error> {
+    require(
+        value["id"] == shared["id"]
+            && value["organizationId"] == org.id
+            && value["collectionIds"] == json!([org.collection_id])
+            && value["name"] == crate::organization_web_reads::NOTE
+            && value["notes"] == crate::organization_web_reads::NOTE,
+        "Official CLI shared-item decryption differed",
+    )
 }

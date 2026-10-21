@@ -57,6 +57,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Organization member public-key batches | Ordered scoped public-only rows, null-key retention and unfiltered target states/roles | Six matching HTTP cases (431 requests) and 16 matching official CLI fingerprint/decryption commands on both targets; no bulk CLI caller or browser trace claim |
 | Organization member mini-details | Seven-field read-only metadata, unfiltered names/native states, restricted Manager admission | Six matching HTTP cases (619 requests) and 18 matching official CLI observation commands on both targets; no mini CLI caller/browser trace |
 | Single organization-cipher sharing | Sequential collection-prefix effects, confirmed canonical membership and historical grants, viewer annotations and route-specific shared reads | Six matching HTTP cases (423 requests) and 21 actual CLI move/fresh-cache decryption commands per target; no route trace/attachment/bulk/full-parity claim |
+| Organization web reads | Canonical cipher lists, aggregate collection access and explicit default empty groups | Six matching HTTP cases (156 requests) and 21 matching official CLI observation commands; reference-only organization UI experiment stays separate |
 | Single organization-collection update/delete | Complete grant replacement, opaque names, whitespace external-ID clearing and preserved cipher data | Allocation-free core and local rollback/cascade tests; six matching HTTP cases and twenty matching official CLI commands on both actual targets |
 | Organization-scoped collection list/create/single access-details | Confirmed manager authorization, exact projections, opaque names/external IDs and reference validation | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers; atomic local provider tests |
 | Password grant with compact `authRequest` | Approved, unexpired, same-peer one-use access code; different login device allowed | Eight matching Rust HTTP cases on both actual servers; allocation-free service/provider, exact-deadline, rollback, replay and private-reopen host tests; unchanged CLI regression remains separate |
@@ -1512,3 +1513,34 @@ is linked, not run. Deprecated aliases, attachment-bearing moves, general shared
 editing/lifecycle, bulk/import/admin, configured policies/groups/SMTP, complete
 typed serialization and full parity remain open. See the
 [API parity notes](api-parity.md#single-organization-cipher-sharing-subset).
+
+## Organization web reads
+
+Both actual no-warden and Vaultwarden 1.37.4 pass six Rust HTTP cases for
+organization cipher details, aggregate collection details and provider-proved
+empty groups: 156 requests plus four registration requests per target, including
+two password logins and two refreshes. Exact 24-field cipher and 14-field
+collection projections, nested direct/implicit user grants, query/raw-ID scope,
+role/status guards and read preservation pass. Individual collection details
+retain their separate 13-field shape. Restricted managers can list assigned
+collections but cannot list all organization ciphers or groups. Custom full
+access is qualified to the exact three-permission fixture; configured groups
+and policies are not claimed.
+
+A separate official CLI 2026.10.0 observer passes 21 commands/25 direct HTTP
+requests plus two registration requests per target, with two CLI password logins
+and one direct login. Nine new-route GETs belong to the harness; real CLI
+collection mutation/live/cache/fresh reads and shared-note decryption observe
+usable state. No CLI caller, captured route trace, new command form or combined
+120-command baseline total follows. The original collection 19-command observer
+remains a separate mode.
+
+A reference-only Web 2026.7.0/Chromium 149.0.7827.55/Playwright 1.64.1 owner flow
+recorded 32 allowlisted API responses, created an organization/collection, moved
+a personal note through bulk `PUT /api/ciphers/share`, and reopened it. That
+experiment did not run against no-warden and does not establish paired browser
+support for these routes or bulk sharing. Version/image/source provenance,
+provider/noalloc boundaries and exact limitations appear in the
+[API parity notes](api-parity.md#organization-web-read-subset). Group CRUD,
+configured groups/SMTP/policies, attachments, broader cipher/transport/error and
+failure/concurrency behavior remain open. All three handlers remain partial.
