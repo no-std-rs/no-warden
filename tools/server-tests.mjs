@@ -332,7 +332,9 @@ await test("standalone adapter enforces authentication, isolation, and JSON pres
       const item = ok(await request("/api/ciphers", { method: "POST", token: aliceToken, body }), "maximum decoded blob");
       assert.equal(item.data, data);
       assert.equal(ok(await request(`/api/ciphers/${item.id}`, { token: aliceToken }), "maximum blob get").data, data);
-      ok(await request(`/api/ciphers/${item.id}`, { method: "DELETE", token: aliceToken }), "maximum blob cleanup");
+      const deleted = await request(`/api/ciphers/${item.id}`, { method: "DELETE", token: aliceToken });
+      assert.equal(deleted.status, 200, "Single cipher permanent deletion returns 200");
+      assert.equal(deleted.bodyBytes, 0, "Single cipher permanent deletion has an empty body");
     }
     const before = ok(await request("/api/sync", { token: aliceToken }), "size limit baseline");
     const beforeRevision = ok(await request("/api/accounts/revision-date", { token: aliceToken }), "size limit baseline revision");

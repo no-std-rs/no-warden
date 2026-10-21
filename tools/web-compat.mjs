@@ -27,7 +27,7 @@ const ROUTES = new Set([
   "/api/config", "/identity/accounts/prelogin/password", "/api/devices/knowndevice",
   "/identity/connect/token", "/api/sync", "/api/accounts/profile",
   "/api/accounts/revision-date", "/api/auth-requests/pending",
-  "/api/ciphers", "/api/ciphers/{id}", "/api/ciphers/{id}/delete",
+  "/api/ciphers", "/api/ciphers/{id}", "/api/ciphers/{id}/delete", "/api/ciphers/{id}/restore",
 ]);
 let stage = "configuration";
 const proxies = [];
@@ -47,7 +47,8 @@ function apiPath(path) {
 }
 function observedPath(path) {
   if (/^\/api\/ciphers\/[0-9a-f-]{36}$/i.test(path)) return "/api/ciphers/{id}";
-  if (/^\/api\/ciphers\/[0-9a-f-]{36}\/delete$/i.test(path)) return "/api/ciphers/{id}/delete";
+  const lifecycle = /^\/api\/ciphers\/[0-9a-f-]{36}\/(delete|restore)$/i.exec(path);
+  if (lifecycle) return `/api/ciphers/{id}/${lifecycle[1].toLowerCase()}`;
   return path;
 }
 async function artifact(reference) {
@@ -196,6 +197,46 @@ async function run(label, backend, origin, strictVault) {
       ]);
       await dialog.waitFor({ state: "hidden" });
       await page.getByRole("button", { name: itemName, exact: true }).waitFor({ state: "hidden" });
+      stage = `${label}: navigate Trash`;
+      await page.getByRole("button", { name: /Trash/ }).click();
+      stage = `${label}: select trashed login`;
+      await page.getByRole("button", { name: itemName, exact: true }).click();
+      stage = `${label}: read trashed login`;
+      await dialog.getByTestId("login-username").waitFor({ state: "visible" });
+      assert.equal(await dialog.getByTestId("login-username").inputValue(), editedUsername);
+      assert.equal(await dialog.getByTestId("login-password").inputValue(), editedPassword);
+      stage = `${label}: restore login through UI`;
+      await Promise.all([
+        responseFor(page, "PUT", "/api/ciphers/{id}/restore"),
+        dialog.getByRole("button", { name: "Restore", exact: true }).click(),
+      ]);
+      await dialog.waitFor({ state: "hidden" });
+      await page.getByRole("button", { name: itemName, exact: true }).waitFor({ state: "hidden" });
+      stage = `${label}: navigate All items after restore`;
+      await page.getByTestId("filters").getByText("All items", { exact: true }).click();
+      stage = `${label}: read restored active login`;
+      await page.getByRole("button", { name: itemName, exact: true }).click();
+      await dialog.getByTestId("login-username").waitFor({ state: "visible" });
+      assert.equal(await dialog.getByTestId("login-username").inputValue(), editedUsername);
+      assert.equal(await dialog.getByTestId("login-password").inputValue(), editedPassword);
+      stage = `${label}: retrash restored login`;
+      await dialog.getByTestId("delete-cipher-btn").click();
+      await Promise.all([
+        responseFor(page, "PUT", "/api/ciphers/{id}/delete"),
+        page.getByRole("button", { name: "Yes", exact: true }).click(),
+      ]);
+      await dialog.waitFor({ state: "hidden" });
+      await page.getByRole("button", { name: itemName, exact: true }).waitFor({ state: "hidden" });
+      stage = `${label}: permanently delete trashed login`;
+      await page.getByRole("button", { name: /Trash/ }).click();
+      await page.getByRole("button", { name: itemName, exact: true }).click();
+      await dialog.getByTestId("delete-cipher-btn").click();
+      await Promise.all([
+        responseFor(page, "DELETE", "/api/ciphers/{id}"),
+        page.getByRole("button", { name: "Yes", exact: true }).click(),
+      ]);
+      await dialog.waitFor({ state: "hidden" });
+      await page.getByRole("button", { name: itemName, exact: true }).waitFor({ state: "hidden" });
       stage = `${label}: refreshed vault is locked`;
       await page.reload();
       await page.waitForURL((url) => url.hash.startsWith("#/lock"));
@@ -210,7 +251,9 @@ async function run(label, backend, origin, strictVault) {
         lock: strictVault ? "passed" : "not-requested",
         passwordUnlockAndSync: strictVault ? "passed" : "not-requested",
         reloadLocksVault: strictVault ? "passed" : "not-requested",
-        itemRoundtrip: strictVault ? "passed" : "not-requested", notifications: "not-tested",
+        itemRoundtrip: strictVault ? "passed" : "not-requested",
+        trashRestore: strictVault ? "passed" : "not-requested",
+        permanentDelete: strictVault ? "passed" : "not-requested", notifications: "not-tested",
       },
       http: [...observations].sort().map(([operation, count]) => ({ operation, count })),
     };

@@ -228,7 +228,7 @@ export function validateCoverage(coverage, hashes = sourceHashes(), readSource =
   assert(!/^\s*(?:if|continue-on-error)\s*:/m.test(workflow), "Web comparison workflow must execute unconditionally and fail on error");
   assert.equal(web.playwright_version, JSON.parse(readSource("tools/web-compat/package-lock.json")).packages["node_modules/playwright-core"].version);
   assert.equal(web.playwright_version, JSON.parse(readSource("tools/web-compat/package.json")).dependencies["playwright-core"]);
-  assert.deepEqual(web.paired_checks, ["passwordLogin", "initialSync", "authenticatedProfile", "vaultNavigation", "lock", "passwordUnlockAndSync", "reloadLocksVault", "itemRoundtrip"]);
+  assert.deepEqual(web.paired_checks, ["passwordLogin", "initialSync", "authenticatedProfile", "vaultNavigation", "lock", "passwordUnlockAndSync", "reloadLocksVault", "itemRoundtrip", "trashRestore", "permanentDelete"]);
   assert.deepEqual(web.no_warden_only_checks, []);
   for (const operation of web.paired_browser_http_shapes) assert(rows.has(operation), `Unknown browser-observed route: ${operation}`);
   assert.equal(new Set(web.paired_browser_http_shapes).size, web.paired_browser_http_shapes.length);

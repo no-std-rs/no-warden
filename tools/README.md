@@ -717,7 +717,7 @@ malformed UUIDs return 422 only after successful authentication. Responses remai
 opaque adapter-owned JSON; alias comparisons cannot establish a complete core
 response model or organization policy.
 
-All six cases pass against the adapter and actual Vaultwarden 1.37.4: 335
+All six cases pass against the adapter and actual Vaultwarden 1.37.4: 337
 counted HTTP requests, four successful password logins on one direct peer, two
 excluded fixture registrations and 34 exact attachment-byte checks per server.
 The cases compare ordinary/details/admin payloads in active, trashed and archived
@@ -726,6 +726,10 @@ slashes, eleven reserved malformed GET literals, and owner/foreign snapshots.
 Attachment URL tokens alone are normalized for comparison; capabilities still
 retrieve exact encrypted bytes. `BW_CIPHER_READS_RECEIPT` writes only authored
 case names and counters to a new private file.
+
+After every read-only snapshot assertion, the final case now requires a trashed
+cipher's DELETE to return 200 with an empty body, followed by an exact
+missing-item read. These two extra requests catch the prior successful 204.
 
 Client source shows a notification-upsert caller for the details helper, but this
 harness does not execute notifications or claim that the CLI requested either
@@ -1088,8 +1092,14 @@ the reference's ordinary onboarding Skip controls. This smoke does not establish
 unmodified official Web, other item types, notification or complete web parity.
 Both browsers create/read/edit a personal login, decrypt the saved edit after
 unlock and move it to trash. The single-cipher PUT trash response now matches
-the reference's empty200; the Rust read-fixture setup requires that exact status
-and empty body rather than accepting any successful status.
+the reference's empty 200; the Rust read-fixture setup requires that exact status
+and empty body rather than accepting any successful status. Both browsers also
+navigate Trash, decrypt the trashed login, restore it, verify the saved edit in
+All items, retrash it, and permanently delete it through the normal
+confirmation. PUT restore and DELETE permanent deletion each return 200.
+Permanent deletion now matches the reference's empty 200 response, with a
+strict status/body and subsequent missing-item check in the existing final
+Rust cipher-read case. Its six cases pass both targets at 337 requests each.
 
 
 ## Fixture build profile
