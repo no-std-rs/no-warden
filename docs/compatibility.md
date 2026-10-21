@@ -650,13 +650,15 @@ The current bulk lifecycle contract follows the pinned
 and [archive helpers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L2026-L2139).
 Requests contain `ids`; duplicates collapse and result order is unspecified.
 Delete and trash return an empty success response; bulk restore, archive, and
-unarchive return a list of cipher responses. Empty batches succeed. The adapter
-requires ownership of every selected personal item before an atomic commit;
-missing or inaccessible bulk members return 400, matching the pinned helper's
-status. Vaultwarden may already have mutated other members when returning that
-error; the adapter rolls back the complete batch. Existing single-item lifecycle
-handlers retain their earlier 404 policy. Atomicity and the narrower personal
-permissions remain explicit limitations on full parity.
+unarchive return a list of cipher responses. Empty batches succeed. For bulk
+trash, restore and permanent deletion, the adapter requires ownership of every
+selected personal item before an atomic commit; missing or inaccessible members
+return 400. Native errors can retain earlier effects; those other lifecycle
+batches retain stronger local rollback. Selected archive/unarchive instead use
+READ-first, separately committed steps with eligible durable subsets, described
+in [shared archive annotations](#shared-cipher-archive-annotations). Existing
+single-item trash/restore/permanent-delete handlers retain their earlier 404
+policy. These narrower permission and failure contracts remain explicit limits.
 
 Archive state is independent of trash state. Archive/unarchive updates the
 account revision without changing the cipher's revision. Ordinary cipher
@@ -1620,3 +1622,7 @@ Both actual targets pass six HTTP cases/522 requests and a separate actual CLI 2
 ## Private cipher annotations
 
 Both actual targets pass six HTTP cases/605 requests plus 4 registrations and a separate actual CLI observer 31/37 fixture HTTP plus 4 registrations. Private favorite/folder and actor revision, readonly/historical read admission, no-op actor revision, unchanged encrypted common/cipher revision/other-account state and fresh owner/recipient note/folder decryption are covered. Direct HTTP performs mutations; no production CLI partial caller, captured trace, native-only-to-local browser inference or full-parity claim. Separate strict paired pinned-web evidence covers readonly Favorite then private-folder Save via two PUT partial calls and three fresh contexts; POST browser and general web parity remain unclaimed. See [API limits](api-parity.md#private-cipher-annotations).
+
+## Shared cipher archive annotations
+
+Six paired HTTP cases/1115 requests plus four registrations and actual CLI 39/57 direct setup/control plus four registrations verify this secure-note subset. Owner/readonly recipient archive/unarchive and fresh decryption preserve private/common state; single current-reader and selected actor-only revisions differ. Mixed invalid selections may retain an eligible subset. No captured trace, single-route CLI caller, general browser, capacity/concurrency or full endpoint parity claim. See [limits](api-parity.md#shared-cipher-archive-annotations).

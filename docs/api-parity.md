@@ -57,7 +57,7 @@ wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
 The ledger records positive or restart HTTP evidence for 123 patterns, negative
-HTTP evidence for 122, 335 named HTTP cases, and 55 CLI command patterns. These are
+HTTP evidence for 122, 341 named HTTP cases, and 55 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -154,9 +154,10 @@ The upstream source saves sequentially, so local atomicity is recorded as an
 adapter guarantee rather than upstream behavioral equivalence. See
 [verified compatibility](compatibility.md) for the exercised types and limits.
 
-The cipher lifecycle subset adds the following personal-vault contracts.
-All admin-named aliases keep the same ownership checks; organization permissions
-remain outside this subset.
+The original cipher lifecycle subset added the personal-vault contracts below.
+Admin-named aliases keep the same ownership checks. Shared archive/unarchive now
+uses the separate [READ and revision contract](#shared-cipher-archive-annotations);
+other organization lifecycle permissions remain outside this historical subset.
 
 | Action | Method and `/api` route | Request and success response |
 | --- | --- | --- |
@@ -168,9 +169,11 @@ remain outside this subset.
 
 The [pinned server helpers](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L1876-L1972)
 deduplicate IDs without prescribing order. The adapter preserves that success
-behavior and the bulk missing/inaccessible-member status of 400 while providing
-atomic persistence; upstream errors may occur after partial writes. Existing
-single-item lifecycle handlers retain their earlier 404 policy. Archive/unarchive
+behavior and the bulk missing/inaccessible-member status of 400. Bulk trash,
+restore and permanent deletion retain atomic persistence; selected archive and
+unarchive instead use READ-first, separately durable steps described below.
+Upstream errors may occur after partial writes. Existing single-item trash,
+restore and permanent-delete handlers retain their earlier 404 policy. Archive/unarchive
 changes the acting user's archive metadata and account revision while leaving
 the cipher revision intact, as the
 [pinned archive model](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/archive.rs#L35-L83)
@@ -2117,3 +2120,53 @@ are not automated suite totals. Static client/SDK references are b449ac1d... and
 c5e53d3e... . Hidden-password partials, attachments, broader item/deleted/archived
 states, configured groups/policies, native concurrency/capacity and full parity
 remain open. All full-parity flags remain false.
+
+## Shared cipher archive annotations
+
+The measured attachment-free secure-note subset supports PUT single and selected
+archive/unarchive for current readable shared sources, including readonly members.
+Single replies are exact 30-field cipherDetails equal to actor GET; selected
+replies are three-field lists. Archive dates, folders and favorites stay private;
+common encrypted payload/key/fields/history, cipher revision, ownership and links
+remain unchanged. Single operations notify current readers; selected operations
+notify only the actor. Repeated operations retain this distinction; empty selected
+input does not notify. Mixed selections can commit eligible actor-only steps before
+400, with unstable processing order. Denied/unselected sources and peers stay
+unchanged; a failing local transaction rolls back its step while earlier steps
+remain durable. These local live-authority/revision rechecks do not establish
+native concurrency or backend-failure equivalence.
+
+Both actual Vaultwarden 1.37.4 and no-warden pass six checked-in HTTP cases/
+1115 counted requests plus four registrations each. Separate official CLI
+2026.10.0 runs pass 39 commands/57 direct setup/control requests plus
+four registrations: actual Owner and readonly recipient archive, sync/get/list
+archived, archived restore and fresh-cache decryption retain their distinct private
+folders/favorites. Four CLI and two direct password logins are separate. The pinned
+DefaultCipherArchiveService calls selected PUT routes for these commands; no
+captured trace, dedicated single-route CLI caller, client premium/refusal branches
+or general browser parity is claimed. Native-only browser/historical/trash probes
+are separate research, not automatically paired coverage or CI suite totals.
+
+The allocation-free core validates provider-owned order before writes and lends a
+sealed current READ/canonical source/revision plan for each step. SQL, clocks,
+crypto, opaque encrypted JSON and HTTP stay in the adapter. Host 4096-ID/fact/reader
+and cumulative 8 MiB budgets are local resource policies. Linked bare-metal serde
+consumer and allocator/std/undefined-symbol audits are local checks; firmware is
+not executed. Groups/policies, attachments, broader types/states, exact business
+text, transport/capacity and full upstream endpoint parity remain open.
+
+Protocol declarations are pinned at 58a980f850464f7d9cdc99a765df36f0a3308b91;
+actual image build 7c188967e7a467b19b2757bc3326f9cf3ccae327 is separate. Official
+clients b449ac1d255784380d75ef026343198891286be7 and SDK
+c5e53d3e82ab80fdc9fd79ebd74058399a6444b6 provide pinned references. No AGPL
+implementation was copied or adapted. All full-parity flags remain false.
+
+The separately guarded same-script optional pinned Web 2026.7.0 / Chromium
+149.0.7827.55 / Playwright 1.64.1 pair also passes readonly recipient Archive then
+Unarchive through selected PUT routes, with three ordinary empty contexts and
+fresh decryption on both backends. Each response is exact list3/one literal
+cipherDetails30 JSON equal to actor GET; actor-only revisions and owner/private/
+common/key/cipher revision preservation hold. Observed browser responses35/32
+and26 buckets each plus41 direct setup/control requests each are observations,
+not fixed budgets. No single-route, Owner/manage, attachment or general web claim;
+mandatory personal web10 is unchanged.
