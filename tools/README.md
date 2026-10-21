@@ -1144,3 +1144,21 @@ projection, without loading keys or requiring a fixed member limit. Provider
 order does not promise a portable server sort. The adjacent PUT member-edit
 family, groups, notifications and full organization parity remain open; static
 web collection-dialog callers are not executed browser evidence for this route.
+
+## Client CI shards
+
+The CI workflow assigns the existing client checks to four fixed jobs in
+[client-ci.mjs](client-ci.mjs). Each job builds the same conformance profile and
+uses its own runner and disposable server. The required `bitwarden-cli` context
+runs after every shard, including failures, and succeeds only when all four
+exact job results are `success` and each emitted its completion marker after
+all assigned checks; absent, skipped and cancelled results fail.
+The main ruleset and required check names remain unchanged.
+
+When adding an explicit Rust `--suite` selector, assign it to one shard in the
+runner. `node --test tools/client-ci.test.mjs` rejects omissions and duplicates,
+including newly added HTTP and CLI selectors. It also checks the workflow's
+fixed dependencies and failure handling. All existing checks, expiry waits,
+KDF parameters, client pins and fixture assertions are retained. The grouping
+uses measured check durations; actual parallel runtime depends on runner
+availability and setup costs.

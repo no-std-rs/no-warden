@@ -44,95 +44,33 @@ jobs:
       - run: rustup toolchain install 1.89.0 --profile minimal
       - run: cargo +1.89.0 check -p no-warden-server --locked
       - run: cargo +1.89.0 check -p no-warden-conformance --locked
+  # Keep these four jobs explicit: the required context checks every result.
+  bitwarden-cli-http:
+    uses: ./.github/workflows/client-shard.yml
+    with:
+      shard: http
+  bitwarden-cli-baseline:
+    uses: ./.github/workflows/client-shard.yml
+    with:
+      shard: baseline
+  bitwarden-cli-organization-a:
+    uses: ./.github/workflows/client-shard.yml
+    with:
+      shard: organization-a
+  bitwarden-cli-organization-b:
+    uses: ./.github/workflows/client-shard.yml
+    with:
+      shard: organization-b
   bitwarden-cli:
+    if: ${{ always() }}
+    needs: [bitwarden-cli-http, bitwarden-cli-baseline, bitwarden-cli-organization-a, bitwarden-cli-organization-b]
     runs-on: ubuntu-latest
-    env:
-      BW_CLIENTS_COMMIT: b449ac1d255784380d75ef026343198891286be7
-      BW_SDK_COMMIT: c5e53d3e82ab80fdc9fd79ebd74058399a6444b6
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-          cache: npm
-          cache-dependency-path: tools/package-lock.json
-      - run: rustup update stable --no-self-update
-      - run: rustup default stable
-      - run: npm ci --prefix tools
-      - run: curl --fail --location --retry 3 "https://raw.githubusercontent.com/bitwarden/clients/$BW_CLIENTS_COMMIT/package-lock.json" -o "$RUNNER_TEMP/clients-build-package-lock.json"
-      - name: Fetch the pinned bundled SDK request sources
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl --fail --location --retry 3 "https://codeload.github.com/bitwarden/sdk-internal/tar.gz/$BW_SDK_COMMIT" -o "$RUNNER_TEMP/sdk.tar.gz"
-          mkdir -p "$RUNNER_TEMP/sdk-source"
-          tar --extract --gzip --file "$RUNNER_TEMP/sdk.tar.gz" --directory "$RUNNER_TEMP/sdk-source" --strip-components=1
-      - run: prlimit --version
-      - run: node --test tools/repository-policy.test.mjs
-      - run: node --test tools/api-coverage.test.mjs
-      - run: node --test tools/cli-inventory.test.mjs
+      - name: Require every fixed client shard to succeed
         env:
-          BW_CLIENTS_BUILD_LOCK: ${{ runner.temp }}/clients-build-package-lock.json
-          BW_SDK_SOURCE_ROOT: ${{ runner.temp }}/sdk-source
-      - run: cargo build --profile conformance -p no-warden-server -p no-warden-conformance --locked
-      - name: Real client and authorization checks
-        shell: bash
-        env:
-          NO_WARDEN_BIN: ${{ github.workspace }}/target/conformance/no-warden-server
-          NO_WARDEN_CONFORMANCE_PROFILE: conformance
-        run: |
-          set -euo pipefail
-          NO_WARDEN_DB="$RUNNER_TEMP/no-warden.db" target/conformance/no-warden-server > "$RUNNER_TEMP/no-warden.log" 2>&1 &
-          server_pid=$!
-          trap 'kill "$server_pid" 2>/dev/null || true; cat "$RUNNER_TEMP/no-warden.log"' EXIT
-          for attempt in $(seq 1 100); do
-            if curl -fsS http://127.0.0.1:8000/health >/dev/null; then break; fi
-            sleep 0.1
-          done
-          curl -fsS http://127.0.0.1:8000/health
-          node --test tools/server-tests.mjs
-          node tools/persistence.mjs
-          target/conformance/no-warden-http-conformance
-          target/conformance/no-warden-http-conformance --suite webauthn-credentials
-          target/conformance/no-warden-http-conformance --suite personal-vault-purge
-          target/conformance/no-warden-http-conformance --suite account-deletion
-          target/conformance/no-warden-http-conformance --suite cipher-reads
-          target/conformance/no-warden-http-conformance --suite password-grants
-          target/conformance/no-warden-http-conformance --suite refresh-grants
-          target/conformance/no-warden-http-conformance --suite text-sends
-          target/conformance/no-warden-http-conformance --suite text-sends-cli
-          target/conformance/no-warden-http-conformance --suite file-sends
-          target/conformance/no-warden-http-conformance --suite file-sends-cli
-          target/conformance/no-warden-http-conformance --suite user-key-id
-          target/conformance/no-warden-http-conformance --suite user-key-id-cli
-          target/conformance/no-warden-http-conformance --suite prelogin
-          target/conformance/no-warden-http-conformance --suite prelogin-cli
-          target/conformance/no-warden-http-conformance --suite organization-owner
-          target/conformance/no-warden-http-conformance --suite organization-owner-cli
-          target/conformance/no-warden-http-conformance --suite organization-collections
-          target/conformance/no-warden-http-conformance --suite organization-collections-cli
-          target/conformance/no-warden-http-conformance --suite organization-collection-mutations
-          target/conformance/no-warden-http-conformance --suite organization-collection-mutations-cli
-          target/conformance/no-warden-http-conformance --suite organization-members
-          target/conformance/no-warden-http-conformance --suite organization-members-cli
-          target/conformance/no-warden-http-conformance --suite organization-invites
-          target/conformance/no-warden-http-conformance --suite organization-invites-cli
-          target/conformance/no-warden-http-conformance --suite organization-confirmation
-          target/conformance/no-warden-http-conformance --suite organization-confirmation-cli
-          target/conformance/no-warden-http-conformance --suite organization-bulk-confirmation
-          target/conformance/no-warden-http-conformance --suite organization-bulk-confirmation-cli
-          target/conformance/no-warden-http-conformance --suite organization-member-removal
-          target/conformance/no-warden-http-conformance --suite organization-member-removal-cli
-          target/conformance/no-warden-http-conformance --suite organization-bulk-member-removal
-          target/conformance/no-warden-http-conformance --suite organization-bulk-member-removal-cli
-          target/conformance/no-warden-http-conformance --suite organization-member-status
-          target/conformance/no-warden-http-conformance --suite organization-member-status-cli
-          target/conformance/no-warden-http-conformance --suite organization-bulk-member-status
-          target/conformance/no-warden-http-conformance --suite organization-bulk-member-status-cli
-          target/conformance/no-warden-http-conformance --suite organization-member-public-keys
-          target/conformance/no-warden-http-conformance --suite organization-member-public-keys-cli
-          target/conformance/no-warden-http-conformance --suite organization-member-mini-details
-          target/conformance/no-warden-http-conformance --suite organization-member-mini-details-cli
-          target/conformance/no-warden-http-conformance --suite account-kdf-cli
-          target/conformance/no-warden-http-conformance --suite account-password-cli
-          bash tools/e2e.sh
+          CLIENT_SHARD_RESULTS: ${{ toJSON(needs) }}
+        run: node tools/client-ci.mjs aggregate
