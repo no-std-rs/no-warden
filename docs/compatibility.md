@@ -1630,3 +1630,7 @@ Six paired HTTP cases/1115 requests plus four registrations and actual CLI 39/57
 ## Shared single-cipher Trash, restore and permanent deletion
 
 Six paired actual HTTP cases/812 counted requests plus four registrations and actual CLI 63/101 direct setup/control plus four registrations verify this attachment-free secure-note subset. Owner/writable recipient Trash/restore, deleted+archived priority, selected unarchive and fresh decryption preserve private/common/key state. Backend readonly-manage WRITE differs from false GET flags. Current-reader revisions, exact empty replies/known30 Restore and POSTrestore404 are scoped controls. No captured CLI trace, shared permanent-delete CLI, general browser/concurrency/capacity or full endpoint claim. See [limits](api-parity.md#shared-single-cipher-trash-restore-and-permanent-deletion).
+
+## Shared selected-cipher Trash, restore and permanent deletion
+
+6pairedHTTP/4648+12registration and actualCLIobserver47/62+4registration verify currentWRITE/privatearchive/opaque/currentREADERS contracts with durable authorized partial subsets. Separate strict paired writableRecipient two-note Web multi-select proof uses4emptycontexts and4ids-only mutations, exactRestore list rows; mandatorypersonalWeb10 unchanged. No productionselectedCLI mutationcaller/capturedtrace/order/concurrency/capacity/attachments/groups/fullparity claim. See [limits](api-parity.md#shared-selected-cipher-trash-restore-and-permanent-deletion).

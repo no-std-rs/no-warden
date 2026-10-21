@@ -57,7 +57,7 @@ wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
 The ledger records positive or restart HTTP evidence for 124 patterns, negative
-HTTP evidence for 124, 348 named HTTP cases, and 56 CLI command patterns. These are
+HTTP evidence for 125, 355 named HTTP cases, and 56 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -2247,3 +2247,51 @@ expectation, and compares both complete vaults and revisions after rejection.
 All Rust/Cargo inputs, recorded client fixtures and three executables are
 unchanged. Earlier HTTP/CLI/browser/baseline runs retain their original source
 attribution; they were not rerun or relabeled as executions of this JS follow-up.
+
+## Shared selected-cipher Trash, restore and permanent deletion
+
+The attachment-free shared secure-note selected subset covers PUT ciphers/delete
+and delete-admin, PUT restore and restore-admin, DELETE ciphers and ciphers/admin,
+and POST ciphers/delete and delete-admin. Confirmed current-WRITE roles include
+Owner/Admin/fullCustom/writable User and readonly+manage User; ordinary readonly,
+no-grant and unconfirmed/revoked actors deny. Admin-named aliases grant no bypass.
+Body organizationId is ignored. Required lowercase ids/one-field tuple, duplicate
+known fields, schema envelopes, exact-string dedup/empty/no-op and native negative
+POST ciphers/restore422 before any reusable service are separately checked.
+
+Both actual Vaultwarden1.37.4 and no-warden pass6HTTPcases/4648 requests plus
+12registrations (6passwordgrants). Separate official CLI2026.10.0 observer executes
+47commands/62directHTTP+4registrations with4CLI+2direct logins: manual
+selected mutations followed by Owner/ordinary-readonlyRecipient sync/list/get and
+two fresh-cache note/private-folder/favorite/archive decryption. This proves real
+client observation, NOT a productionselectedCLI mutation caller or capturedtrace.
+
+Native mixed errors may retain completed eligible sources and currentREADERS'
+account revisions; samefixedIDs/order vary. Tests constrain authorized subsets,
+not inputorder or distribution. All-invalid unchanged. Every changed source
+preserves common opaque wrappedkey/payload/creation/ownership/collection and
+per-user folders/favorites/archives except deletedDate/common revision changes.
+Trash/hard-delete200empty/no Content-Type; Restore list has null continuation,
+unique selected IDs and exact30field actorGET rows; responseorder unclaimed.
+Hard-delete GET400/list+sync absence is not native file/SQL cleanup proof.
+
+Core mutate_selected_cipher_lifecycle validates a complete owned provider unique
+permutation before lookups/writes, then performs freshWRITE/sealed single-lifecycle
+atomic steps. Earlier success survives later denial/provider error. SQL/clocks,
+opaque JSON/private mutation and currentREADERS fanout stay in adapters; core uses
+caller ID/seen scratch with no allocator, Clone/cache-borrow requirement or cap.
+Local SQL rollback tests cover current-step graph/FK/account rollback with earlier
+step durability. HOST4096 fact/reader/ID and cumulative8MiB budgets are localpolicy;
+reader-cap checks occur perstep and mayretain priorsteps. Generic bulkdefault is
+unchanged. No native concurrency/backendfault/capacity/attachment/group/history or
+full-upstream parity claim. Protocol58a980, image7c188, clients b449ac1 and SDKc5e53d
+remain separate pinned references; implementations are independently authored.
+
+A strict same-script Web2026.7.0/Chromium149/Playwright1.64 pair uses writable
+Recipient ordinary two-note multiselect Trash/Restore/retrash/permanent-delete,
+four fresh ordinary contexts and ids-only/two-string bodies. Restore literal
+three-field list has null continuation and exact30field cipherDetails rows equal
+actorGETs by selected ID set; no row-order claim. Both reader/common/private/key
+contracts pass. Browser response and directsetup/control counts are observations,
+not timing budgets. No Owner/readonlyManage/archive-bearing/attachment/group UI
+claim; inherited mandatory personal Web10 remains unchanged.
