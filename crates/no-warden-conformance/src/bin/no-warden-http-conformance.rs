@@ -35,6 +35,8 @@ enum Suite {
     PreloginCli,
     OrganizationOwner,
     OrganizationOwnerCli,
+    OrganizationCipherBulkSharing,
+    OrganizationCipherBulkSharingCli,
     OrganizationCipherSharing,
     OrganizationWebReads,
     OrganizationWebReadsCli,
@@ -101,6 +103,8 @@ impl Suite {
             "prelogin-cli" => Self::PreloginCli,
             "organization-owner" => Self::OrganizationOwner,
             "organization-owner-cli" => Self::OrganizationOwnerCli,
+            "organization-cipher-bulk-sharing" => Self::OrganizationCipherBulkSharing,
+            "organization-cipher-bulk-sharing-cli" => Self::OrganizationCipherBulkSharingCli,
             "organization-cipher-sharing" => Self::OrganizationCipherSharing,
             "web-organization-reads" => Self::OrganizationWebReads,
             "web-organization-reads-cli" => Self::OrganizationWebReadsCli,
@@ -153,7 +157,7 @@ fn check<E: Display>(result: Result<(), E>) {
 
 fn usage() {
     eprintln!(
-        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials|personal-vault-purge|account-deletion|cipher-reads|password-grants|refresh-grants|text-sends|text-sends-cli|file-sends|file-sends-cli|user-key-id|user-key-id-cli|prelogin|prelogin-cli|organization-owner|organization-owner-cli|organization-collections|organization-collections-cli|organization-collection-mutations|organization-collection-mutations-cli|organization-members|organization-members-cli|organization-invites|organization-invites-cli|organization-confirmation|organization-confirmation-cli|organization-bulk-confirmation|organization-bulk-confirmation-cli|organization-member-removal|organization-member-removal-cli|organization-bulk-member-removal|organization-bulk-member-removal-cli|organization-member-status|organization-member-status-cli|organization-bulk-member-status|organization-bulk-member-status-cli|organization-member-public-keys|organization-member-public-keys-cli|organization-member-mini-details|organization-member-mini-details-cli|organization-cipher-sharing|organization-cipher-sharing-cli|web-organization-reads|web-organization-reads-cli]"
+        "Usage: no-warden-http-conformance [--suite all|personal|folders|account-keys|profile|domains|devices|device-tokens|auth-requests|auth-responses|auth-login|registration|account-security|account-kdf|account-kdf-cli|account-password|account-password-cli|webauthn-credentials|personal-vault-purge|account-deletion|cipher-reads|password-grants|refresh-grants|text-sends|text-sends-cli|file-sends|file-sends-cli|user-key-id|user-key-id-cli|prelogin|prelogin-cli|organization-owner|organization-owner-cli|organization-collections|organization-collections-cli|organization-collection-mutations|organization-collection-mutations-cli|organization-members|organization-members-cli|organization-invites|organization-invites-cli|organization-confirmation|organization-confirmation-cli|organization-bulk-confirmation|organization-bulk-confirmation-cli|organization-member-removal|organization-member-removal-cli|organization-bulk-member-removal|organization-bulk-member-removal-cli|organization-member-status|organization-member-status-cli|organization-bulk-member-status|organization-bulk-member-status-cli|organization-member-public-keys|organization-member-public-keys-cli|organization-member-mini-details|organization-member-mini-details-cli|organization-cipher-sharing|organization-cipher-sharing-cli|organization-cipher-bulk-sharing|organization-cipher-bulk-sharing-cli|web-organization-reads|web-organization-reads-cli]"
     );
 }
 
@@ -270,6 +274,12 @@ fn main() {
     }
     if suite == Suite::OrganizationWebReads {
         check(no_warden_conformance::organization_web_reads::run());
+    }
+    if suite == Suite::OrganizationCipherBulkSharing {
+        check(no_warden_conformance::organization_cipher_bulk_sharing::run());
+    }
+    if suite == Suite::OrganizationCipherBulkSharingCli {
+        check(no_warden_conformance::organization_cipher_bulk_sharing_cli::run());
     }
     if suite == Suite::OrganizationCipherSharing {
         check(no_warden_conformance::organization_cipher_sharing::run());

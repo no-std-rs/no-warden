@@ -107,7 +107,10 @@ impl CipherShareIdsData for Input {
     }
 }
 
-fn source(db: &Connection, id: &str) -> rusqlite::Result<Option<CipherSharingSource<String>>> {
+pub(super) fn source(
+    db: &Connection,
+    id: &str,
+) -> rusqlite::Result<Option<CipherSharingSource<String>>> {
     db.query_row(
         "SELECT id,owner,organization_id,revision FROM items WHERE id=?1 AND kind='cipher'",
         [id],
@@ -122,7 +125,7 @@ fn source(db: &Connection, id: &str) -> rusqlite::Result<Option<CipherSharingSou
     )
     .optional()
 }
-fn membership(
+pub(super) fn membership(
     db: &Connection,
     user: &str,
     org: &str,
@@ -147,7 +150,7 @@ fn collection(row: &rusqlite::Row<'_>) -> rusqlite::Result<CipherSharingCollecti
 const COLLECTION_FACTS: &str = "SELECT c.id,c.organization_id,?1,g.user_id IS NOT NULL,
  COALESCE(g.read_only,1),COALESCE(g.hide_passwords,0),COALESCE(g.manage,0)
  FROM organization_collections c LEFT JOIN organization_collection_users g ON g.collection_id=c.id AND g.user_id=?1";
-fn selected_collection(
+pub(super) fn selected_collection(
     db: &Connection,
     user: &str,
     org: &str,
@@ -166,7 +169,7 @@ fn associated_collections_sql() -> String {
     )
 }
 
-fn associated_collections(
+pub(super) fn associated_collections(
     db: &Connection,
     user: &str,
     id: &str,
@@ -201,9 +204,9 @@ fn mapped(error: no_warden::ApiError) -> rusqlite::Error {
 
 /// Borrow the canonical cipher scope without changing actual collection facts.
 /// Associated links can survive an earlier failed share into another organization.
-struct AccessData<'a> {
-    cipher_org: Option<&'a str>,
-    records: &'a [CipherSharingCollection<String>],
+pub(super) struct AccessData<'a> {
+    pub(super) cipher_org: Option<&'a str>,
+    pub(super) records: &'a [CipherSharingCollection<String>],
 }
 impl CipherCollectionAccessData for AccessData<'_> {
     fn len(&self) -> usize {
@@ -409,7 +412,7 @@ fn recheck_source(db: &Connection, user: &str, id: &str, revision: &str) -> rusq
     }
     Ok(())
 }
-fn recheck_target(
+pub(super) fn recheck_target(
     db: &Connection,
     user: &str,
     org: &str,
@@ -439,7 +442,7 @@ fn recheck_target(
     }
     Ok(())
 }
-fn advance(
+pub(super) fn advance(
     db: &Connection,
     user: &str,
     org: Option<&str>,
@@ -466,7 +469,7 @@ fn advance(
 // Final ownership changes notify only current readers in the canonical scope.
 // Historical links can contribute a grant after confirmed membership is checked;
 // a grant in the old organization alone does not admit its account here.
-fn advance_cipher(
+pub(super) fn advance_cipher(
     db: &Connection,
     caller: &str,
     cipher: &str,

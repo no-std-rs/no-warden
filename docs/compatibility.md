@@ -57,6 +57,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Organization member public-key batches | Ordered scoped public-only rows, null-key retention and unfiltered target states/roles | Six matching HTTP cases (431 requests) and 16 matching official CLI fingerprint/decryption commands on both targets; no bulk CLI caller or browser trace claim |
 | Organization member mini-details | Seven-field read-only metadata, unfiltered names/native states, restricted Manager admission | Six matching HTTP cases (619 requests) and 18 matching official CLI observation commands on both targets; no mini CLI caller/browser trace |
 | Single organization-cipher sharing | Sequential collection-prefix effects, confirmed canonical membership and historical grants, viewer annotations and route-specific shared reads | Seven matching HTTP cases (538 requests) and 21 actual CLI move/fresh-cache decryption commands per target; no route trace/attachment/bulk/full-parity claim |
+| Bulk organization-cipher sharing | Reverse cipher updates, forward durable collection prefixes, separate source/manage and destination ACLs, private annotations and bounded host work | Seven matching direct HTTP cases (1106 requests) and 37 CLI observation commands/31 direct HTTP per target, including two direct bulk PUTs; no CLI bulk caller/trace/standalone browser/full-parity claim |
 | Organization web reads | Canonical cipher lists, aggregate collection access and explicit default empty groups | Six matching HTTP cases (156 requests) and 21 matching official CLI observation commands; reference-only organization UI experiment stays separate |
 | Single organization-collection update/delete | Complete grant replacement, opaque names, whitespace external-ID clearing and preserved cipher data | Allocation-free core and local rollback/cascade tests; six matching HTTP cases and twenty matching official CLI commands on both actual targets |
 | Organization-scoped collection list/create/single access-details | Confirmed manager authorization, exact projections, opaque names/external IDs and reference validation | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers; atomic local provider tests |
@@ -1544,3 +1545,32 @@ provider/noalloc boundaries and exact limitations appear in the
 [API parity notes](api-parity.md#organization-web-read-subset). Group CRUD,
 configured groups/SMTP/policies, attachments, broader cipher/transport/error and
 failure/concurrency behavior remain open. All three handlers remain partial.
+
+## Bulk organization-cipher sharing
+
+The partial `PUT /api/ciphers/share` implementation has paired Vaultwarden
+1.37.4 / no-warden evidence for seven HTTP cases (1106 requests), plus a separate
+37-command official CLI 2026.10.0 observer with 31 direct HTTP requests and two
+direct bulk mutations. Fresh owner/recipient decryption, private annotations,
+account keys and personal controls are verified. This observer establishes no
+production CLI bulk caller, captured route trace or browser compatibility.
+
+The allocation-free core checks every ID's presence before processing ciphers in
+reverse order and collections forwards. Durable collection prefixes and completed
+suffix ciphers survive later failures. Source/manage authority differs from new
+destination write permission. Final local payload and private annotation writes
+are atomic. Bulk accepts the measured stale/future/malformed revision strings;
+it keeps the single-share revision guard separate. Personal archive metadata is
+applied in the final transaction; missing/null clears it, valid measured dates
+normalize to six fractional digits. GET/list/sync agree in the five-case comparison.
+
+Success is empty HTTP 200 without Content-Type. The host limits requests to
+4096 ciphers, 4096 selections and 8192 estimated associations; these are local
+resource policies. The core has no corresponding count cap. Fourteen core tests,
+route precedence, fourteen host regressions and a linked RISC-V noalloc consumer
+cover local contracts. The firmware is linked rather than executed.
+
+See [API parity notes](api-parity.md#bulk-organization-cipher-sharing-subset) for
+request shapes, ordering, permissions, revision variants, pinned references and
+comparison boundaries. Attachments, other item types, general shared Save/lifecycle,
+configured groups/policies/SMTP and complete upstream parity remain open.
