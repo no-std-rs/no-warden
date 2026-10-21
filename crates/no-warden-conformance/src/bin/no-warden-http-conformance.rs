@@ -39,6 +39,7 @@ enum Suite {
     OrganizationCipherCollectionsCli,
     OrganizationAttachmentRead,
     OrganizationAttachmentReadCli,
+    OrganizationAttachmentMoveDiagnostic,
     OrganizationCipherBulkLifecycle,
     OrganizationCipherBulkLifecycleCli,
     OrganizationCipherLifecycle,
@@ -119,6 +120,7 @@ impl Suite {
             "organization-cipher-collections-cli" => Self::OrganizationCipherCollectionsCli,
             "organization-attachment-read" => Self::OrganizationAttachmentRead,
             "organization-attachment-read-cli" => Self::OrganizationAttachmentReadCli,
+            "organization-attachment-move-diagnostic" => Self::OrganizationAttachmentMoveDiagnostic,
             "organization-cipher-bulk-lifecycle" => Self::OrganizationCipherBulkLifecycle,
             "organization-cipher-bulk-lifecycle-cli" => Self::OrganizationCipherBulkLifecycleCli,
             "organization-cipher-lifecycle" => Self::OrganizationCipherLifecycle,
@@ -310,6 +312,9 @@ fn main() {
     }
     if suite == Suite::OrganizationAttachmentReadCli {
         check(no_warden_conformance::organization_attachment_read_cli::run());
+    }
+    if suite == Suite::OrganizationAttachmentMoveDiagnostic {
+        check(no_warden_conformance::organization_attachment_read_cli::run_move_diagnostic());
     }
     if suite == Suite::OrganizationCipherBulkLifecycle {
         check(no_warden_conformance::organization_cipher_bulk_lifecycle::run());

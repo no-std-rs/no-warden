@@ -729,6 +729,15 @@ fn login_setup_observation(
 }
 
 pub fn run() -> Result<(), Error> {
+    run_impl(false)
+}
+
+/// Distinct move-only diagnostic; never a compatibility result or READ suite.
+pub fn run_move_diagnostic() -> Result<(), Error> {
+    run_impl(true)
+}
+
+fn run_impl(move_only: bool) -> Result<(), Error> {
     let work = private_dir("no-warden-attachment-read-cli-")?;
     let creator = subdir(work.path(), "creator")?;
     let owner_fresh = subdir(work.path(), "owner-fresh")?;
@@ -933,6 +942,58 @@ pub fn run() -> Result<(), Error> {
                 ),
             }
         }
+    }
+    if move_only {
+        let strict_guard_passed = original_move_check.is_ok();
+        let conditional_diagnostic_commands = c.commands - 12;
+        c.command(&["logout"], &creator, Some(&creator_session), None)?;
+        c.direct = Some(http.requests);
+        // Measured prefix of the one-off diagnostic, plus one explicit logout.
+        // The original 32/101 READ compatibility constants stay unchanged.
+        let expected_commands = if strict_guard_passed { 13 } else { 15 };
+        let expected_direct_requests = 23;
+        let budget_matched =
+            c.commands == expected_commands && http.requests == expected_direct_requests;
+        write_receipt(
+            &mut c.receipt,
+            &json!({
+                "schemaVersion":1,"status":"diagnostic-trial-completed",
+                "diagnosticOnly":true,"compatibilityPassClaimed":false,
+                "actualCliExecuted":true,"cliVersion":"2026.10.0",
+                "cliBundleSha256":CLI_SHA256,"cliUnmodifiedAndBundlePinned":true,
+                "commands":c.commands,"successfulCommands":c.successful_commands,
+                "expectedCommands":expected_commands,"directHttpRequests":http.requests,
+                "expectedDirectHttpRequests":expected_direct_requests,
+                "commandAndDirectBudgetsMatched":budget_matched,
+                "fixtureRegistrationHttpRequests":4,"fixtureRegistrations":2,
+                "cliPasswordLoginCommands":c.logins,"directPasswordLoginRequests":http.logins,
+                "personalByteEqualDownloads":c.downloads,
+                "fixturePlaintextByteCounts":[0,257,2*1024*1024+37],
+                "originalStrictMoveGuardPassed":strict_guard_passed,
+                "originalStrictMoveFailureRetained":!strict_guard_passed,
+                "additionalDirectPostMoveSetupRequests":1,
+                "conditionalDiagnosticSyncGetCommands":conditional_diagnostic_commands,
+                "freshReadPhaseExecuted":false,"actualBrowserExecuted":false,
+                "capturedRouteTrace":false,"fullParityClaimed":false,
+                "noRetryOrArtificialSleep":true,
+            }),
+        )?;
+        c.finished = true;
+        eprintln!(
+            "Attachment CLI diagnostic move: {}",
+            json!({"stage":"move-only-trial-complete","originalStrictGuardPassed":strict_guard_passed,
+                "commands":c.commands,"directRequests":http.requests,"budgetMatched":budget_matched}),
+        );
+        original_move_check?;
+        require(
+            budget_matched,
+            "Attachment CLI move-only diagnostic budgets differed",
+        )?;
+        require(
+            c.logins == 1 && http.logins == 2 && c.downloads == 3,
+            "Attachment CLI move-only diagnostic setup counts differed",
+        )?;
+        return Ok(());
     }
     original_move_check?;
     c.move_completed = true;
