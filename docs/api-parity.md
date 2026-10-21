@@ -2239,3 +2239,11 @@ Content-Length0 and no Content-Type. Browser observations48/44
 and direct setup/control69/69
 are observations, not fixed budgets. No Owner/readonly-manage/archive-bearing,
 selected-bulk, attachment or general web claim; inherited personal Web10 stays unchanged.
+
+The single lifecycle JavaScript follow-up passes all 62 local server checks.
+The cross-user lifecycle fixture now requires the measured 400 for Trash,
+Restore and permanent deletion, preserves the existing ordinary PUT edit
+expectation, and compares both complete vaults and revisions after rejection.
+All Rust/Cargo inputs, recorded client fixtures and three executables are
+unchanged. Earlier HTTP/CLI/browser/baseline runs retain their original source
+attribution; they were not rerun or relabeled as executions of this JS follow-up.
