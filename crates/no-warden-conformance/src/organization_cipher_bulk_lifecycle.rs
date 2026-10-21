@@ -223,8 +223,12 @@ impl Http {
             bytes.len() <= 16 * 1024 * 1024,
             "Selected lifecycle raw capture bound exceeded",
         )?;
-        let value = serde_json::from_slice(&bytes)
-            .map_err(|_| Error("Selected lifecycle raw response not JSON"))?;
+        let value = if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&bytes)
+                .map_err(|_| Error("Selected lifecycle raw response not JSON"))?
+        };
         Ok(Reply {
             status,
             value,
