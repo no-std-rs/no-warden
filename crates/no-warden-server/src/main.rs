@@ -15,6 +15,7 @@ mod domains;
 mod organization_bulk_confirmations;
 mod organization_bulk_member_removal;
 mod organization_bulk_member_status;
+mod organization_cipher_sharing;
 mod organization_collections;
 mod organization_confirmations;
 mod organization_invitations;
@@ -100,6 +101,14 @@ struct Failure(StatusCode, &'static str);
 
 impl IntoResponse for Failure {
     fn into_response(self) -> Response {
+        if self.0 == StatusCode::UNPROCESSABLE_ENTITY
+            && matches!(
+                self.1,
+                "Invalid cipher sharing request" | "Invalid cipher ID"
+            )
+        {
+            return (self.0, Json(json!({"error":"Invalid request"}))).into_response();
+        }
         if password_login::is_password_error(self.1)
             || self.1 == "refresh_token cannot be blank"
             || sends::is_send_error(self.1)
@@ -114,6 +123,12 @@ impl IntoResponse for Failure {
             || organization_member_status::is_status_error(self.1)
             || self.1 == "The specified user isn't a member of the organization"
             || self.1 == "Member id is required"
+            || matches!(
+                self.1,
+                "Cipher doesn't exist"
+                    | "Cipher is not owned by user"
+                    | "Cannot add this cipher to the selected collection"
+            )
         {
             return password_login::error_response(self.0, self.1);
         }
@@ -1353,6 +1368,16 @@ async fn dispatch_with_peer(
                 .item(grant.owner(), grant.id(), "cipher")?
                 .ok_or(Failure(StatusCode::BAD_REQUEST, "Cipher doesn't exist"))?;
             Ok(json_response(document))
+        }
+        Route::CipherShare(raw) => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let id = cipher_reads::path_id(raw)?;
+            let input = organization_cipher_sharing::Input::parse(&body)?;
+            input.execute(&mut store, &owner, &id)?;
+            Ok(json_response(
+                store.item(&owner, &id, "cipher")?.ok_or_else(missing)?,
+            ))
         }
         Route::FolderCreate | Route::FolderUpdate(_) => {
             let (input, document) = parse_folder_input(&body)?;

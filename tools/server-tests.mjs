@@ -294,7 +294,19 @@ await test("standalone adapter enforces authentication, isolation, and JSON pres
       method: "POST", token,
       body: cipher(user, { encryptedFor: before.profile.id, encryptedByKeyId: userKeyId }),
     }), "matching encryptedByKeyId");
-    assert.equal(matched.encryptedByKeyId, userKeyId);
+    // Vaultwarden 1.37.4 omits request encryption metadata on every public
+    // projection, including a matching non-null key ID. Raw persistence is
+    // checked separately by the Store service regression.
+    const single = ok(await request(`/api/ciphers/${matched.id}`, { token }), "matching key-ID read");
+    const listed = ok(await request("/api/ciphers", { token }), "matching key-ID list").data.find(item => item.id === matched.id);
+    const synced = ok(await request("/api/sync", { token }), "matching key-ID sync").ciphers.find(item => item.id === matched.id);
+    for (const projected of [matched, single, listed, synced]) {
+      assert(projected, "matching key-ID cipher must remain visible");
+      assert.equal(Object.hasOwn(projected, "encryptedByKeyId"), false);
+      assert.equal(Object.hasOwn(projected, "encryptedFor"), false);
+      assert.equal(projected.id, matched.id);
+      assert(projected.name === matched.name, "matching key-ID projection must retain ciphertext");
+    }
     const legacy = ok(await request("/api/ciphers", { method: "POST", token, body: cipher(user) }), "legacy omitted key ID");
     assert(legacy.id);
     assert.notEqual(legacy.id, matched.id);

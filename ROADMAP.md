@@ -107,6 +107,12 @@ invoke the pinned official Bitwarden CLI as an external process.
   (619 requests) and 18 matching official CLI observation
   commands on both targets. No production mini CLI caller, browser mini flow,
   configured-group/backend, adjacent member-edit or full-parity claim.
+- [x] Single organization-cipher sharing subset: allocation-free sequential
+  association plans and verified current/historical grant decisions, private annotations,
+  six matching actual HTTP cases (423 requests) and 21
+  matching official CLI move/fresh owner/recipient decryption commands per target.
+  Attachment-bearing moves, general shared editing/lifecycle, bulk/import/admin,
+  configured policy/group/backend and full API parity remain open.
 - [ ] Attachments, Sends, event notifications and websocket transport.
 - [ ] Two-factor authentication, passkeys, SSO and administrative APIs.
 - [ ] Full import/export compatibility, remaining formats and variants, and upstream protocol regression fixtures.
