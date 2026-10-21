@@ -82,6 +82,12 @@ impl Input {
         Ok(input)
     }
     pub fn request(&self) -> Result<CipherRequest<'_>, Failure> {
+        if !self.cipher.is_object() {
+            return Err(Failure(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Invalid cipher sharing request",
+            ));
+        }
         CipherRequest::deserialize(&self.cipher).map_err(schema_error)
     }
     pub fn execute(&self, store: &mut Store, owner: &str, id: &str) -> Result<(), Failure> {
@@ -173,6 +179,24 @@ pub(super) fn associated_collections(
         .query_map(params![user, id], collection)?
         .collect()
 }
+
+// Route projections omit grants from an inactive historical membership. This
+// does not change read admission: native single GET still admits the surviving
+// grant when membership in the cipher's canonical organization is confirmed.
+fn visible_collections(
+    db: &Connection,
+    user: &str,
+    id: &str,
+) -> rusqlite::Result<Vec<CipherSharingCollection<String>>> {
+    let mut statement = db.prepare(&format!(
+        "{COLLECTION_FACTS} JOIN organization_collection_ciphers l ON l.collection_id=c.id
+         JOIN organization_memberships m ON m.organization_id=c.organization_id AND m.user_id=?1
+         WHERE l.cipher_id=?2 AND m.status=2 ORDER BY c.rowid"
+    ))?;
+    statement
+        .query_map(params![user, id], collection)?
+        .collect()
+}
 fn mapped(error: no_warden::ApiError) -> rusqlite::Error {
     let _ = error;
     rusqlite::Error::InvalidQuery
@@ -239,7 +263,6 @@ pub fn project(
         None => None,
     };
     let collections = associated_collections(db, user, id)?;
-    let ids_all: Vec<String> = collections.iter().map(|row| row.id.clone()).collect();
     let access = resolve_cipher_access(
         user,
         source.ownership().map_err(mapped)?,
@@ -295,10 +318,31 @@ pub fn project(
         || membership
             .as_ref()
             .is_some_and(CipherSharingMembership::full_access);
-    let ids: Vec<&str> = if full {
-        ids_all.iter().map(String::as_str).collect()
-    } else {
+    let visible = if full {
         collections
+    } else {
+        visible_collections(db, user, id)?
+    };
+    // A single GET keeps native's unfiltered grant flags. List/sync instead
+    // project permissions from the viewer's currently visible collections.
+    let permissions = if single || full {
+        access
+    } else {
+        resolve_cipher_access(
+            user,
+            source.ownership().map_err(mapped)?,
+            membership.as_ref().map(CipherSharingMembership::view),
+            &AccessData {
+                cipher_org: source.organization_id.as_deref(),
+                records: &visible,
+            },
+        )
+        .map_err(mapped)?
+    };
+    let ids: Vec<&str> = if full {
+        visible.iter().map(|row| row.id.as_str()).collect()
+    } else {
+        visible
             .iter()
             .filter(|row| row.assigned && (!single || !row.read_only))
             .map(|row| row.id.as_str())
@@ -310,9 +354,9 @@ pub fn project(
         .as_deref()
         .map_or(Value::Null, |org| json!(org));
     doc["collectionIds"] = json!(ids);
-    doc["edit"] = json!(access.writable());
-    doc["viewPassword"] = json!(access.view_password());
-    doc["permissions"] = json!({"delete":access.delete(),"restore":access.restore()});
+    doc["edit"] = json!(permissions.writable());
+    doc["viewPassword"] = json!(permissions.view_password());
+    doc["permissions"] = json!({"delete":permissions.delete(),"restore":permissions.restore()});
     // Actual default-configuration personal and shared projections both expose
     // this capability, including accounts without any organization membership.
     doc["organizationUseTotp"] = json!(true);
@@ -560,6 +604,8 @@ impl OrganizationCipherSharingStorage for Store {
             doc["folderId"] = Value::Null;
             doc["favorite"] = json!(false);
             doc["archivedDate"] = Value::Null;
+        } else if let Some(archived_at) = store::archive_value(&self.pending) {
+            store::save_archive(&tx, plan.owner(), plan.cipher_id(), archived_at.as_deref())?;
         }
         let owner = if plan.target_organization().is_some() {
             None
@@ -579,6 +625,13 @@ impl OrganizationCipherSharingStorage for Store {
         tx.commit()
     }
 }
+
+#[cfg(test)]
+mod archive_review_tests;
+#[cfg(test)]
+mod review_tests;
+#[cfg(test)]
+mod shape_review_tests;
 
 #[cfg(test)]
 mod tests {

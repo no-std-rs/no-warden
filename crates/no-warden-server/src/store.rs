@@ -476,18 +476,7 @@ fn save_document(
     require_change(db.execute(if allow_update { "INSERT INTO items(id,owner,kind,document,deleted,revision,created) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET document=excluded.document,revision=excluded.revision,deleted=excluded.deleted WHERE items.owner=excluded.owner AND items.kind=excluded.kind" } else { "INSERT INTO items(id,owner,kind,document,deleted,revision,created) VALUES(?1,?2,?3,?4,?5,?6,?7)" },
             params![id,owner,kind,doc.to_string(),deleted,revision,revision])?)?;
     if kind == "cipher" {
-        let archived_at = match doc.get("archivedDate") {
-            None | Some(Value::Null) => Some(None),
-            Some(Value::String(date)) => chrono::NaiveDateTime::parse_from_str(date, "%+")
-                .ok()
-                .map(|date| {
-                    Some(
-                        date.and_utc()
-                            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
-                    )
-                }),
-            _ => None,
-        };
+        let archived_at = archive_value(&doc);
         if let Some(archived_at) = archived_at {
             save_archive(db, owner, id, archived_at.as_deref())?;
         } else {
@@ -512,7 +501,24 @@ fn save_document(
     Ok(())
 }
 
-fn save_archive(
+pub(crate) fn archive_value(document: &Value) -> Option<Option<String>> {
+    match document.get("archivedDate") {
+        None | Some(Value::Null) => Some(None),
+        Some(Value::String(date)) => {
+            chrono::NaiveDateTime::parse_from_str(date, "%+")
+                .ok()
+                .map(|date| {
+                    Some(
+                        date.and_utc()
+                            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+                    )
+                })
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn save_archive(
     db: &Connection,
     owner: &str,
     id: &str,
