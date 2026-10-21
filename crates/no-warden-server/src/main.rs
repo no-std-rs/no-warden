@@ -23,6 +23,7 @@ mod organization_member_mini_details;
 mod organization_member_public_keys;
 mod organization_member_removal;
 mod organization_member_status;
+mod organization_member_update;
 mod organization_members;
 mod organization_web_reads;
 mod organizations;
@@ -374,7 +375,14 @@ async fn dispatch_http(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, Failure> {
-    dispatch_with_peer(app, method, uri, headers, body, peer.ip()).await
+    let member_update = route::Method::parse(method.as_str())
+        .and_then(|method| route::classify(method, uri.path()))
+        .is_some_and(|route| matches!(route, Route::OrganizationMemberUpdate(..)));
+    let result = dispatch_with_peer(app, method, uri, headers, body, peer.ip()).await;
+    match result {
+        Err(error) if member_update => Ok(organization_member_update::error_response(error)),
+        other => other,
+    }
 }
 
 #[cfg(test)]
@@ -883,6 +891,20 @@ async fn dispatch_with_peer(
                 uri.query(),
             )?;
             VaultService::new(&mut *store).restore_org_member(&owner, &org, &member)?;
+            Ok(StatusCode::OK.into_response())
+        }
+        Route::OrganizationMemberUpdate(raw_org, raw_member) => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let (org, member) = organization_members::detail_paths(
+                &mut store,
+                &owner,
+                raw_org,
+                raw_member,
+                uri.query(),
+            )?;
+            let input = organization_member_update::Input::parse(&body)?;
+            VaultService::new(&mut *store).update_org_member(&owner, &org, &member, &input)?;
             Ok(StatusCode::OK.into_response())
         }
         Route::OrganizationMemberDelete(raw_org, raw_member) => {

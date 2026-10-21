@@ -123,3 +123,8 @@ invoke the pinned official Bitwarden CLI as an external process.
 - [ ] Two-factor authentication, passkeys, SSO and administrative APIs.
 - [ ] Full import/export compatibility, remaining formats and variants, and upstream protocol regression fixtures.
 - [ ] Security audit, abuse controls, migration policy and production deployment.
+
+## Native organization-member update subset
+
+- [x] Native member PUT default-policy subset: allocation-free staged provider contract, six matching actual HTTP cases/730 requests, and 27 official CLI observer commands/32 direct HTTP requests.
+- [ ] Configured groups/policies/SMTP/events, general sharing, all untested variants and full API parity remain open.

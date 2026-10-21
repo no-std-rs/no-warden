@@ -2026,6 +2026,41 @@ impl<const E: usize, const G: usize, const C: usize> core::fmt::Debug
     }
 }
 
+/// Native member-update role and selection models share the independently tested
+/// invitation value grammar, while the UPDATE wrapper has different field order
+/// and optionality. Raw Custom name and numeric4 provenance remain distinct.
+pub type OrganizationMemberUpdateRole<'a> = OrganizationInviteRole<'a>;
+pub type OrganizationMemberUpdateCollection<'a> = OrganizationInviteCollection<'a>;
+pub type OrganizationMemberUpdatePermissions = OrganizationInvitePermissions;
+
+/// Optional caller-bounded native UPDATE decoder. HTTP adapters may instead own
+/// uncapped indexed strings/views. Only exact lower-camel fields are recognized;
+/// legacy accessAll/identity/key/status extras are ignored under this default subset.
+/// Object collections/groups may be omitted/null. Native positional order is
+/// [type, collections, groups, permissions]; the first three slots are required,
+/// the fourth defaults when absent but cannot be null. No HTTP cap is implied.
+/// This flexible role decoder needs deserialize_any and borrowed-string support;
+/// it is not a claim that every embedded JSON codec supports that interface.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizationMemberUpdateRequest<'a, const G: usize, const C: usize> {
+    #[serde(rename = "type", borrow)]
+    pub role: OrganizationMemberUpdateRole<'a>,
+    #[serde(borrow)]
+    pub collections: Option<BoundedList<OrganizationMemberUpdateCollection<'a>, C>>,
+    #[serde(borrow)]
+    pub groups: Option<BoundedList<&'a str, G>>,
+    #[serde(default)]
+    pub permissions: OrganizationMemberUpdatePermissions,
+}
+impl<const G: usize, const C: usize> core::fmt::Debug
+    for OrganizationMemberUpdateRequest<'_, G, C>
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationMemberUpdateRequest([REDACTED])")
+    }
+}
+
 /// Single confirmation input in exact positional order [id, key]. Both object
 /// fields are optional/null; positional forms still require both slots. The body ID
 /// is schema-checked but ignored for target selection. Key exposure is explicit only.

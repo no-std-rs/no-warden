@@ -46,6 +46,8 @@ pub mod organization_member_removal;
 pub mod organization_member_removal_cli;
 pub mod organization_member_status;
 pub mod organization_member_status_cli;
+pub mod organization_member_update;
+pub mod organization_member_update_cli;
 pub mod organization_members;
 pub mod organization_members_cli;
 pub mod organization_owner;
