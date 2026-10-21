@@ -16,7 +16,7 @@ fn store() -> Store {
         ("foreign-shared", None, Some("foreign")),
         ("personal", Some("actor"), None),
     ] {
-        let doc = json!({"id":id,"object":"cipherDetails","type":2,"name":"opaque encrypted name","notes":"opaque encrypted notes","secureNote":{"type":0},"key":null,"fields":null,"passwordHistory":null,"creationDate":"created","revisionDate":"revision","deletedDate":null,"favorite":true,"folderId":null,"futureEncryptedExtension":{"nested":[null,"opaque ciphertext",7]}});
+        let doc = json!({"id":id,"object":"cipherDetails","type":2,"name":"opaque encrypted name","notes":"opaque encrypted notes","secureNote":{"type":0,"futureEncrypted":{"nested":[null,"opaque ciphertext",7]}},"key":null,"fields":null,"passwordHistory":null,"creationDate":"created","revisionDate":"revision","deletedDate":null,"favorite":true,"folderId":null,"futureEncryptedExtension":{"nested":[null,"opaque ciphertext",7]}});
         store.db.execute("INSERT INTO items(id,owner,organization_id,kind,document,revision,created) VALUES(?1,?2,?3,'cipher',?4,'revision','created')",params![id,owner,org,doc.to_string()]).unwrap();
     }
     store.db.execute_batch("INSERT INTO organization_collection_ciphers VALUES('one','shared');INSERT INTO cipher_annotations VALUES('shared','actor',NULL,1);").unwrap();
@@ -40,8 +40,9 @@ fn organization_cipher_projection_is_scoped_private_and_preserves_opaque_extensi
     let row = &value["data"][0];
     assert_eq!(row["id"], "shared");
     assert_eq!(row["organizationId"], "org");
+    assert!(row.get("futureEncryptedExtension").is_none());
     assert_eq!(
-        row["futureEncryptedExtension"],
+        row["secureNote"]["futureEncrypted"],
         json!({"nested":[null,"opaque ciphertext",7]})
     );
     for name in [

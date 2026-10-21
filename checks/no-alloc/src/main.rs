@@ -18,6 +18,10 @@ use no_warden::{
         CipherBulkSharingData, OrganizationCipherBulkSharingStorage, ValidatedCipherBulkShare,
         ValidatedCipherBulkShareAssociation, resolve_bulk_cipher_source_write_access,
     },
+    organization_cipher_collections::{
+        OrganizationCipherCollectionsStorage, ValidatedCipherCollectionAdd,
+        ValidatedCipherCollectionsFinish,
+    },
     organization_cipher_sharing::{
         CipherCollectionAccessData, CipherCollectionAccessRecord, CipherOwnership,
         CipherSharingCollection, CipherSharingMembership, CipherSharingSource,
@@ -89,11 +93,11 @@ use no_warden::{
         ApiKeyResponse, AttachmentRequest, AttachmentResponse, AttachmentUploadResponse,
         AuthRequestCreateRequest, AuthRequestListResponse, AuthRequestLoginRequest,
         AuthRequestResponse, AuthRequestUpdateRequest, AvatarUpdateRequest,
-        CipherBulkShareItemRequest, CipherBulkShareRequest, CipherIdsRequest, CipherRequest,
-        CipherShareRequest, ClientCredentialsRequest, DeviceListResponse, DevicePushTokenRequest,
-        DeviceResponse, DomainSettingsRequest, DomainSettingsResponse,
-        DomainSettingsUpdateResponse, FileSendRequest, FolderRequest, ImportRequest,
-        InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
+        CipherBulkShareItemRequest, CipherBulkShareRequest, CipherCollectionsRequest,
+        CipherIdsRequest, CipherRequest, CipherShareRequest, ClientCredentialsRequest,
+        DeviceListResponse, DevicePushTokenRequest, DeviceResponse, DomainSettingsRequest,
+        DomainSettingsResponse, DomainSettingsUpdateResponse, FileSendRequest, FolderRequest,
+        ImportRequest, InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
         MasterPasswordPolicy, MasterPasswordPolicyResponse, OrganizationBulkConfirmRequest,
         OrganizationBulkMemberRemovalRequest, OrganizationBulkMemberRestoreRequest,
         OrganizationBulkMemberRevokeRequest, OrganizationCollectionCreateRequest,
@@ -146,6 +150,8 @@ struct PurgeProbe {
     shared_cipher: bool,
     bulk_associations: usize,
     bulk_commits: usize,
+    reassignment_links: [bool; 3],
+    reassignment_revisions: usize,
 }
 impl PurgeProbe {
     fn organization_record(&self) -> OrganizationRecord<'_> {
@@ -320,6 +326,162 @@ impl OrganizationCipherSharingStorage for PurgeProbe {
             return Err(());
         }
         self.shared_cipher = true;
+        Ok(())
+    }
+}
+// Fixed owned association snapshot; a later provider read cannot replace it.
+struct ReassignmentFacts {
+    links: [bool; 3],
+}
+const REASSIGN_IDS: [&str; 3] = [
+    "embedded-reassign-old",
+    "embedded-reassign-protected",
+    "embedded-reassign-new",
+];
+impl CipherCollectionAccessData for ReassignmentFacts {
+    fn len(&self) -> usize {
+        self.links.iter().filter(|&&v| v).count()
+    }
+    fn get(&self, index: usize) -> Option<CipherCollectionAccessRecord<'_>> {
+        let slot = self
+            .links
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| **v)
+            .nth(index)?
+            .0;
+        Some(CipherCollectionAccessRecord {
+            cipher_organization_id: Some("embedded-org"),
+            collection: CipherSharingCollection {
+                id: REASSIGN_IDS[slot],
+                user_id: "embedded-owner",
+                organization_id: "embedded-org",
+                assigned: true,
+                read_only: slot == 1,
+                hide_passwords: false,
+                manage: slot == 1,
+            },
+        })
+    }
+}
+impl OrganizationCipherCollectionsStorage for PurgeProbe {
+    type CollectionId = &'static str;
+    type CollectionAccess = ReassignmentFacts;
+    fn collection_reassignment_source(
+        &mut self,
+        id: &str,
+    ) -> Result<Option<CipherSharingSource<Self::CollectionId>>, ()> {
+        Ok(
+            (id == "embedded-reassign-source").then_some(CipherSharingSource {
+                id: "embedded-reassign-source",
+                owner_id: None,
+                organization_id: Some("embedded-org"),
+                revision: "embedded-reassign-revision",
+            }),
+        )
+    }
+    fn collection_reassignment_membership(
+        &mut self,
+        user: &str,
+        org: &str,
+    ) -> Result<Option<CipherSharingMembership<Self::CollectionId>>, ()> {
+        Ok(
+            (user == "embedded-owner" && org == "embedded-org").then_some(
+                CipherSharingMembership {
+                    user_id: "embedded-owner",
+                    organization_id: "embedded-org",
+                    role: 2,
+                    status: 2,
+                    access_all: false,
+                },
+            ),
+        )
+    }
+    fn collection_reassignment_associations(
+        &mut self,
+        _: &str,
+        _: &CipherSharingSource<Self::CollectionId>,
+    ) -> Result<Self::CollectionAccess, ()> {
+        Ok(ReassignmentFacts {
+            links: self.reassignment_links,
+        })
+    }
+    fn collection_reassignment_target(
+        &mut self,
+        user: &str,
+        org: &str,
+        collection: &str,
+    ) -> Result<Option<CipherSharingCollection<Self::CollectionId>>, ()> {
+        Ok(
+            (user == "embedded-owner" && org == "embedded-org" && collection == REASSIGN_IDS[2])
+                .then_some(CipherSharingCollection {
+                    id: REASSIGN_IDS[2],
+                    user_id: "embedded-owner",
+                    organization_id: "embedded-org",
+                    assigned: true,
+                    read_only: false,
+                    hide_passwords: false,
+                    manage: false,
+                }),
+        )
+    }
+    fn add_cipher_collection(&mut self, plan: &ValidatedCipherCollectionAdd<'_>) -> Result<(), ()> {
+        let source = self
+            .collection_reassignment_source(plan.cipher_id())?
+            .ok_or(())?;
+        let member = self
+            .collection_reassignment_membership(plan.actor(), plan.organization_id())?
+            .ok_or(())?;
+        let target = self
+            .collection_reassignment_target(
+                plan.actor(),
+                plan.organization_id(),
+                plan.collection_id(),
+            )?
+            .ok_or(())?;
+        plan.validate_live(
+            &source,
+            Some(member.view()),
+            &ReassignmentFacts {
+                links: self.reassignment_links,
+            },
+            target.view(),
+        )
+        .map_err(|_| ())?;
+        self.reassignment_links[2] = true;
+        self.reassignment_revisions += 1;
+        Ok(())
+    }
+    fn finish_cipher_collections<
+        D: no_warden::organization_cipher_sharing::CipherShareIdsData + ?Sized,
+    >(
+        &mut self,
+        plan: &ValidatedCipherCollectionsFinish<'_, D, Self::CollectionAccess>,
+    ) -> Result<(), ()> {
+        let source = self
+            .collection_reassignment_source(plan.cipher_id())?
+            .ok_or(())?;
+        let member = self
+            .collection_reassignment_membership(plan.actor(), plan.organization_id())?
+            .ok_or(())?;
+        plan.validate_live(
+            &source,
+            Some(member.view()),
+            &ReassignmentFacts {
+                links: self.reassignment_links,
+            },
+        )
+        .map_err(|_| ())?;
+        for index in 0..plan.associated_len() {
+            if let Some(id) = plan.removal(index).map_err(|_| ())? {
+                let slot = REASSIGN_IDS
+                    .iter()
+                    .position(|candidate| *candidate == id)
+                    .ok_or(())?;
+                self.reassignment_links[slot] = false;
+            }
+        }
+        self.reassignment_revisions += 1;
         Ok(())
     }
 }
@@ -1599,6 +1761,8 @@ pub extern "C" fn _start() -> ! {
             shared_cipher: false,
             bulk_associations: 0,
             bulk_commits: 0,
+            reassignment_links: [true, true, false],
+            reassignment_revisions: 0,
         };
         let organization = OrganizationCreateRequest {
             billing_email: "owner@example.com",
@@ -1655,6 +1819,67 @@ pub extern "C" fn _start() -> ! {
             black_box((
                 organization_service.storage().bulk_associations,
                 organization_service.storage().bulk_commits,
+            ));
+        }
+        // Real borrowed decoder and service: late missing selection keeps a
+        // durable add, duplicate representatives deduplicate, protected manage
+        // links survive Finish, and a final lost-read response is still scoped.
+        let selections = serde_json_core::from_slice::<CipherCollectionsRequest<'_, 2>>(black_box(
+            br#"{"CollectionIds":["embedded-reassign-new","missing"]}"#,
+        ));
+        if let Ok((request, _)) = selections {
+            let _ = black_box(organization_service.reassign_cipher_collections(
+                "embedded-owner",
+                "embedded-reassign-source",
+                &request,
+                [0, 1].as_slice(),
+            ));
+            black_box(organization_service.storage().reassignment_links);
+        }
+        let selections = serde_json_core::from_slice::<CipherCollectionsRequest<'_, 2>>(black_box(
+            br#"{"collectionIds":["embedded-reassign-new","embedded-reassign-new"]}"#,
+        ));
+        if let Ok((request, _)) = selections {
+            let _ = black_box(organization_service.reassign_cipher_collections(
+                "embedded-owner",
+                "embedded-reassign-source",
+                &request,
+                [1].as_slice(),
+            ));
+            black_box((
+                organization_service.storage().reassignment_links,
+                organization_service.storage().reassignment_revisions,
+            ));
+        }
+        organization_service.storage_mut().reassignment_links = black_box([true, false, false]);
+        let empty = serde_json_core::from_slice::<CipherCollectionsRequest<'_, 0>>(black_box(
+            br#"{"collectionIds":[]}"#,
+        ));
+        let response = empty.ok().and_then(|(request, _)| {
+            organization_service
+                .reassign_cipher_collections(
+                    "embedded-owner",
+                    "embedded-reassign-source",
+                    &request,
+                    [].as_slice(),
+                )
+                .ok()
+        });
+        if let Some(scope) = response {
+            let member = organization_service
+                .storage_mut()
+                .collection_reassignment_membership("embedded-owner", "embedded-org")
+                .ok()
+                .flatten();
+            let facts = ReassignmentFacts {
+                links: organization_service.storage().reassignment_links,
+            };
+            let flags =
+                scope.response_access(member.as_ref().map(CipherSharingMembership::view), &facts);
+            let _ = black_box((
+                scope.cipher_id(),
+                scope.source_revision(),
+                flags.map(|v| (v.readable(), v.writable())),
             ));
         }
         let readonly = [CipherCollectionAccessRecord {
