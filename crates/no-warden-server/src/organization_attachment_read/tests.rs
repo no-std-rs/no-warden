@@ -328,6 +328,22 @@ async fn metadata_checks_exact_cipher_scope_attachment_case_and_bounded_authoriz
         protected(&f.store) == before && table(&f.store.db, "attachment_downloads") == caps,
         "Invalid metadata path minted a grant or changed protected state"
     );
+    for alternate in [
+        f.cipher.replace('-', ""),
+        format!("{{{}}}", f.cipher),
+        format!("urn:uuid:{}", f.cipher),
+    ] {
+        assert_eq!(
+            rejected(super::metadata(
+                &mut f.store,
+                "alice",
+                &alternate,
+                FILE,
+                BASE
+            )),
+            StatusCode::BAD_REQUEST
+        );
+    }
     let uppercase = FILE.to_uppercase();
     let v = value(success(super::metadata(
         &mut f.store,
@@ -591,7 +607,7 @@ async fn error_fields(response: Response, status: StatusCode, count: usize) {
     assert_eq!(v.as_object().unwrap().len(), count);
 }
 #[tokio::test]
-async fn scoped_socket_head_preserves_get_lengths_auth_device_guards_and_native_errors() {
+async fn scoped_socket_head_preserves_get_lengths_auth_uuid_guards_and_native_errors() {
     let f = fixture();
     let cipher = f.cipher.clone();
     let bytes = f.bytes.clone();
@@ -714,18 +730,26 @@ async fn scoped_socket_head_preserves_get_lengths_auth_device_guards_and_native_
         1,
     )
     .await;
+    for target in [
+        format!("/attachments/not-a-uuid/{FILE}?{}", u.query().unwrap()),
+        format!("/attachments/not-a-uuid/{FILE}"),
+    ] {
+        error_fields(
+            socket(&app, Method::GET, &target, HeaderMap::new(), b"").await,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            1,
+        )
+        .await;
+    }
     app.store
         .lock()
         .unwrap()
         .db
         .execute("DELETE FROM session_devices", [])
         .unwrap();
-    error_fields(
-        socket(&app, Method::GET, &path, auth, b"").await,
-        StatusCode::UNAUTHORIZED,
-        1,
-    )
-    .await;
+    let unbound = socket(&app, Method::GET, &path, auth, b"").await;
+    assert_eq!(unbound.status(), StatusCode::OK);
+    require_metadata(&value(unbound).await);
     let after = protected(&app.store.lock().unwrap());
     let changed_tables: Vec<_> = before
         .iter()

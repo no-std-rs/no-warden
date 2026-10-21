@@ -506,7 +506,8 @@ async fn dispatch_with_peer(
         .lock()
         .map_err(|_| Failure(StatusCode::INTERNAL_SERVER_ERROR, "Storage unavailable"))?;
     if let Route::AttachmentDownload(cipher_id, attachment_id) = route {
-        return attachments::download(&mut store, cipher_id, attachment_id, uri.query());
+        let cipher_id = cipher_reads::path_id(cipher_id)?;
+        return attachments::download(&mut store, &cipher_id, attachment_id, uri.query());
     }
     if let Route::SendFileDownload(send_id, file_id) = route {
         return send_files::download(&mut store, send_id, file_id, uri.query());
@@ -1187,17 +1188,13 @@ async fn dispatch_with_peer(
             );
             Ok(Json(response).into_response())
         }
-        Route::AttachmentGet(cipher_id, attachment_id) => {
-            devices::access_binding(&store.db, &digest(bearer), &owner)?
-                .ok_or_else(unauthorized)?;
-            organization_attachment_read::metadata(
-                &mut store,
-                &owner,
-                cipher_id,
-                attachment_id,
-                &app.base,
-            )
-        }
+        Route::AttachmentGet(cipher_id, attachment_id) => organization_attachment_read::metadata(
+            &mut store,
+            &owner,
+            cipher_id,
+            attachment_id,
+            &app.base,
+        ),
         Route::AttachmentUpload(cipher_id, attachment_id) => {
             let upload = upload.ok_or_else(invalid)?;
             let size = upload.data.len() as u64;

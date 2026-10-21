@@ -40,7 +40,7 @@ pub fn metadata(
     attachment: &str,
     base: &str,
 ) -> Result<Response, Failure> {
-    // Authenticate/device-bind before validating this UUID. Keep its spelling:
+    // Authenticate before validating this UUID. Keep its spelling:
     // an uppercase source is not an alias, whereas attachment lookup folds case.
     let cipher = cipher_reads::path_id(cipher)?;
     VaultService::new(&mut *store).authorize_attachment_read(actor, &cipher, attachment)?;
