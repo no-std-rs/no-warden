@@ -33,7 +33,7 @@ invoke the pinned official Bitwarden CLI as an external process.
 - [x] Reauthenticated personal-vault purge: allocation-free provider contract, atomic cleanup/revision and preserved account authority, verified by six matching actual Rust HTTP cases. Organization purge remains open.
 - [x] Actual Bitwarden CLI end-to-end verification and Vaultwarden comparison.
 - [x] Personal JSON/CSV import subset: CLI JSON types 1–4, CSV types 1–2, and allocation-free batch/provider contracts with verified atomic persistence.
-- [x] Personal cipher bulk lifecycle and archive/unarchive subset: reusable allocation-free contracts, atomic provider behavior, HTTP comparison of all 12 route patterns, and real CLI archive/unarchive verification.
+- [x] Original personal cipher bulk lifecycle and archive/unarchive milestone: reusable allocation-free contracts, then-atomic provider behavior, HTTP comparison of all 12 route patterns, and real CLI archive/unarchive verification. Current selected archive/unarchive uses the later READ-first per-step contract below.
 - [x] Personal API-key identity subset: reusable allocation-free proof/provider contracts, confidential key retrieval and rotation, and verified real CLI API-key login, password unlock, fresh-cache decryption, and rotation.
 - [x] Personal attachment subset: allocation-free metadata and lifecycle contracts, v2 and legacy uploads, scoped downloads, cleanup, and real CLI create/get/delete verification.
 - [x] Authenticated WebAuthn credential-metadata subset: fixed allocation-free empty-list contract and existing previous-stamp guards, with six matching actual HTTP cases. Full passkey and key-rotation APIs remain open.
@@ -134,3 +134,5 @@ invoke the pinned official Bitwarden CLI as an external process.
 - [x] PUT collections_v2 subset: allocation-free scoped reassignment/unique-order validation, protected old links and lost-read operation response; six actual HTTP cases/522 requests plus separate Owner/recipient item-collections CLI28/25. Native invalid-subset order, aliases/admin/groups/policies/attachments/full parity remain open.
 
 - [x] PUT/POST private cipher annotations subset: allocation-free READ admission/sealed actor-only plan, readonly/historical grants, exact folder scope, unchanged common cipher revision/payload; six paired HTTP cases/605 requests and separate actual CLI observer 31/37. Actual CLI partial caller, broader variants/groups/policies/attachments/native concurrency/full parity remain open.
+
+- [x] Shared cipher archive/unarchive subset: allocation-free READ/sealed per-step decisions, private archive dates, distinct single/current-reader and selected/actor revisions, durable eligible mixed-error subsets; six paired HTTP cases/1115 and actual CLI 39/57 with readonly/fresh decryption. Broader variants, groups/policies, attachments, native concurrency and full parity remain open.
