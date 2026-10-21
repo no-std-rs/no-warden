@@ -56,6 +56,10 @@ use no_warden::{
         OrganizationMemberDetailStorage, OrganizationMemberGroup, OrganizationMemberListData,
         OrganizationMemberQuery, OrganizationMemberRecord, OrganizationMemberStorage,
     },
+    organization_web_reads::{
+        OrganizationCipherReadData, OrganizationCipherReadRecord,
+        OrganizationCollectionDetailsData, OrganizationGroupPresence, OrganizationWebReadsStorage,
+    },
     organizations::{
         CollectionRecord, OrganizationCreationPolicy, OrganizationFeatures, OrganizationMembership,
         OrganizationProfileListData, OrganizationProfileRecord, OrganizationRecord,
@@ -492,6 +496,67 @@ impl PurgeProbe {
             hide_passwords: false,
             manage: true,
         }
+    }
+}
+struct WebCipherProbe<'a>(&'a PurgeProbe);
+impl OrganizationCipherReadData for WebCipherProbe<'_> {
+    fn len(&self) -> usize {
+        usize::from(self.0.organization_present)
+    }
+    fn get(&self, index: usize) -> Option<OrganizationCipherReadRecord<'_>> {
+        (index == 0 && self.0.organization_present).then_some(OrganizationCipherReadRecord {
+            id: "embedded-shared-cipher",
+            organization_id: "embedded-org",
+        })
+    }
+}
+struct WebDetailsProbe<'a>(&'a PurgeProbe);
+impl OrganizationCollectionDetailsData for WebDetailsProbe<'_> {
+    type Details<'a>
+        = OrgCollectionDetailsProbe<'a>
+    where
+        Self: 'a;
+    fn len(&self) -> usize {
+        usize::from(self.0.organization_present) + usize::from(self.0.added_collection)
+    }
+    fn get(&self, index: usize) -> Option<Self::Details<'_>> {
+        match index {
+            0 if self.0.organization_present => Some(OrgCollectionDetailsProbe {
+                provider: self.0,
+                added: false,
+            }),
+            1 if self.0.added_collection => Some(OrgCollectionDetailsProbe {
+                provider: self.0,
+                added: true,
+            }),
+            _ => None,
+        }
+    }
+}
+impl OrganizationWebReadsStorage for PurgeProbe {
+    type CipherReads<'a> = WebCipherProbe<'a>;
+    type CollectionDetails<'a> = WebDetailsProbe<'a>;
+    fn organization_cipher_reads(&mut self, org: &str) -> Result<Self::CipherReads<'_>, ()> {
+        if org != "embedded-org" {
+            return Err(());
+        }
+        Ok(WebCipherProbe(self))
+    }
+    fn organization_collection_details(
+        &mut self,
+        owner: &str,
+        org: &str,
+    ) -> Result<Self::CollectionDetails<'_>, ()> {
+        if owner != "embedded-owner" || org != "embedded-org" {
+            return Err(());
+        }
+        Ok(WebDetailsProbe(self))
+    }
+    fn organization_group_presence(&mut self, org: &str) -> Result<OrganizationGroupPresence, ()> {
+        if org != "embedded-org" {
+            return Err(());
+        }
+        Ok(OrganizationGroupPresence::NoCreatedGroups)
     }
 }
 impl OrganizationCollectionStorage for PurgeProbe {
@@ -1606,6 +1671,35 @@ pub extern "C" fn _start() -> ! {
                 "embedded-org",
                 "embedded-added-collection",
             ));
+        }
+        if let Ok(grant) =
+            organization_service.authorize_org_cipher_list("embedded-owner", "embedded-org")
+        {
+            black_box(grant.len());
+            black_box(grant.get(0));
+        }
+        if let Ok(response) =
+            organization_service.list_org_collection_details("embedded-owner", "embedded-org")
+        {
+            let _ = black_box(serde_json_core::to_slice(
+                &response,
+                &mut organization_output,
+            ));
+        }
+        if let Ok(response) =
+            organization_service.list_empty_org_groups("embedded-owner", "embedded-org")
+        {
+            let _ = black_box(serde_json_core::to_slice(
+                &response,
+                &mut organization_output,
+            ));
+        }
+        for uri in [
+            "/api/ciphers/organization-details?organizationId=embedded-org",
+            "/api/organizations/embedded-org/collections/details",
+            "/api/organizations/embedded-org/groups",
+        ] {
+            black_box(classify(Method::Get, uri));
         }
         // The mini view has its own provider/serializer and never traverses ACLs.
         if let Ok(response) =

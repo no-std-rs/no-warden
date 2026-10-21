@@ -39,6 +39,7 @@ pub mod organization_member_public_keys;
 pub mod organization_member_removal;
 pub mod organization_member_status;
 pub mod organization_members;
+pub mod organization_web_reads;
 pub mod organizations;
 pub mod password_login;
 pub mod prelogin;

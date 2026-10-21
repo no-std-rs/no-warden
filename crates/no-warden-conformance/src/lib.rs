@@ -50,6 +50,8 @@ pub mod organization_members;
 pub mod organization_members_cli;
 pub mod organization_owner;
 pub mod organization_owner_cli;
+pub mod organization_web_reads;
+pub mod organization_web_reads_cli;
 pub mod password_login;
 pub mod prelogin;
 pub mod prelogin_cli;

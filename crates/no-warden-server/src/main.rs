@@ -24,6 +24,7 @@ mod organization_member_public_keys;
 mod organization_member_removal;
 mod organization_member_status;
 mod organization_members;
+mod organization_web_reads;
 mod organizations;
 mod password_login;
 mod prelogin;
@@ -667,6 +668,9 @@ async fn dispatch_with_peer(
             | Route::OrganizationGet(_)
             | Route::Collections
             | Route::OrganizationCollections(_)
+            | Route::OrganizationCollectionListDetails(_)
+            | Route::OrganizationGroups(_)
+            | Route::OrganizationCipherDetails
             | Route::OrganizationCollectionCreate(_)
             | Route::OrganizationCollectionDetails(..)
             | Route::OrganizationCollectionUpdate(..)
@@ -714,6 +718,27 @@ async fn dispatch_with_peer(
                 col.as_deref().expect("Collection path"),
             )?;
             Ok(StatusCode::OK.into_response())
+        }
+        Route::OrganizationCipherDetails => {
+            let org = organization_web_reads::query_organization(uri.query())?;
+            Ok(json_response(organization_web_reads::cipher_list(
+                &mut store, &owner, &org,
+            )?))
+        }
+        Route::OrganizationCollectionListDetails(raw) => {
+            let (org, _) =
+                organization_collections::paths(&mut store, &owner, raw, None, uri.query())?;
+            let response =
+                VaultService::new(&mut *store).list_org_collection_details(&owner, &org)?;
+            Ok(Json(response).into_response())
+        }
+        Route::OrganizationGroups(raw) => {
+            let (org, _) =
+                organization_collections::paths(&mut store, &owner, raw, None, uri.query())?;
+            Ok(
+                Json(VaultService::new(&mut *store).list_empty_org_groups(&owner, &org)?)
+                    .into_response(),
+            )
         }
         Route::OrganizationCollections(raw) => {
             let (org, _) =
