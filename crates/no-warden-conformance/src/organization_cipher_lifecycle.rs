@@ -14,8 +14,8 @@ use std::{collections::BTreeSet, fs, io::Read};
 use uuid::Uuid;
 
 pub const CASE_COUNT: usize = 6;
-// Intentionally zero until all six native development cases complete.
-pub const HTTP_REQUEST_COUNT: usize = 0;
+// Measured six-case native flow; excludes four registration requests.
+pub const HTTP_REQUEST_COUNT: usize = 812;
 const NOTE: &str = "Lifecycle retains encrypted note Ω\0";
 type Case = fn(&mut Suite) -> Result<(), Error>;
 const CASES: [(&str, Case); CASE_COUNT] = [
