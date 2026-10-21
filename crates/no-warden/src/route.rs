@@ -107,6 +107,7 @@ pub enum Route<'a> {
     CipherShare(&'a str),
     CipherBulkShare,
     CipherCollectionsUpdate(&'a str),
+    CipherPartial(&'a str),
     CipherImport,
     CipherPurge,
     CipherBulkTrash,
@@ -435,6 +436,9 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
             }
             let tail = path.strip_prefix("/api/ciphers/")?;
             if let Some((id, action)) = tail.split_once('/') {
+                if matches!(method, Put | Post) && !id.is_empty() && action == "partial" {
+                    return Some(CipherPartial(id));
+                }
                 if method == Put && !id.is_empty() && action == "collections_v2" {
                     return Some(CipherCollectionsUpdate(id));
                 }
@@ -561,6 +565,37 @@ fn valid_segment(segment: &str) -> bool {
 mod tests {
     extern crate std;
     use super::*;
+
+    #[test]
+    fn partial_is_authenticated_put_or_post_with_static_route_precedence() {
+        for method in [Method::Put, Method::Post] {
+            for path in [
+                "/api/ciphers/id/partial",
+                "/api/ciphers/id/partial/?ignored=true",
+            ] {
+                assert_eq!(classify(method, path), Some(Route::CipherPartial("id")));
+            }
+        }
+        assert!(Route::CipherPartial("id").requires_authentication());
+        for method in [Method::Get, Method::Delete, Method::Options] {
+            assert_eq!(classify(method, "/api/ciphers/id/partial"), None);
+        }
+        for path in [
+            "/api/ciphers//partial",
+            "/api/ciphers/id/partial/extra",
+            "/api/ciphers/id/partial-admin",
+        ] {
+            assert_eq!(classify(Method::Put, path), None);
+        }
+        assert_eq!(
+            classify(Method::Put, "/api/ciphers/share"),
+            Some(Route::CipherBulkShare)
+        );
+        assert_eq!(
+            classify(Method::Post, "/api/ciphers/import"),
+            Some(Route::CipherImport)
+        );
+    }
 
     #[test]
     fn collections_v2_is_put_only_authenticated_and_preserves_static_precedence() {
