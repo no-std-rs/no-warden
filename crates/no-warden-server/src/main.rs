@@ -12,6 +12,7 @@ mod cipher_ownership;
 mod cipher_reads;
 mod devices;
 mod domains;
+mod organization_attachment_read;
 mod organization_bulk_confirmations;
 mod organization_bulk_member_removal;
 mod organization_bulk_member_status;
@@ -379,6 +380,10 @@ async fn dispatch_http(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, Failure> {
+    let attachment_scope = organization_attachment_read::error_scope(&method, uri.path());
+    let attachment_head =
+        method == Method::HEAD && organization_attachment_read::route(uri.path()).is_some();
+    let method = if attachment_head { Method::GET } else { method };
     let classified = route::Method::parse(method.as_str())
         .and_then(|method| route::classify(method, uri.path()));
     let bulk = classified == Some(Route::CipherBulkShare);
@@ -401,7 +406,8 @@ async fn dispatch_http(
         classified,
         Some(Route::CipherSoftDelete(_) | Route::CipherRestore(_) | Route::CipherDelete(_))
     );
-    match dispatch_with_peer(app, method, uri, headers, body, peer.ip()).await {
+    let result = match dispatch_with_peer(app, method, uri, headers, body, peer.ip()).await {
+        Err(error) if attachment_scope => Ok(organization_attachment_read::render_error(error)),
         Err(error) if bulk => Ok(organization_cipher_bulk_sharing::render_error(error)),
         Err(error) if collections => Ok(organization_cipher_collections::render_error(error)),
         Err(error) if partial => Ok(organization_cipher_partial::render_error(error)),
@@ -411,7 +417,13 @@ async fn dispatch_http(
             Ok(organization_cipher_bulk_lifecycle::render_error(error))
         }
         result => result,
-    }
+    };
+    result.map(|mut response| {
+        if attachment_head {
+            organization_attachment_read::head(&mut response);
+        }
+        response
+    })
 }
 
 #[cfg(test)]
@@ -1176,15 +1188,15 @@ async fn dispatch_with_peer(
             Ok(Json(response).into_response())
         }
         Route::AttachmentGet(cipher_id, attachment_id) => {
-            VaultService::new(&mut *store).authorize_attachment_read(
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            organization_attachment_read::metadata(
+                &mut store,
                 &owner,
                 cipher_id,
                 attachment_id,
-            )?;
-            let record = attachments::load(&store.db, attachment_id)?.ok_or_else(missing)?;
-            Ok(json_response(attachments::wire(
-                &store.db, &app.base, &record,
-            )?))
+                &app.base,
+            )
         }
         Route::AttachmentUpload(cipher_id, attachment_id) => {
             let upload = upload.ok_or_else(invalid)?;

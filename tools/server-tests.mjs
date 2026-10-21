@@ -214,17 +214,21 @@ await test("standalone adapter enforces authentication, isolation, and JSON pres
   assert.equal(typeof created.id, "string");
 
   await t.test("another user cannot read, edit, trash, restore, or delete the cipher", async () => {
+    const aliceBefore = await vaultState(aliceToken);
+    const bobBefore = await vaultState(bobToken);
     for (const operation of [
-      { method: "GET", suffix: "" },
-      { method: "PUT", suffix: "", body: cipher(bob) },
-      { method: "PUT", suffix: "/delete" },
-      { method: "PUT", suffix: "/restore" },
-      { method: "DELETE", suffix: "" },
+      { method: "GET", suffix: "", statuses: [400] },
+      { method: "PUT", suffix: "", body: cipher(bob), statuses: [403, 404] },
+      { method: "PUT", suffix: "/delete", statuses: [400] },
+      { method: "PUT", suffix: "/restore", statuses: [400] },
+      { method: "DELETE", suffix: "", statuses: [400] },
     ]) {
       denied(await request(`/api/ciphers/${created.id}${operation.suffix}`, {
         method: operation.method, token: bobToken, body: operation.body,
-      }), `cross-user ${operation.method} ${operation.suffix}`, operation.method === "GET" ? [400] : [403, 404]);
+      }), `cross-user ${operation.method} ${operation.suffix}`, operation.statuses);
     }
+    unchanged(await vaultState(aliceToken), aliceBefore, "Cross-user denials must preserve the owner's entire vault and revision");
+    unchanged(await vaultState(bobToken), bobBefore, "Cross-user denials must preserve the acting user's entire vault and revision");
     const own = ok(await request(`/api/ciphers/${created.id}`, { token: aliceToken }), "owner read");
     assert.equal(own.name, alice.registration.key);
     assert.equal(own.deletedDate ?? null, null);

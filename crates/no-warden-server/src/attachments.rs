@@ -4,7 +4,7 @@ use axum::{
     body::{Body, Bytes},
     extract::{DefaultBodyLimit, FromRequest, Multipart, Request},
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    response::Response,
 };
 use no_warden::{
     attachment::{AttachmentAction, AttachmentMetadata, AttachmentStorage, ValidatedAttachment},
@@ -24,6 +24,14 @@ pub(crate) fn new_id() -> String {
 }
 
 impl AttachmentStorage for crate::store::Store {
+    fn attachment_access(
+        &mut self,
+        actor: &str,
+        cipher_id: &str,
+    ) -> rusqlite::Result<Option<no_warden::bulk::CipherAccess>> {
+        crate::organization_attachment_read::access(&self.db, actor, cipher_id)
+    }
+
     fn attachment_metadata(
         &mut self,
         id: &str,
@@ -248,7 +256,10 @@ pub(crate) fn wire(db: &Connection, base: &str, record: &Record) -> rusqlite::Re
     let token = random_token();
     db.execute(
         "INSERT INTO attachment_downloads(token,attachment_id,expires) VALUES(?1,?2,?3)",
-        params![digest(&token), record.id, now + 60],
+        // Native real-clock samples admit exp+30 seconds but reject exp+31,
+        // with nominal exp=nbf+60. Our opaque capability uses an exclusive
+        // integer-second deadline, preserving that observed inclusive window.
+        params![digest(&token), record.id, now + 91],
     )?;
     let url = format!(
         "{base}/attachments/{}/{}?token={token}",
@@ -306,9 +317,6 @@ pub(crate) fn download(
         StatusCode::UNPROCESSABLE_ENTITY,
         "A download token is required",
     ))?;
-    if tokens.next().is_some() {
-        return Err(missing());
-    }
     let grant = no_warden::VaultService::new(&mut *store).authorize_attachment_download(
         cipher_id,
         attachment_id,
@@ -322,12 +330,8 @@ pub(crate) fn download(
             |row| row.get(0),
         )
         .optional()?;
-    Ok((
-        StatusCode::OK,
-        [("content-type", "application/octet-stream")],
-        bytes.ok_or_else(missing)?,
-    )
-        .into_response())
+    // The native capability route has no Content-Type or Content-Disposition.
+    Ok(Response::new(Body::from(bytes.ok_or_else(missing)?)))
 }
 
 #[cfg(test)]
