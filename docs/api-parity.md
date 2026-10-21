@@ -39,7 +39,7 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 129 routed patterns, 68 with typed requests, 122 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 129 routed patterns, 68 with typed requests, 121 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
@@ -56,8 +56,8 @@ responses, and attachment responses. Bulk cipher lists use the generic `ListResp
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 123 patterns, negative
-HTTP evidence for 122, 341 named HTTP cases, and 55 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 124 patterns, negative
+HTTP evidence for 124, 348 named HTTP cases, and 56 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -157,7 +157,8 @@ adapter guarantee rather than upstream behavioral equivalence. See
 The original cipher lifecycle subset added the personal-vault contracts below.
 Admin-named aliases keep the same ownership checks. Shared archive/unarchive now
 uses the separate [READ and revision contract](#shared-cipher-archive-annotations);
-other organization lifecycle permissions remain outside this historical subset.
+shared single-cipher Trash/restore/permanent deletion now uses the later
+[current-WRITE contract](#shared-single-cipher-trash-restore-and-permanent-deletion). Other organization lifecycle variants stay open.
 
 | Action | Method and `/api` route | Request and success response |
 | --- | --- | --- |
@@ -172,8 +173,9 @@ deduplicate IDs without prescribing order. The adapter preserves that success
 behavior and the bulk missing/inaccessible-member status of 400. Bulk trash,
 restore and permanent deletion retain atomic persistence; selected archive and
 unarchive instead use READ-first, separately durable steps described below.
-Upstream errors may occur after partial writes. Existing single-item trash,
-restore and permanent-delete handlers retain their earlier 404 policy. Archive/unarchive
+Upstream errors may occur after partial writes. Shared single-item Trash/restore/permanent deletion now follows the
+[current-WRITE contract](#shared-single-cipher-trash-restore-and-permanent-deletion),
+including measured business400 denials and POSTrestore404. Archive/unarchive
 changes the acting user's archive metadata and account revision while leaving
 the cipher revision intact, as the
 [pinned archive model](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/db/models/archive.rs#L35-L83)
@@ -2170,3 +2172,78 @@ common/key/cipher revision preservation hold. Observed browser responses35/32
 and26 buckets each plus41 direct setup/control requests each are observations,
 not fixed budgets. No single-route, Owner/manage, attachment or general web claim;
 mandatory personal web10 is unchanged.
+
+The archive JavaScript follow-up passes all 62 local server tests, including
+16 mixed-selection cases. It replaces the stale whole-archive rollback
+assumption with strict eligible-item/private-state and foreign-state checks.
+All Rust/Cargo inputs, client fixture helpers and three executables are unchanged;
+the earlier HTTP/CLI/browser runs are retained with their original source
+attribution, rather than presented as fresh runs of the test-only follow-up.
+
+## Shared single-cipher Trash, restore and permanent deletion
+
+The attachment-free shared secure-note subset supports PUT single-item Trash,
+PUT Restore, and permanent deletion through DELETE item or POST item/delete.
+Confirmed Owner/Admin/writable User and readonly+manage User can write; ordinary
+readonly/no-grant/accepted/revoked actors cannot. GET edit/delete/restore flags
+stay false for readonly+manage even though its backend lifecycle calls succeed.
+POST item/restore is native 1.37.4 404: the classifier retains the declaration,
+but its host guard runs before any reusable core service.
+
+Trash and hard delete return 200 with empty body and no Content-Type. Restore
+returns exact 30-field cipherDetails JSON equal to acting GET. Repeated Trash
+refreshes deletion and cipher revisions; repeated active Restore still advances
+revisions. Both distinct private archive dates/folders/favorites, opaque encrypted
+key/payload/fields/history, ownership/collections and creation date survive.
+Current observed READERS receive account revisions, including a readonly reader
+without WRITE. Hard deletion of active or trashed notes yields GET400/list+sync
+absence. Account keys, sessions, folders and unrelated controls remain usable.
+API absence does not establish native database/attachment-file cleanup.
+
+Both actual Vaultwarden 1.37.4 and no-warden pass six HTTP cases/812
+counted requests plus four registration requests each. Separate official CLI
+2026.10.0 runs pass 63 real commands/101 direct setup/control requests
+plus four registrations. Owner and writable recipient each exercise an archived
+note through Trash then restore, retaining archive state, followed by active
+archived restore through selected unarchive; an ordinary Trash/restore cycle and
+fresh-cache note/private-folder decryption also pass. Pinned ListCommand applies
+Trash AND Archive filters: the combined state needs --trash --archived. Four CLI
+and two direct password logins are separate. Caller attribution comes from pinned
+source; no captured CLI trace, shared permanent-delete CLI or readonly-manage CLI
+execution is claimed. These counts are separate from baseline120.
+
+Core current-WRITE/scoped canonical source/revision plans remain allocation-free,
+with no lifecycle request DTO, clock or HTTP dependency. The adapter reloads live
+source/member/grants in an Immediate transaction, validates the sealed snapshot,
+resolves current READ notification scope before mutation/deletion, then commits
+opaque/private-preserving mutation and account revisions together. Local rollback,
+reopen/cleanup and live-authority tests do not establish native concurrency/failure
+or attachment-file parity. Host 4096 fact/reader and cumulative 8 MiB material
+budgets are local resource policy only. Selected bulk lifecycle, broader item
+states/types, historical/group/custom matrices, configured policies/SMTP,
+attachments, transport/capacity and full upstream parity remain open.
+
+Protocol declarations remain pinned to 58a980f850464f7d9cdc99a765df36f0a3308b91;
+actual image build 7c188967e7a467b19b2757bc3326f9cf3ccae327 is separate. Official
+clients b449ac1d255784380d75ef026343198891286be7 and SDK
+c5e53d3e82ab80fdc9fd79ebd74058399a6444b6 supply pinned references. Implementations
+and compatibility tests are independently authored; all full-parity flags remain false.
+
+A separate guarded same-script optional Web2026.7.0 / Chromium149.0.7827.55 /
+Playwright1.64.1 pair also passes writable-recipient Trash, fresh Trash decryption,
+Restore, fresh active decryption, re-Trash and permanent deletion followed by
+fresh active/Trash absence. Four ordinary empty contexts and four actual single
+mutations per backend preserve the measured common/private/key and current-reader
+revision contract. Restore literal30 JSON equals actorGET; empty replies have
+Content-Length0 and no Content-Type. Browser observations48/44
+and direct setup/control69/69
+are observations, not fixed budgets. No Owner/readonly-manage/archive-bearing,
+selected-bulk, attachment or general web claim; inherited personal Web10 stays unchanged.
+
+The single lifecycle JavaScript follow-up passes all 62 local server checks.
+The cross-user lifecycle fixture now requires the measured 400 for Trash,
+Restore and permanent deletion, preserves the existing ordinary PUT edit
+expectation, and compares both complete vaults and revisions after rejection.
+All Rust/Cargo inputs, recorded client fixtures and three executables are
+unchanged. Earlier HTTP/CLI/browser/baseline runs retain their original source
+attribution; they were not rerun or relabeled as executions of this JS follow-up.
