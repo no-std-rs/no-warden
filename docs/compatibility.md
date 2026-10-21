@@ -75,6 +75,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | `PUT /api/auth-requests/<id>`, public `GET /api/auth-requests/<id>/response` | Verified-session approval/rejection and exact code/type/IP response polling, without login consumption | Core/provider and host tests; eight matching HTTP cases on both actual servers; no new client-route claim |
 | Folder CRUD and POST aliases | Opaque names, four-field responses, owner isolation, clear references without changing cipher revisions | CLI baseline; core/host tests and the focused HTTP comparison described below |
 | Cipher CRUD | Opaque ciphertext and unknown JSON fields | CLI, HTTP, storage tests |
+| Ordinary shared secure-note updates | Canonical organization scope, writable/manage authority, actor annotations and preserved encrypted payload | Six matching HTTP cases (505 requests) and 32 real CLI edit/sync/fresh-cache commands per target; no captured trace/browser/attachment-bearing/full-parity claim |
 | `GET /api/ciphers/{id}`, `/details`, `/admin` | Same readable cipher, current-device/UUID guards and missing/foreign 400; admin name grants no bypass | Six matching Rust HTTP cases on both actual servers; core/provider tests and adapter-owned payload projection; no executed client alias or route trace claim |
 | Personal v2 attachment reservation and multipart upload | Opaque encrypted metadata and bytes; declared/measured size checks | Core, real CLI on both servers, matching HTTP |
 | Legacy attachment upload, replacement, and delete aliases | Same personal write checks; fresh replacement IDs; transactional cleanup | Core, local/upstream HTTP and restart checks |
@@ -1612,3 +1613,20 @@ Fourteen core tests, the static-route precedence test, twelve host regressions
 and the real fixed-storage noalloc decoder/prefix/final/source-access link
 exercise provide local contracts;
 firmware is linked rather than executed, and these are not upstream backend proofs.
+
+## Ordinary shared secure-note updates
+
+Official Bitwarden CLI 2026.10.0 executes 32 commands per target against
+Vaultwarden 1.37.4 and no-warden: Owner and confirmed writable recipient edit an
+attachment-free shared secure note, sync and decrypt it again using fresh caches.
+Personal edited/preserved controls are included. 16 direct HTTP requests exclude 4
+registration requests; 4 CLI and 2 direct password logins remain separate.
+Six paired actual HTTP cases/505 counted requests verify canonical
+source admission, readonly/manage distinction, guard ordering, older revisions,
+private annotations and opaque encrypted data with the measured 30-field shared
+projection. Raw encrypted extensions remain stored. Empty attachment containers
+are supported; attachment-bearing updates are unverified. The final suite captures
+no route trace, browser actions or client-internal request count. The inherited
+120-command baseline remains separate. Groups/policies/SMTP, other item types,
+lifecycle, exhaustive errors/concurrency and full API parity remain open.
+See [the scoped protocol notes](api-parity.md#ordinary-shared-secure-note-updates).

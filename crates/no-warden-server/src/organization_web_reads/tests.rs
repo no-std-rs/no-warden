@@ -40,8 +40,13 @@ fn organization_cipher_projection_is_scoped_private_and_preserves_opaque_extensi
     let row = &value["data"][0];
     assert_eq!(row["id"], "shared");
     assert_eq!(row["organizationId"], "org");
+    // Actual native organization-details omits unknown outer response fields.
+    // The encrypted extension remains in raw storage, checked independently.
+    assert!(row.get("futureEncryptedExtension").is_none());
+    let raw_shared: Value =
+        serde_json::from_str(&before.iter().find(|(id, _)| id == "shared").unwrap().1).unwrap();
     assert_eq!(
-        row["futureEncryptedExtension"],
+        raw_shared["futureEncryptedExtension"],
         json!({"nested":[null,"opaque ciphertext",7]})
     );
     for name in [

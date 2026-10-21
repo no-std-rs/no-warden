@@ -327,6 +327,57 @@ pub fn project(
     {
         doc["archivedDate"] = json!(archived);
     }
+    if source.organization_id.is_some() {
+        // Native shared projections expose these known response fields while
+        // the stored opaque document retains every submitted extension. Keep
+        // the personal path's established unknown-field round trips intact.
+        const FIELDS: [&str; 30] = [
+            "archivedDate",
+            "attachments",
+            "bankAccount",
+            "card",
+            "collectionIds",
+            "creationDate",
+            "deletedDate",
+            "driversLicense",
+            "edit",
+            "favorite",
+            "fields",
+            "folderId",
+            "id",
+            "identity",
+            "key",
+            "login",
+            "name",
+            "notes",
+            "object",
+            "organizationId",
+            "organizationUseTotp",
+            "passport",
+            "passwordHistory",
+            "permissions",
+            "reprompt",
+            "revisionDate",
+            "secureNote",
+            "sshKey",
+            "type",
+            "viewPassword",
+        ];
+        if doc["type"] == 2 && !doc["secureNote"].is_null() {
+            let subtype = doc["secureNote"]
+                .get("type")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            if let Some(fields) = doc["secureNote"].as_object_mut() {
+                fields.insert("type".to_owned(), json!(subtype));
+            } else {
+                doc["secureNote"] = json!({"type":subtype});
+            }
+        }
+        doc.as_object_mut()
+            .ok_or(rusqlite::Error::InvalidQuery)?
+            .retain(|name, _| FIELDS.contains(&name.as_str()));
+    }
     Ok(Some(doc))
 }
 
