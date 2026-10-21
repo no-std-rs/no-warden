@@ -104,13 +104,13 @@ pub fn dispatch(
             ids.dedup();
             preflight(&s.db, actor, &ids)?;
             let mut scratch = vec![""; ids.len()];
-            let mut sources = (0..ids.len()).map(|_| None).collect::<Vec<_>>();
+            let mut seen = vec![false; ids.len()];
             let count = VaultService::new(&mut *s).archive_selected_ciphers(
                 actor,
                 operation,
                 ids.iter().copied(),
                 &mut scratch,
-                &mut sources,
+                &mut seen,
             )?;
             let rows = scratch[..count]
                 .iter()
@@ -263,6 +263,23 @@ fn readers(
 impl CipherArchiveStorage for Store {
     type ArchiveId = String;
     type ArchiveAccess = Access;
+    type ArchiveOrder = Vec<usize>;
+    fn cipher_archive_order(
+        &mut self,
+        _actor: &str,
+        _operation: CipherArchiveOperation,
+        sorted_unique_ids: &[&str],
+    ) -> rusqlite::Result<Vec<usize>> {
+        // An operation-owned order, never a client-provided permission. Native
+        // fixed-ID comparisons show unstable processing and durable eligible
+        // subsets on later admission failure. No exact order or distribution is
+        // claimed; the core validates this complete permutation before writes.
+        Ok((0..sorted_unique_ids.len())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect())
+    }
+
     fn cipher_archive_source(
         &mut self,
         cipher: &str,
@@ -283,6 +300,9 @@ impl CipherArchiveStorage for Store {
     ) -> rusqlite::Result<Access> {
         facts(&self.db, actor, source)
     }
+    // One sealed target per commit. A selected request can complete earlier
+    // atomic steps before a later READ check or step fails; never wrap those
+    // independently durable steps in an outer transaction.
     fn commit_cipher_archive(
         &mut self,
         plan: &ValidatedCipherArchive<'_, String>,

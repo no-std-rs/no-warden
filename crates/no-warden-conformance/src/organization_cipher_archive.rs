@@ -33,7 +33,7 @@ const CASES: [(&str, Case); CASE_COUNT] = [
         single,
     ),
     (
-        "organization_cipher_archive_selected_actor_revision_duplicates_empty_and_atomic_admission",
+        "organization_cipher_archive_selected_actor_revision_duplicates_empty_and_durable_authorized_steps",
         selected,
     ),
     (
@@ -323,7 +323,7 @@ impl Suite {
     fn receipt(&mut self, status: &str) -> Result<(), Error> {
         write_receipt(
             &mut self.receipt,
-            &json!({"schemaVersion":1,"status":status,"passedCases":self.passed.len(),"expectedCases":CASE_COUNT,"cases":self.passed,"httpRequests":self.http.owner.requests,"expectedHttpRequests":HTTP_REQUEST_COUNT,"fixtureRegistrations":2,"fixtureRegistrationHttpRequests":4,"passwordCredentialAttempts":self.http.owner.logins,"singleCurrentReaderRevisionFanoutAsserted":true,"selectedActorOnlyRevisionAsserted":true,"duplicateAndEmptySelectionsAsserted":true,"allAdmissionFailuresPreserveStateAsserted":true,"readonlyReadAdmissionAsserted":true,"opaquePayloadCipherRevisionPrivateAnnotationsKeysAndSessionsAsserted":true,"replyEqualsActorGetWith30FieldsAsserted":true,"cliCallerClaimed":false,"capturedRouteTrace":false,"browserTraceClaimed":false,"attachmentBearingTested":false,"groupsConfigured":false,"configuredPolicies":false,"smtpEnabled":false,"fullParityClaimed":false}),
+            &json!({"schemaVersion":1,"status":status,"passedCases":self.passed.len(),"expectedCases":CASE_COUNT,"cases":self.passed,"httpRequests":self.http.owner.requests,"expectedHttpRequests":HTTP_REQUEST_COUNT,"fixtureRegistrations":2,"fixtureRegistrationHttpRequests":4,"passwordCredentialAttempts":self.http.owner.logins,"singleCurrentReaderRevisionFanoutAsserted":true,"selectedActorOnlyRevisionAsserted":true,"duplicateAndEmptySelectionsAsserted":true,"singleSchemaAndAllInvalidFailuresPreserveStateAsserted":true,"mixedSelectionFailureEligibleActorOnlyDurableSubsetAsserted":true,"selectedInputOrderClaimed":false,"readonlyReadAdmissionAsserted":true,"opaquePayloadCipherRevisionPrivateAnnotationsKeysAndSessionsAsserted":true,"replyEqualsActorGetWith30FieldsAsserted":true,"cliCallerClaimed":false,"capturedRouteTrace":false,"browserTraceClaimed":false,"attachmentBearingTested":false,"groupsConfigured":false,"configuredPolicies":false,"smtpEnabled":false,"fullParityClaimed":false}),
         )
     }
     fn token(&self, actor: usize) -> String {
@@ -413,6 +413,101 @@ impl Suite {
             json!({"ids":[id]}),
         )?
         .success(archived, selected)
+    }
+    fn selected_failure(
+        &mut self,
+        observed: &[String],
+        eligible: &[String],
+        actor: usize,
+        archived: bool,
+        ids: Value,
+    ) -> Result<(), Error> {
+        let before = observed
+            .iter()
+            .map(|id| self.snapshot(id))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.http
+            .raw(
+                Method::PUT,
+                if archived {
+                    "/api/ciphers/archive"
+                } else {
+                    "/api/ciphers/unarchive"
+                },
+                &self.token(actor),
+                Some(&json!({"ids":ids})),
+            )?
+            .rejected(400)?;
+        let after = observed
+            .iter()
+            .map(|id| self.snapshot(id))
+            .collect::<Result<Vec<_>, _>>()?;
+        let revisions_before = &before
+            .first()
+            .ok_or(Error("Archive failure observation empty"))?
+            .revisions;
+        let revisions_after = &after
+            .first()
+            .ok_or(Error("Archive failure observation empty"))?
+            .revisions;
+        let advanced = revisions_before[actor] != revisions_after[actor];
+        let mut date_changed = false;
+        let mut eligible_prior_null = false;
+        require(
+            revisions_before[1 - actor] == revisions_after[1 - actor],
+            "Failed selected archive advanced peer account revision",
+        )?;
+        for ((id, b), a) in observed.iter().zip(&before).zip(&after) {
+            require(
+                &b.revisions == revisions_before && &a.revisions == revisions_after,
+                "Archive failure snapshots lost coherent account state",
+            )?;
+            require(
+                b.documents[1 - actor] == a.documents[1 - actor],
+                "Failed selected archive changed peer document",
+            )?;
+            if eligible.contains(id) {
+                let prior = b.documents[actor]
+                    .as_ref()
+                    .ok_or(Error("Archive eligible actor prior missing"))?;
+                eligible_prior_null |= prior["archivedDate"].is_null();
+                let next = a.documents[actor]
+                    .as_ref()
+                    .ok_or(Error("Archive eligible actor read removed"))?;
+                require(
+                    archive_only(prior, next),
+                    "Failed selected archive changed common payload/cipher revision/private annotations",
+                )?;
+                if prior["archivedDate"] != next["archivedDate"] {
+                    date_changed = true;
+                    require(
+                        if archived {
+                            next["archivedDate"].is_string()
+                        } else {
+                            next["archivedDate"].is_null()
+                        },
+                        "Failed selected archive applied wrong operation",
+                    )?;
+                }
+            } else {
+                require(
+                    b.documents[actor] == a.documents[actor],
+                    "Failed selected archive changed ineligible/unselected actor source",
+                )?;
+            }
+        }
+        require(
+            !date_changed || advanced,
+            "Failed selected archive changed date without actor revision",
+        )?;
+        require(
+            !advanced || date_changed || (!archived && eligible_prior_null),
+            "Failed selected archive advanced actor without a fresh date or eligible unarchive noop",
+        )?;
+        require(
+            !eligible.is_empty() || !advanced,
+            "All-invalid selected archive advanced actor revision",
+        )
     }
     fn raw_trial(
         &mut self,
@@ -687,21 +782,25 @@ fn selected(s: &mut Suite) -> Result<(), Error> {
         "Empty archive selection mutated state",
     )?;
     let foreign = s.personal(1)?;
+    let second = s.shared(0, &s.orgs[0].collection_id.clone(), true)?;
     let absent = Uuid::new_v4().to_string();
-    for ids in [
-        json!([id, absent]),
-        json!([absent, id]),
-        json!([id, foreign]),
-    ] {
-        let foreign_before = s.snapshot(&foreign)?;
-        s.on(&id, 0, "unarchive", true, json!({"ids":ids}))?
-            .unchanged(400, false)?;
-        let foreign_after = s.snapshot(&foreign)?;
-        require(
-            foreign_before.documents == foreign_after.documents
-                && foreign_before.revisions == foreign_after.revisions,
-            "Rejected archive selection mutated foreign source",
-        )?;
+    let observed = [id.clone(), second.clone(), foreign.clone()];
+    // Native uses an unstable per-request processing order: eligible completed
+    // steps can survive400. Constrain the changed set; do not assume input order.
+    for archived in [true, false] {
+        for ids in [
+            json!([id, absent]),
+            json!([absent, id]),
+            json!([id, foreign]),
+        ] {
+            s.selected_failure(&observed, std::slice::from_ref(&id), 0, archived, ids)?;
+        }
+        for ids in [json!([id, second, absent]), json!([absent, second, id])] {
+            s.selected_failure(&observed, &[id.clone(), second.clone()], 0, archived, ids)?;
+        }
+        for ids in [json!([absent]), json!([foreign])] {
+            s.selected_failure(&observed, &[], 0, archived, ids)?;
+        }
     }
     Ok(())
 }

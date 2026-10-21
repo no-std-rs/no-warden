@@ -265,7 +265,7 @@ async fn readonly_and_manage_single_changes_actor_archive_but_refreshes_only_cur
     }
 }
 #[tokio::test]
-async fn selected_deduplicates_but_advances_only_actor_once_and_empty_selection_is_observational() {
+async fn selected_unique_steps_advance_actor_only_duplicates_once_and_empty_is_observational() {
     let mut f = fixture(":memory:");
     let second = add_shared(&f.s, &f.org, &f.collection);
     let raw = table(&f.s.db, "items");
@@ -295,7 +295,9 @@ async fn selected_deduplicates_but_advances_only_actor_once_and_empty_selection_
         let mut expected = vec![f.cipher.as_str(), second.as_str()];
         expected.sort();
         assert_eq!(ids, expected);
-        assert_eq!(writes(&f.s), vec!["bob"]);
+        // Local provider guarantee: one completed atomic step per unique ID,
+        // not a claim about native SQL write counts.
+        assert_eq!(writes(&f.s), vec!["bob", "bob"]);
         assert_eq!(revision(&f.s, "alice"), old_owner);
         let before = state(&f.s.db);
         let empty = selected(&mut f.s, "bob", &[], archive).await;
@@ -337,7 +339,7 @@ async fn personal_archive_preserves_entire_raw_document_and_foreign_personal_is_
     assert_eq!(state(&f.s.db), before);
 }
 #[test]
-fn all_admission_failures_preserve_whole_selection_state_and_account_keys() {
+fn single_denials_and_all_invalid_selected_targets_preserve_entire_state() {
     let mut f = fixture(":memory:");
     let foreign = personal(&f.s, "alice");
     let missing = uuid::Uuid::new_v4().to_string();
@@ -357,9 +359,10 @@ fn all_admission_failures_preserve_whole_selection_state_and_account_keys() {
     }
     for archive in [true, false] {
         for ids in [
-            [f.cipher.as_str(), missing.as_str()],
-            [missing.as_str(), f.cipher.as_str()],
-            [f.cipher.as_str(), foreign.as_str()],
+            vec![missing.as_str()],
+            vec![foreign.as_str()],
+            vec![missing.as_str(), foreign.as_str()],
+            vec![foreign.as_str(), missing.as_str()],
         ] {
             let before = state(&f.s.db);
             let body = serde_json::to_vec(&json!({"ids":ids})).unwrap();
@@ -382,7 +385,113 @@ fn all_admission_failures_preserve_whole_selection_state_and_account_keys() {
     }
 }
 #[tokio::test]
-async fn late_account_failure_and_later_selected_annotation_failure_roll_back_actual_writes() {
+async fn mixed_selected_failure_allows_only_eligible_actor_subset_with_peer_and_common_preserved() {
+    // Native fixed-ID experiments establish unstable operation order, not an
+    // input prefix or distribution. Accept any eligible processed subset while
+    // strictly checking the full state dimensions those steps may alter.
+    for archive in [true, false] {
+        for variant in 0..4 {
+            let mut f = fixture(":memory:");
+            let second = add_shared(&f.s, &f.org, &f.collection);
+            let missing = uuid::Uuid::new_v4().to_string();
+            let foreign = personal(&f.s, "alice");
+            if !archive && variant != 3 {
+                selected(&mut f.s, "bob", &[&f.cipher, &second], true).await;
+            }
+            let raw = table(&f.s.db, "items");
+            let private = table(&f.s.db, "cipher_annotations");
+            let protected = account_protected(&f.s);
+            let owner_revision = revision(&f.s, "alice");
+            let actor_revision = revision(&f.s, "bob");
+            let other_revisions: Vec<_> = ["carol", "david", "erin"]
+                .map(|user| revision(&f.s, user))
+                .into();
+            let before: Vec<_> = [&f.cipher, &second]
+                .iter()
+                .map(|id| sharing::project(&f.s.db, "bob", id, true).unwrap().unwrap())
+                .collect();
+            let peers: Vec<_> = [&f.cipher, &second]
+                .iter()
+                .map(|id| {
+                    sharing::project(&f.s.db, "alice", id, true)
+                        .unwrap()
+                        .unwrap()
+                })
+                .collect();
+            clear_writes(&f.s);
+            let ids = match variant {
+                0 => vec![f.cipher.as_str(), missing.as_str()],
+                1 => vec![missing.as_str(), second.as_str(), f.cipher.as_str()],
+                2 => vec![f.cipher.as_str(), foreign.as_str()],
+                _ => vec![second.as_str(), missing.as_str(), second.as_str()],
+            };
+            let eligible: Vec<_> = ids
+                .iter()
+                .copied()
+                .filter(|id| *id == f.cipher || *id == second)
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+            let body = serde_json::to_vec(&json!({"ids":ids})).unwrap();
+            assert_eq!(
+                rejected(super::dispatch(
+                    if archive {
+                        Route::CipherBulkArchive
+                    } else {
+                        Route::CipherBulkUnarchive
+                    },
+                    "bob",
+                    &body,
+                    &mut f.s
+                ))
+                .0,
+                StatusCode::BAD_REQUEST
+            );
+            let commits = writes(&f.s);
+            assert!(commits.iter().all(|user| user == "bob"));
+            assert!(commits.len() <= eligible.len());
+            let mut changed = 0;
+            for (index, id) in [&f.cipher, &second].iter().enumerate() {
+                let after = sharing::project(&f.s.db, "bob", id, true).unwrap().unwrap();
+                let mut expected = before[index].clone();
+                expected["archivedDate"] = after["archivedDate"].clone();
+                assert_eq!(after, expected);
+                if after["archivedDate"] != before[index]["archivedDate"] {
+                    changed += 1;
+                    assert!(eligible.contains(&id.as_str()));
+                    assert_eq!(after["archivedDate"].is_string(), archive);
+                }
+                assert_eq!(
+                    sharing::project(&f.s.db, "alice", id, true)
+                        .unwrap()
+                        .unwrap(),
+                    peers[index]
+                );
+            }
+            // An unarchive step may commit and bump the actor even if its date was
+            // already null. Unchanged documents do not prove that no step ran.
+            assert!(changed <= commits.len());
+            if archive || variant != 3 {
+                assert_eq!(changed, commits.len());
+            }
+            assert_eq!(revision(&f.s, "bob") != actor_revision, !commits.is_empty());
+            assert_eq!(revision(&f.s, "alice"), owner_revision);
+            assert_eq!(
+                ["carol", "david", "erin"]
+                    .map(|user| revision(&f.s, user))
+                    .to_vec(),
+                other_revisions
+            );
+            assert_eq!(table(&f.s.db, "items"), raw);
+            assert_eq!(table(&f.s.db, "cipher_annotations"), private);
+            assert_eq!(account_protected(&f.s), protected);
+            let invalid_archive:usize=f.s.db.query_row("SELECT count(*) FROM cipher_archives WHERE owner='bob' AND cipher_id NOT IN (?1,?2)",params![f.cipher,second],|r|r.get(0)).unwrap();
+            assert_eq!(invalid_archive, 0);
+        }
+    }
+}
+#[tokio::test]
+async fn single_late_account_failure_rolls_back_annotation_and_earlier_reader_revision() {
     let mut f = fixture(":memory:");
     // A single mutation writes the annotation, advances Alice, then encounters
     // this Bob revision failure. Every earlier write must roll back too.
@@ -419,27 +528,77 @@ async fn late_account_failure_and_later_selected_annotation_failure_roll_back_ac
     f.s.db
         .execute_batch("DROP TRIGGER fail_unarchive_revision")
         .unwrap();
-    let second = add_shared(&f.s, &f.org, &f.collection);
-    let later = std::cmp::max(f.cipher.as_str(), second.as_str());
-    f.s.db.execute_batch(&format!("CREATE TRIGGER fail_later_archive AFTER INSERT ON cipher_archives WHEN NEW.cipher_id='{later}' AND NEW.owner='bob' BEGIN SELECT RAISE(ABORT,'local rollback fixture'); END;")).unwrap();
-    // Clear both rows so the trigger runs on the later actual INSERT, after the
-    // first target's annotation INSERT has already succeeded in this transaction.
-    f.s.db
-        .execute("DELETE FROM cipher_archives WHERE owner='bob'", [])
-        .unwrap();
-    let before = state(&f.s.db);
-    let body = serde_json::to_vec(&json!({"ids":[second,f.cipher]})).unwrap();
-    assert_eq!(
-        rejected(super::dispatch(
-            Route::CipherBulkArchive,
-            "bob",
-            &body,
-            &mut f.s
-        ))
-        .0,
-        StatusCode::INTERNAL_SERVER_ERROR
-    );
-    assert_eq!(state(&f.s.db), before);
+}
+#[tokio::test]
+async fn selected_prior_step_stays_durable_while_current_annotation_or_account_failure_rolls_back()
+{
+    for archive in [true, false] {
+        for failure in ["annotation", "account"] {
+            let mut f = fixture(":memory:");
+            let second = add_shared(&f.s, &f.org, &f.collection);
+            if !archive {
+                selected(&mut f.s, "bob", &[&f.cipher, &second], true).await;
+            }
+            let raw = table(&f.s.db, "items");
+            let private = table(&f.s.db, "cipher_annotations");
+            let keys = account_protected(&f.s);
+            let owner_revision = revision(&f.s, "alice");
+            let actor_revision = revision(&f.s, "bob");
+            let peers: Vec<_> = [&f.cipher, &second]
+                .iter()
+                .map(|id| {
+                    sharing::project(&f.s.db, "alice", id, true)
+                        .unwrap()
+                        .unwrap()
+                })
+                .collect();
+            clear_writes(&f.s);
+            // This counter observes successful actor revision writes. The first
+            // selected step commits normally. Whichever ID runs second must fail
+            // AFTER its own annotation write, without assuming any permutation.
+            if failure == "account" {
+                f.s.db.execute_batch("CREATE TRIGGER fail_second_archive_account BEFORE UPDATE OF revision ON accounts WHEN NEW.id='bob' AND (SELECT count(*) FROM archive_revision_writes WHERE user_id='bob')=1 BEGIN SELECT RAISE(ABORT,'local current-step rollback'); END;").unwrap();
+            } else if archive {
+                f.s.db.execute_batch("CREATE TRIGGER fail_second_archive_annotation AFTER INSERT ON cipher_archives WHEN NEW.owner='bob' AND (SELECT count(*) FROM archive_revision_writes WHERE user_id='bob')=1 BEGIN SELECT RAISE(ABORT,'local current-step rollback'); END;").unwrap();
+            } else {
+                f.s.db.execute_batch("CREATE TRIGGER fail_second_unarchive_annotation AFTER UPDATE OF archived_at ON cipher_archives WHEN NEW.owner='bob' AND (SELECT count(*) FROM archive_revision_writes WHERE user_id='bob')=1 BEGIN SELECT RAISE(ABORT,'local current-step rollback'); END;").unwrap();
+            }
+            let body = serde_json::to_vec(&json!({"ids":[second,f.cipher,second]})).unwrap();
+            assert_eq!(
+                rejected(super::dispatch(
+                    if archive {
+                        Route::CipherBulkArchive
+                    } else {
+                        Route::CipherBulkUnarchive
+                    },
+                    "bob",
+                    &body,
+                    &mut f.s
+                ))
+                .0,
+                StatusCode::INTERNAL_SERVER_ERROR
+            );
+            let changed = [&f.cipher, &second]
+                .iter()
+                .filter(|id| archived(&f.s, "bob", id).is_some() == archive)
+                .count();
+            assert_eq!(changed, 1, "Exactly one completed step must survive");
+            assert_eq!(writes(&f.s), vec!["bob"]);
+            assert_ne!(revision(&f.s, "bob"), actor_revision);
+            assert_eq!(revision(&f.s, "alice"), owner_revision);
+            assert_eq!(table(&f.s.db, "items"), raw);
+            assert_eq!(table(&f.s.db, "cipher_annotations"), private);
+            assert_eq!(account_protected(&f.s), keys);
+            for (index, id) in [&f.cipher, &second].iter().enumerate() {
+                assert_eq!(
+                    sharing::project(&f.s.db, "alice", id, true)
+                        .unwrap()
+                        .unwrap(),
+                    peers[index]
+                );
+            }
+        }
+    }
 }
 
 static WRITE_BLOCKED: AtomicBool = AtomicBool::new(false);

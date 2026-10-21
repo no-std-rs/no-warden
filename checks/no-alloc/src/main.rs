@@ -371,9 +371,37 @@ impl CipherCollectionAccessData for PartialFacts {
 }
 // Separate archive consumer: shared readonly and personal source facts remain
 // stack-owned; no common cipher or encrypted document mutation exists here.
+struct ArchiveOrder {
+    indices: [usize; 3],
+    len: usize,
+}
+impl AsRef<[usize]> for ArchiveOrder {
+    fn as_ref(&self) -> &[usize] {
+        &self.indices[..self.len]
+    }
+}
 impl CipherArchiveStorage for PurgeProbe {
     type ArchiveId = &'static str;
     type ArchiveAccess = PartialFacts;
+    type ArchiveOrder = ArchiveOrder;
+    fn cipher_archive_order(
+        &mut self,
+        _: &str,
+        _: CipherArchiveOperation,
+        ids: &[&str],
+    ) -> Result<Self::ArchiveOrder, ()> {
+        if ids.len() > 3 {
+            return Err(());
+        }
+        let mut order = ArchiveOrder {
+            indices: [0; 3],
+            len: ids.len(),
+        };
+        for index in 0..ids.len() {
+            order.indices[index] = ids.len() - 1 - index;
+        }
+        Ok(order)
+    }
     fn cipher_archive_source(
         &mut self,
         cipher: &str,
@@ -2039,12 +2067,12 @@ pub extern "C" fn _start() -> ! {
         for body in [
             br#"{"ids":["embedded-archive-shared","embedded-archive-personal","embedded-archive-shared"]}"#.as_slice(),
             br#"{"ids":[]}"#.as_slice(),
-            br#"{"ids":["embedded-archive-shared","missing"]}"#.as_slice(),
+            br#"{"ids":["embedded-archive-shared","a-missing"]}"#.as_slice(),
         ] {
             if let Ok((request, _)) = serde_json_core::from_slice::<CipherIdsRequest<'_, 3>>(black_box(body)) {
                 let mut ids = [""; 3];
-                let mut sources = [const { None }; 3];
-                let result = organization_service.archive_selected_ciphers("embedded-owner", CipherArchiveOperation::Archive, request.ids.iter().copied(), &mut ids, &mut sources);
+                let mut seen = [false; 3];
+                let result = organization_service.archive_selected_ciphers("embedded-owner", CipherArchiveOperation::Archive, request.ids.iter().copied(), &mut ids, &mut seen);
                 black_box((result.is_ok(), organization_service.storage().archive_commits, organization_service.storage().archive_actor_revision, organization_service.storage().archive_reader_revision));
             }
         }

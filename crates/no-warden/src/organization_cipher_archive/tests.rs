@@ -12,6 +12,12 @@ use std::{
 };
 
 // Provider handles intentionally do not implement Clone/Debug/Serialize.
+struct Order(Vec<usize>);
+impl AsRef<[usize]> for Order {
+    fn as_ref(&self) -> &[usize] {
+        &self.0
+    }
+}
 struct Id(String);
 impl AsRef<str> for Id {
     fn as_ref(&self) -> &str {
@@ -103,6 +109,9 @@ struct Probe {
     facts: Facts,
     fail: Option<&'static str>,
     fail_after_first_write: bool,
+    fail_commit_number: Option<usize>,
+    revoke_after_first_commit: bool,
+    order: Option<Vec<usize>>,
     live: Live,
     live_target: &'static str,
     calls: Vec<String>,
@@ -184,6 +193,9 @@ impl Probe {
             },
             fail: None,
             fail_after_first_write: false,
+            fail_commit_number: None,
+            revoke_after_first_commit: false,
+            order: None,
             live: Live::Same,
             live_target: "a",
             calls: Vec::new(),
@@ -217,13 +229,13 @@ impl Probe {
     }
     fn selected(&mut self, ids: &[&str], op: CipherArchiveOperation) -> Result<usize, ApiError> {
         let mut scratch = [""; 8];
-        let mut sources = [const { None }; 8];
+        let mut seen = [false; 8];
         VaultService::new(self).archive_selected_ciphers(
             "actor",
             op,
             ids.iter().copied(),
             &mut scratch,
-            &mut sources,
+            &mut seen,
         )
     }
 }
@@ -263,6 +275,20 @@ impl Storage for Probe {
 impl CipherArchiveStorage for Probe {
     type ArchiveId = Id;
     type ArchiveAccess = Facts;
+    type ArchiveOrder = Order;
+    fn cipher_archive_order(
+        &mut self,
+        actor: &str,
+        _: CipherArchiveOperation,
+        ids: &[&str],
+    ) -> Result<Order, ()> {
+        self.touch("order", actor)?;
+        Ok(Order(
+            self.order
+                .clone()
+                .unwrap_or_else(|| (0..ids.len()).collect()),
+        ))
+    }
     fn cipher_archive_source(
         &mut self,
         cipher: &str,
@@ -290,9 +316,8 @@ impl CipherArchiveStorage for Probe {
         self.touch("commit", plan.actor())?;
         self.commits += 1;
         self.observed_effect = Some(plan.revision_effect());
-        self.observed_ids = (0..plan.len())
-            .map(|i| plan.target(i).unwrap().cipher_id().to_string())
-            .collect();
+        self.observed_ids
+            .extend((0..plan.len()).map(|i| plan.target(i).unwrap().cipher_id().to_string()));
         assert!(plan.target(plan.len()).is_none());
         assert!(!plan.is_empty());
         // Complete live admission before any staged writes. No request body or clock
@@ -339,7 +364,7 @@ impl CipherArchiveStorage for Probe {
                     CipherArchiveOperation::Unarchive => None,
                 },
             );
-            if self.fail_after_first_write {
+            if self.fail_after_first_write || self.fail_commit_number == Some(self.commits) {
                 return Err(());
             }
         }
@@ -352,6 +377,9 @@ impl CipherArchiveStorage for Probe {
             staged.account_revisions[1] += 1;
         }
         self.state = staged;
+        if self.revoke_after_first_commit && self.commits == 1 {
+            self.status = -1;
+        }
         Ok(())
     }
 }
@@ -408,20 +436,59 @@ fn selection_deduplicates_exact_ids_and_empty_never_calls_provider() {
         2
     );
     assert_eq!(p.observed_ids, ["a", "z"]);
-    assert_eq!(p.commits, 1);
-    assert_eq!(p.state.account_revisions, [11, 20, 30, 40, 50]);
+    assert_eq!(p.commits, 2);
+    assert_eq!(p.state.account_revisions, [12, 20, 30, 40, 50]);
     let before = p.state.clone();
     assert!(p.selected(&["A"], CipherArchiveOperation::Archive).is_err());
     assert_eq!(p.state, before);
 }
 #[test]
-fn complete_selection_admission_rejects_late_missing_or_foreign_before_commit() {
-    for ids in [["a", "zz-missing"], ["a", "foreign"], ["zz-missing", "a"]] {
+fn selected_both_operations_preserve_completed_steps_after_later_denied_source() {
+    for operation in [
+        CipherArchiveOperation::Archive,
+        CipherArchiveOperation::Unarchive,
+    ] {
+        for denied in ["zz-missing", "foreign"] {
+            let mut p = Probe::new();
+            p.state.archives.insert("a".to_string(), Some(7));
+            let mut expected = p.state.clone();
+            assert!(p.selected(&["a", denied], operation).is_err());
+            expected.clock += 1;
+            expected.archives.insert(
+                "a".to_string(),
+                if operation == CipherArchiveOperation::Archive {
+                    Some(expected.clock)
+                } else {
+                    None
+                },
+            );
+            expected.account_revisions[0] += 1;
+            assert_eq!(p.state, expected);
+            assert_eq!(p.commits, 1);
+            assert_eq!(p.observed_ids, ["a"]);
+        }
+    }
+}
+#[test]
+fn operation_owned_order_determines_durable_subset_not_input_order() {
+    for operation in [
+        CipherArchiveOperation::Archive,
+        CipherArchiveOperation::Unarchive,
+    ] {
         let mut p = Probe::new();
+        p.order = Some(std::vec![1, 0]);
         let before = p.state.clone();
-        assert!(p.selected(&ids, CipherArchiveOperation::Archive).is_err());
-        assert_eq!(p.commits, 0);
+        assert!(p.selected(&["a", "zz-missing"], operation).is_err());
         assert_eq!(p.state, before);
+        assert_eq!(p.commits, 0);
+        let mut p = Probe::new();
+        p.order = Some(std::vec![2, 0, 1]);
+        assert!(
+            p.selected(&["a", "z", "middle-missing"], operation)
+                .is_err()
+        );
+        assert_eq!(p.observed_ids, ["z", "a"]);
+        assert_eq!(p.state.account_revisions, [12, 20, 30, 40, 50]);
     }
 }
 #[test]
@@ -531,7 +598,7 @@ fn provider_lookup_and_commit_failures_preserve_persistent_state() {
     }
 }
 #[test]
-fn live_exact_source_and_read_rechecks_reject_each_race_before_annotations() {
+fn live_exact_source_and_read_rechecks_rollback_failing_step_keep_prior_step() {
     for live in [
         Live::WrongId,
         Live::Revision,
@@ -544,37 +611,48 @@ fn live_exact_source_and_read_rechecks_reject_each_race_before_annotations() {
         let mut p = Probe::new();
         p.live = live;
         p.live_target = "z";
-        let before = p.state.clone();
+        let mut expected = p.state.clone();
         assert!(
             p.selected(&["z", "a"], CipherArchiveOperation::Archive)
                 .is_err()
         );
         assert!(p.last_live_error.is_some());
-        assert_eq!(p.state, before);
+        expected.clock += 1;
+        expected
+            .archives
+            .insert("a".to_string(), Some(expected.clock));
+        expected.account_revisions[0] += 1;
+        assert_eq!(p.state, expected);
     }
 }
 #[test]
-fn transaction_failure_after_annotation_write_rolls_back_every_selected_target() {
+fn transaction_failure_rolls_back_only_failing_step_after_earlier_commit() {
     let mut p = Probe::new();
-    p.fail_after_first_write = true;
-    let before = p.state.clone();
+    p.fail_commit_number = Some(2);
+    let mut expected = p.state.clone();
     assert!(
         p.selected(&["a", "z"], CipherArchiveOperation::Archive)
             .is_err()
     );
-    assert_eq!(p.state, before);
-    p.fail_after_first_write = false;
+    expected.clock += 1;
+    expected
+        .archives
+        .insert("a".to_string(), Some(expected.clock));
+    expected.account_revisions[0] += 1;
+    assert_eq!(p.state, expected);
+    p.fail_commit_number = None;
     assert_eq!(
         p.selected(&["a", "z"], CipherArchiveOperation::Archive)
             .unwrap(),
         2
     );
+    assert_eq!(p.state.account_revisions, [13, 20, 30, 40, 50]);
 }
 #[test]
-fn caller_raw_id_capacity_and_unique_owned_slots_fail_before_provider_lookups() {
+fn caller_raw_id_capacity_and_unique_seen_capacity_precede_provider_calls() {
     let mut p = Probe::new();
     let mut ids = [""; 1];
-    let mut sources = [const { None }; 2];
+    let mut seen = [false; 2];
     assert!(
         VaultService::new(&mut p)
             .archive_selected_ciphers(
@@ -582,13 +660,13 @@ fn caller_raw_id_capacity_and_unique_owned_slots_fail_before_provider_lookups() 
                 CipherArchiveOperation::Archive,
                 ["a", "a"],
                 &mut ids,
-                &mut sources
+                &mut seen
             )
             .is_err()
     );
     assert!(p.calls.is_empty());
     let mut ids = [""; 2];
-    let mut sources = [];
+    let mut seen = [];
     assert!(
         VaultService::new(&mut p)
             .archive_selected_ciphers(
@@ -596,14 +674,75 @@ fn caller_raw_id_capacity_and_unique_owned_slots_fail_before_provider_lookups() 
                 CipherArchiveOperation::Archive,
                 ["a"],
                 &mut ids,
-                &mut sources
+                &mut seen
             )
             .is_err()
     );
     assert!(p.calls.is_empty());
 }
 #[test]
-fn cache_reusing_owned_nonclone_snapshots_bind_all_targets_through_commit() {
+fn full_invalid_owned_permutation_is_rejected_before_any_source_or_write() {
+    for order in [
+        std::vec![0, 0],
+        std::vec![0],
+        std::vec![0, 2],
+        std::vec![0, 1, 2],
+        std::vec![],
+    ] {
+        let mut p = Probe::new();
+        p.order = Some(order);
+        let before = p.state.clone();
+        assert_eq!(
+            p.selected(&["z", "a"], CipherArchiveOperation::Archive)
+                .unwrap_err()
+                .kind,
+            ErrorKind::Storage
+        );
+        assert_eq!(p.state, before);
+        assert_eq!(p.calls, ["order:actor"]);
+        assert_eq!(p.commits, 0);
+    }
+}
+#[test]
+fn order_provider_failure_is_observational_and_seen_scratch_is_reset() {
+    let mut p = Probe::new();
+    p.fail = Some("order");
+    let before = p.state.clone();
+    assert!(p.selected(&["a"], CipherArchiveOperation::Archive).is_err());
+    assert_eq!(p.state, before);
+    assert_eq!(p.calls, ["order:actor"]);
+    let mut p = Probe::new();
+    let mut ids = [""; 2];
+    let mut seen = [true; 2];
+    assert_eq!(
+        VaultService::new(&mut p)
+            .archive_selected_ciphers(
+                "actor",
+                CipherArchiveOperation::Archive,
+                ["a", "z"],
+                &mut ids,
+                &mut seen
+            )
+            .unwrap(),
+        2
+    );
+    assert_eq!(seen, [true, true]);
+}
+#[test]
+fn revoked_previously_archived_actor_cannot_clear_private_archive_or_revision() {
+    let mut p = Probe::new();
+    p.state.archives.insert("a".to_string(), Some(7));
+    p.status = -1;
+    let before = p.state.clone();
+    assert!(
+        p.selected(&["a"], CipherArchiveOperation::Unarchive)
+            .is_err()
+    );
+    assert_eq!(p.state, before);
+    assert_eq!(p.commits, 0);
+}
+#[test]
+fn cache_reusing_owned_nonclone_order_and_sources_survive_each_step() {
     let mut p = Probe::new();
     p.selected(&["z", "a"], CipherArchiveOperation::Archive)
         .unwrap();
@@ -619,7 +758,7 @@ fn existing_borrowed_ids_body_decodes_and_reaches_real_archive_service() {
     let body = serde_json::from_str::<CipherIdsRequest<'_, 4>>(r#"{"ids":["z","a","z"]}"#).unwrap();
     let mut p = Probe::new();
     let mut ids = [""; 4];
-    let mut sources = [const { None }; 2];
+    let mut seen = [false; 2];
     assert_eq!(
         VaultService::new(&mut p)
             .archive_selected_ciphers(
@@ -627,7 +766,7 @@ fn existing_borrowed_ids_body_decodes_and_reaches_real_archive_service() {
                 CipherArchiveOperation::Archive,
                 body.ids.iter().copied(),
                 &mut ids,
-                &mut sources
+                &mut seen
             )
             .unwrap(),
         2
@@ -653,4 +792,39 @@ fn unauthenticated_actor_precedes_provider_and_plan_debug_redacts_snapshots() {
         format!("{:?}", plan.target(0).unwrap()),
         "CipherArchiveTarget([REDACTED])"
     );
+}
+
+#[test]
+fn next_selected_source_gets_fresh_read_admission_after_a_successful_step() {
+    for operation in [
+        CipherArchiveOperation::Archive,
+        CipherArchiveOperation::Unarchive,
+    ] {
+        let mut p = Probe::new();
+        p.state.archives.insert("a".to_string(), Some(7));
+        p.revoke_after_first_commit = true;
+        let mut expected = p.state.clone();
+        assert!(p.selected(&["a", "z"], operation).is_err());
+        expected.clock += 1;
+        expected.archives.insert(
+            "a".to_string(),
+            if operation == CipherArchiveOperation::Archive {
+                Some(expected.clock)
+            } else {
+                None
+            },
+        );
+        expected.account_revisions[0] += 1;
+        assert_eq!(p.state, expected);
+        assert_eq!(p.commits, 1);
+        assert_eq!(p.observed_ids, ["a"]);
+        assert_eq!(
+            p.calls.iter().filter(|c| c.starts_with("member:")).count(),
+            2
+        );
+        assert!(
+            p.last_live_error.is_none(),
+            "The second source must fail before reaching its commit"
+        );
+    }
 }

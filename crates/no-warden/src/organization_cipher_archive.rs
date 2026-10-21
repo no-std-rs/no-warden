@@ -3,8 +3,10 @@
 //! Native single and selected routes have distinct account-revision effects. Neither
 //! changes the common encrypted document or cipher revision. Storage, timestamps,
 //! response projection and current-reader enumeration remain adapter responsibilities.
-//! Native evidence covers admission failures, not backend failure atomicity: the
-//! provider's atomic commit/live rechecks below are explicit local guarantees.
+//! Selected operations commit readable targets in an operation-owned permutation.
+//! A later error retains earlier actor-private changes/revision advances; native
+//! order varies even for identical IDs and input order. Per-step atomic rollback
+//! and live checks are local guarantees, not native backend/concurrency parity.
 
 use crate::{
     ApiError, ErrorKind, Storage, VaultService,
@@ -79,11 +81,11 @@ impl core::fmt::Debug for CipherArchiveTarget<'_> {
 
 enum Targets<'a, I> {
     Single(&'a CipherSharingSource<I>),
-    Selected(&'a [Option<CipherSharingSource<I>>]),
+    SelectedOne(&'a CipherSharingSource<I>),
 }
 
-/// Sealed annotation-only commit. Sorted selection order is a local deterministic
-/// representation, not an upstream ordering guarantee between successful targets.
+/// One sealed annotation-only commit. The selected variant is one durable step,
+/// not a whole-selection transaction or a native processing-order guarantee.
 pub struct ValidatedCipherArchive<'a, I> {
     actor: &'a str,
     operation: CipherArchiveOperation,
@@ -99,22 +101,20 @@ impl<I: AsRef<str>> ValidatedCipherArchive<'_, I> {
     pub const fn revision_effect(&self) -> CipherArchiveRevisionEffect {
         match self.targets {
             Targets::Single(_) => CipherArchiveRevisionEffect::CurrentReaders,
-            Targets::Selected(_) => CipherArchiveRevisionEffect::ActorOnly,
+            Targets::SelectedOne(_) => CipherArchiveRevisionEffect::ActorOnly,
         }
     }
     pub const fn len(&self) -> usize {
-        match self.targets {
-            Targets::Single(_) => 1,
-            Targets::Selected(rows) => rows.len(),
-        }
+        1
     }
     pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
     pub fn target(&self, index: usize) -> Option<CipherArchiveTarget<'_>> {
         let source = match self.targets {
-            Targets::Single(source) => (index == 0).then_some(source),
-            Targets::Selected(rows) => rows.get(index).and_then(Option::as_ref),
+            Targets::Single(source) | Targets::SelectedOne(source) => {
+                (index == 0).then_some(source)
+            }
         }?;
         Some(CipherArchiveTarget {
             actor: self.actor,
@@ -134,24 +134,37 @@ impl<I> core::fmt::Debug for ValidatedCipherArchive<'_, I> {
 /// All observational snapshots own backing storage independent of later cache-
 /// reusing provider calls. Hold a consistent lock across admission and commit.
 ///
-/// Commit must load CURRENT source/membership/associated grants, validate every
+/// Commit must load CURRENT source/membership/associated grants, validate its
 /// sealed target with validate_live BEFORE any write, then atomically mutate only
 /// the actor's archive annotation and the specified account revisions. Archive sets
 /// a fresh adapter timestamp (including repeat); Unarchive clears it (including
 /// repeat). SINGLE advances every current READ accessor's account revision;
-/// SELECTED advances only the actor, once for a nonempty deduplicated selection.
+/// SELECTED advances only the actor once PER admitted unique target, including
+/// annotation no-ops. Each selected commit is durable before the next lookup.
 /// Enumerate viewers and resolve READ under the same transaction; no-grant,
 /// accepted and revoked canonical members are not current readers.
 ///
 /// Preserve current common opaque document/keys, cipher revision, ownership,
 /// collections, deletion state, favorite/folder, other viewers' archive/private
 /// annotations and account keys. No empty selection is committed. Errors roll back
-/// ALL annotation/revision changes; notifications follow successful commit. These
-/// local rollback/live-check contracts do not claim native backend failure parity.
+/// the failing STEP's annotation/revision changes, retaining earlier successful
+/// selected steps. Notifications follow each successful commit. These local
+/// rollback/live-check contracts do not claim native backend failure parity.
 /// Groups, historical-grant archive variants and broader lifecycle remain unproven.
 pub trait CipherArchiveStorage: Storage {
     type ArchiveId: AsRef<str>;
     type ArchiveAccess: CipherCollectionAccessData;
+    /// Stable owned permutation; no borrow of a cache later lookups can reuse.
+    type ArchiveOrder: AsRef<[usize]>;
+    /// Observational operation order over the supplied sorted UNIQUE exact IDs.
+    /// Return every index once. The service validates it before any target lookup
+    /// or write. Native permutation/distribution is not prescribed by this API.
+    fn cipher_archive_order(
+        &mut self,
+        actor: &str,
+        operation: CipherArchiveOperation,
+        sorted_unique_ids: &[&str],
+    ) -> Result<Self::ArchiveOrder, Self::Error>;
     fn cipher_archive_source(
         &mut self,
         cipher: &str,
@@ -174,6 +187,15 @@ pub trait CipherArchiveStorage: Storage {
 impl<T: CipherArchiveStorage + ?Sized> CipherArchiveStorage for &mut T {
     type ArchiveId = T::ArchiveId;
     type ArchiveAccess = T::ArchiveAccess;
+    type ArchiveOrder = T::ArchiveOrder;
+    fn cipher_archive_order(
+        &mut self,
+        actor: &str,
+        operation: CipherArchiveOperation,
+        sorted_unique_ids: &[&str],
+    ) -> Result<Self::ArchiveOrder, Self::Error> {
+        (**self).cipher_archive_order(actor, operation, sorted_unique_ids)
+    }
     fn cipher_archive_source(
         &mut self,
         cipher: &str,
@@ -221,20 +243,22 @@ impl<S: CipherArchiveStorage> VaultService<S> {
     }
 
     /// Reuse the existing selected-ID body with caller-owned scratch. ID capacity
-    /// must cover RAW input including duplicates; source slots must cover UNIQUE
-    /// IDs. Strings remain exact and unnormalized. No intrinsic count/ID cap.
-    /// Insufficient scratch fails before provider writes. Scratch contents are
-    /// unspecified on error (including retained owned snapshots), never storage.
-    /// Returned-count ID slots contain sorted unique response-lookup IDs; native
-    /// distinct-target response order is unmeasured. Whole selection admission
-    /// precedes the single provider commit; empty input performs no lookups/writes.
+    /// covers RAW input including duplicates; bool capacity covers UNIQUE IDs.
+    /// Exact strings are never normalized; the core has no intrinsic count cap.
+    /// Copy/sort/dedup and validate the complete provider-owned permutation before
+    /// any target admission/write. Scratch contents are unspecified on error.
+    ///
+    /// Each ordered target is freshly READ-admitted and committed as one sealed
+    /// ActorOnly step, even for annotation no-ops. Later failures retain earlier
+    /// successful steps. Empty input performs no provider calls. Returned-count
+    /// ID slots contain sorted unique response-lookup IDs, not native order.
     pub fn archive_selected_ciphers<'ids>(
         &mut self,
         actor: &str,
         operation: CipherArchiveOperation,
         ids: impl IntoIterator<Item = &'ids str>,
         id_scratch: &mut [&'ids str],
-        source_scratch: &mut [Option<CipherSharingSource<S::ArchiveId>>],
+        seen_scratch: &mut [bool],
     ) -> Result<usize, ApiError> {
         require_owner(actor)?;
         let mut count = 0;
@@ -252,23 +276,40 @@ impl<S: CipherArchiveStorage> VaultService<S> {
                 unique += 1;
             }
         }
-        if source_scratch.len() < unique {
+        if seen_scratch.len() < unique {
             return Err(scratch_too_small());
         }
         if unique == 0 {
             return Ok(0);
         }
-        let sources = &mut source_scratch[..unique];
-        for (id, slot) in selected[..unique].iter().zip(sources.iter_mut()) {
-            *slot = Some(self.admit_archive(actor, id)?);
-        }
-        self.storage_mut()
-            .commit_cipher_archive(&ValidatedCipherArchive {
-                actor,
-                operation,
-                targets: Targets::Selected(sources),
-            })
+        let selected = &selected[..unique];
+        let order = self
+            .storage_mut()
+            .cipher_archive_order(actor, operation, selected)
             .map_err(S::map_error)?;
+        let order = order.as_ref();
+        let seen = &mut seen_scratch[..unique];
+        seen.fill(false);
+        if order.len() != unique {
+            return Err(invalid_snapshot());
+        }
+        for &index in order {
+            let slot = seen.get_mut(index).ok_or_else(invalid_snapshot)?;
+            if *slot {
+                return Err(invalid_snapshot());
+            }
+            *slot = true;
+        }
+        for &index in order {
+            let source = self.admit_archive(actor, selected[index])?;
+            self.storage_mut()
+                .commit_cipher_archive(&ValidatedCipherArchive {
+                    actor,
+                    operation,
+                    targets: Targets::SelectedOne(&source),
+                })
+                .map_err(S::map_error)?;
+        }
         Ok(unique)
     }
 
