@@ -19,6 +19,7 @@ export const shards = {
   ],
   baseline: [
     "baseline-cli", "text-sends", "text-sends-cli",
+    "organization-member-update", "organization-member-update-cli",
     "organization-bulk-confirmation", "organization-bulk-confirmation-cli",
     "user-key-id", "user-key-id-cli", "account-password-cli",
   ],

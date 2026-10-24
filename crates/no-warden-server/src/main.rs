@@ -24,6 +24,7 @@ mod organization_member_mini_details;
 mod organization_member_public_keys;
 mod organization_member_removal;
 mod organization_member_status;
+mod organization_member_update;
 mod organization_members;
 mod organization_web_reads;
 mod organizations;
@@ -376,11 +377,13 @@ async fn dispatch_http(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, Failure> {
-    let bulk = route::Method::parse(method.as_str())
-        .and_then(|method| route::classify(method, uri.path()))
-        == Some(Route::CipherBulkShare);
+    let route = route::Method::parse(method.as_str())
+        .and_then(|method| route::classify(method, uri.path()));
+    let bulk = route == Some(Route::CipherBulkShare);
+    let member_update = matches!(route, Some(Route::OrganizationMemberUpdate(..)));
     match dispatch_with_peer(app, method, uri, headers, body, peer.ip()).await {
         Err(error) if bulk => Ok(organization_cipher_bulk_sharing::render_error(error)),
+        Err(error) if member_update => Ok(organization_member_update::error_response(error)),
         result => result,
     }
 }
@@ -891,6 +894,20 @@ async fn dispatch_with_peer(
                 uri.query(),
             )?;
             VaultService::new(&mut *store).restore_org_member(&owner, &org, &member)?;
+            Ok(StatusCode::OK.into_response())
+        }
+        Route::OrganizationMemberUpdate(raw_org, raw_member) => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let (org, member) = organization_members::detail_paths(
+                &mut store,
+                &owner,
+                raw_org,
+                raw_member,
+                uri.query(),
+            )?;
+            let input = organization_member_update::Input::parse(&body)?;
+            VaultService::new(&mut *store).update_org_member(&owner, &org, &member, &input)?;
             Ok(StatusCode::OK.into_response())
         }
         Route::OrganizationMemberDelete(raw_org, raw_member) => {

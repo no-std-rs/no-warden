@@ -61,6 +61,7 @@ pub enum Route<'a> {
     OrganizationMemberConfirm(&'a str, &'a str),
     OrganizationBulkConfirm(&'a str),
     OrganizationMember(&'a str, &'a str),
+    OrganizationMemberUpdate(&'a str, &'a str),
     OrganizationBulkMemberDelete(&'a str),
     OrganizationMemberDelete(&'a str, &'a str),
     OrganizationMemberRevoke(&'a str, &'a str),
@@ -285,6 +286,9 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                         }
                         (Put, action) if action.starts_with("users/") => {
                             let rest = action.strip_prefix("users/")?;
+                            if !rest.is_empty() && !rest.contains('/') {
+                                return Some(OrganizationMemberUpdate(organization, rest));
+                            }
                             let (member, kind) =
                                 if let Some(member) = rest.strip_suffix("/restore/vnext") {
                                     (member, 2)
@@ -596,6 +600,28 @@ mod tests {
         }
     }
     #[test]
+    fn organization_member_update_route_preserves_raw_authenticated_path() {
+        for (org, member) in [
+            ("org", "member"),
+            ("bad%", "bad.id"),
+            ("%30org", "mini-details"),
+        ] {
+            let path =
+                std::format!("/api/organizations/{org}/users/{member}/?organizationId=other");
+            let expected = Route::OrganizationMemberUpdate(org, member);
+            assert_eq!(classify(Method::Put, &path), Some(expected));
+            assert!(expected.requires_authentication());
+        }
+        for path in [
+            "/api/organizations//users/member",
+            "/api/organizations/org/users/",
+            "/api/organizations/org/users/member/extra",
+        ] {
+            assert_eq!(classify(Method::Put, path), None);
+        }
+    }
+
+    #[test]
     fn organization_member_public_keys_route_keeps_raw_org_and_is_authenticated_post() {
         for org in ["org", "bad.id", "%30org", "malformed%"] {
             let uri =
@@ -603,7 +629,10 @@ mod tests {
             let route = Route::OrganizationMemberPublicKeys(org);
             assert_eq!(classify(Method::Post, &uri), Some(route));
             assert!(route.requires_authentication());
-            assert_eq!(classify(Method::Put, &uri), None);
+            assert_eq!(
+                classify(Method::Put, &uri),
+                Some(Route::OrganizationMemberUpdate(org, "public-keys"))
+            );
             assert_eq!(
                 classify(Method::Get, &uri),
                 Some(Route::OrganizationMember(org, "public-keys"))
@@ -631,7 +660,10 @@ mod tests {
             assert_eq!(classify(Method::Get, &uri), Some(route));
             assert!(route.requires_authentication());
             assert_eq!(classify(Method::Post, &uri), None);
-            assert_eq!(classify(Method::Put, &uri), None);
+            assert_eq!(
+                classify(Method::Put, &uri),
+                Some(Route::OrganizationMemberUpdate(org, "mini-details"))
+            );
             assert_eq!(
                 classify(Method::Delete, &uri),
                 Some(Route::OrganizationMemberDelete(org, "mini-details"))
@@ -777,7 +809,10 @@ mod tests {
             let route = Route::OrganizationMemberDelete(org, member);
             assert_eq!(classify(Method::Delete, &path), Some(route));
             assert!(route.requires_authentication());
-            assert_eq!(classify(Method::Put, &path), None);
+            assert_eq!(
+                classify(Method::Put, &path),
+                Some(Route::OrganizationMemberUpdate(org, member))
+            );
             assert_eq!(classify(Method::Options, &path), None);
         }
         for path in [
@@ -812,9 +847,11 @@ mod tests {
                 classify(Method::Delete, &uri),
                 Some(Route::OrganizationMemberDelete(org, "confirm"))
             );
-            for method in [Method::Put, Method::Options] {
-                assert_eq!(classify(method, &uri), None);
-            }
+            assert_eq!(
+                classify(Method::Put, &uri),
+                Some(Route::OrganizationMemberUpdate(org, "confirm"))
+            );
+            assert_eq!(classify(Method::Options, &uri), None);
         }
         assert_eq!(
             classify(Method::Post, "/api/organizations/org/users/member/confirm"),
@@ -876,9 +913,11 @@ mod tests {
                 classify(Method::Delete, &uri),
                 Some(Route::OrganizationMemberDelete(org, "invite"))
             );
-            for method in [Method::Put, Method::Options] {
-                assert_eq!(classify(method, &uri), None);
-            }
+            assert_eq!(
+                classify(Method::Put, &uri),
+                Some(Route::OrganizationMemberUpdate(org, "invite"))
+            );
+            assert_eq!(classify(Method::Options, &uri), None);
         }
         for uri in [
             "/api/organizations//users/invite",
@@ -971,6 +1010,7 @@ mod tests {
                         Method::Post if member == "public-keys" => {
                             Some(Route::OrganizationMemberPublicKeys(org))
                         }
+                        Method::Put => Some(Route::OrganizationMemberUpdate(org, member)),
                         Method::Delete => Some(Route::OrganizationMemberDelete(org, member)),
                         _ => None,
                     };

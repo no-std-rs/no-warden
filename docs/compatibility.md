@@ -55,6 +55,7 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Bulk member removal | Ordered independent item commits, exact results and intentional self-removal continuation | Six matching HTTP cases and 25 matching official CLI state/decryption commands after HTTP setup on both targets; no bulk caller or trace claim |
 | Single member revoke/restore | Bodyless status transitions preserve keys/grants and recover selective visibility | Six matching HTTP cases and 31 matching CLI observation commands on both actual targets; no mutation caller or trace claim |
 | Organization member public-key batches | Ordered scoped public-only rows, null-key retention and unfiltered target states/roles | Six matching HTTP cases (431 requests) and 16 matching official CLI fingerprint/decryption commands on both targets; no bulk CLI caller or browser trace claim |
+| Native organization-member PUT | Scoped Owner/Admin, staged grant replacement and preserved membership state | Six matching HTTP cases (730 requests),27 official CLI observer commands/32 direct HTTP; no CLI member-edit caller or trace |
 | Organization member mini-details | Seven-field read-only metadata, unfiltered names/native states, restricted Manager admission | Six matching HTTP cases (619 requests) and 18 matching official CLI observation commands on both targets; no mini CLI caller/browser trace |
 | Single organization-cipher sharing | Sequential collection-prefix effects, confirmed canonical membership and historical grants, viewer annotations and route-specific shared reads | Seven matching HTTP cases (538 requests) and 21 actual CLI move/fresh-cache decryption commands per target; no route trace/attachment/bulk/full-parity claim |
 | Bulk organization-cipher sharing | Reverse cipher updates, forward durable collection prefixes, separate source/manage and destination ACLs, private annotations and bounded host work | Seven matching direct HTTP cases (1106 requests) and 37 CLI observation commands/31 direct HTTP per target, including two direct bulk PUTs; no CLI bulk caller/trace/standalone browser/full-parity claim |
@@ -1450,8 +1451,9 @@ restricted Manager admitted here still receives 404 from the richer list.
 Ordinary User and Accepted/Revoked Admin actors are denied. Current-device,
 organization/path/query admission, ignored GET bodies/irrelevant query flags,
 encoded static literals, scope and read-preservation checks are compared.
-The adjacent reference PUT UUID behavior belongs to the unimplemented member-edit
-family and is excluded from this GET-only matched matrix.
+The mini-details milestone excluded adjacent member PUT behavior. The separate
+[native update subset](#native-organization-member-update-subset) now covers its
+verified default-policy contract without attributing mutations to GET.
 
 Both no-warden and Vaultwarden 1.37.4 pass six focused HTTP cases:
 619 counted requests plus 6 registration
@@ -1595,3 +1597,16 @@ shared lifecycle, attachment, configured-group/policy, CLI-execution or full API
 parity claim follows. The earlier combined-runtime proof remains historical
 and separate from this fresh whole portable harness run. No route or named
 HTTP-case count is added by these browser phases.
+## Native organization-member update subset
+
+`PUT /api/organizations/{org_id}/users/{member_id}` is verified against actual Vaultwarden1.37.4 by six HTTP cases (730 counted requests per target). Success is200 with zero response bytes and no Content-Type. Native PUT200 has an empty body and no Content-Type. Lower-camel type is required; three/four positional slots are supported. Valid JSON without Content-Type succeeds. Only confirmed Owner/Admin actors are admitted; the last CONFIRMED Owner is protected. Admitted updates clear direct grants and advance the target account revision, retain the valid ordered prefix on later collection/group failure, and commit the new role only after final validation. New full-access roles, including measured full Custom, skip collection lookups. Raw numeric/string4 gains full access only with all three JSON-true collection permission bits; Manager/Custom names retain distinct provenance. Rich member permissions are null for restricted roles and an exact twelve-field object for full Custom; profile organization permissions are a separate projection. The host decodes at most4096 entries in each selection list before mutation; that local work budget is not an upstream limit claim.
+
+A separate official CLI2026.10.0 observer passes27 commands and32 direct HTTP requests, including3 direct PUT mutations. It verifies cached data before explicit sync, selective encrypted collection decryption after sync, password lock/unlock after promotion, fresh-cache decryption and retained personal note and organization key. Existing argv forms are reused; this is not a CLI member-edit caller or request trace.
+
+Default policy and no-created-groups fixtures only. Configured groups/policies/MyItems, SMTP/events, general sharing, concurrency/provider-failure parity and full API parity remain open. Per-phase live SQL checks and rollback/failure tests are local engineering guarantees. Direct PUT setup is not a CLI mutation caller or captured request/browser trace.
+
+Constructed borrowed OrganizationMemberUpdateRequest and real update_org_member phases through a stack-owned provider, with caller-owned selections and sealed authority. The DTO is constructed rather than JSON-decoded because this link consumer codec does not support deserialize_any. Linked RISC-V proof excludes alloc/std/undefined symbols; firmware execution, SQL/HTTP/crypto and upstream failure-injection parity are not inferred.
+
+The [pinned route declaration](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L1485) belongs to the inventoried revision, independently of the tested Vaultwarden 1.37.4 runtime. The [pinned shared client API](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/admin-console/src/common/organization-user/services/default-organization-user-api.service.ts#L267-L279) is a static caller reference; no actual member-edit browser or CLI mutation caller is inferred.
+
+[Core service](../crates/no-warden/src/organization_member_update.rs#L274), [HTTP conformance](../crates/no-warden-conformance/src/organization_member_update.rs), and [actual CLI observer](../crates/no-warden-conformance/src/organization_member_update_cli.rs) are independently authored sources. The source hash ledger binds these files; the inventory remains partial.
