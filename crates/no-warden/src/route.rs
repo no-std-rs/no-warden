@@ -166,6 +166,9 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         return (method == Get && valid_segment(cipher) && valid_segment(attachment))
             .then_some(AttachmentDownload(cipher, attachment));
     }
+    if method == Put && encoded_bulk_share_path(path) {
+        return Some(CipherBulkShare);
+    }
     match (method, path) {
         (
             Get,
@@ -495,6 +498,21 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
     }
 }
 
+// Compare each static segment independently: encoded separators never create
+// path boundaries, and no dynamic identifier is decoded or broadened here.
+fn encoded_bulk_share_path(path: &str) -> bool {
+    let mut segments = path.split('/');
+    for literal in [b"".as_slice(), b"api", b"ciphers", b"share"] {
+        if !segments
+            .next()
+            .is_some_and(|s| encoded_literal_matches(s, literal))
+        {
+            return false;
+        }
+    }
+    segments.next().is_none()
+}
+
 // Rocket matches percent-encoded static segment characters before its ranked
 // dynamic member UUID route. Compare this literal without decoding any IDs.
 fn encoded_literal_matches(segment: &str, literal: &[u8]) -> bool {
@@ -556,6 +574,26 @@ mod tests {
             Some(Route::CipherUpdate("share"))
         );
         assert_eq!(classify(Method::Put, "/api/ciphers/share/extra"), None);
+    }
+    #[test]
+    fn bulk_sharing_matches_measured_encoded_static_segments() {
+        for path in [
+            "/api/ciphers/%73hare",
+            "/api/%63iphers/share",
+            "/api/ciphers/sh%61re",
+            "/api/ciphers/%73hare/?ignored=true",
+        ] {
+            assert_eq!(classify(Method::Put, path), Some(Route::CipherBulkShare));
+        }
+        for (method, path) in [
+            (Method::Post, "/api/ciphers/%73hare"),
+            (Method::Put, "/api/ciphers/%2Fshare"),
+            (Method::Put, "/api/ciphers/sh%00are"),
+            (Method::Put, "/api/ciphers/sh%6"),
+            (Method::Put, "/api/ciphers/%73hare/extra"),
+        ] {
+            assert_ne!(classify(method, path), Some(Route::CipherBulkShare));
+        }
     }
     #[test]
     fn organization_member_public_keys_route_keeps_raw_org_and_is_authenticated_post() {

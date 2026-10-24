@@ -132,6 +132,16 @@ impl Storage for Memory {
 }
 impl OrganizationCipherSharingStorage for Memory {
     type ShareId = Id;
+    fn sharing_revision_is_older(
+        &mut self,
+        source: &CipherSharingSource<Id>,
+        requested: &str,
+    ) -> Result<bool, ()> {
+        self.call("revision")?;
+        assert_eq!(source.id.as_ref(), "source");
+        assert_eq!(source.revision.as_ref(), "r1");
+        Ok(requested == "r0")
+    }
     fn sharing_source(&mut self, source: &str) -> Result<Option<CipherSharingSource<Id>>, ()> {
         self.call("source")?;
         Ok(self.source_present.then(|| CipherSharingSource {
@@ -280,6 +290,7 @@ fn sharing_owned_snapshots_survive_cache_replacement_and_ordered_duplicate_steps
             "association",
             "collection",
             "association",
+            "revision",
             "payload"
         ]
     );
@@ -384,7 +395,7 @@ fn sharing_personal_target_ignores_collection_lookups_but_checks_own_folder_and_
             ["foreign", "missing"].as_slice(),
         )
         .unwrap();
-    assert_eq!(state.calls, ["source", "folder", "payload"]);
+    assert_eq!(state.calls, ["source", "folder", "revision", "payload"]);
     assert!(state.target.is_none());
     assert!(state.associations.is_empty());
     let mut state = Memory::new();
@@ -414,12 +425,65 @@ fn sharing_personal_target_ignores_collection_lookups_but_checks_own_folder_and_
 }
 
 #[test]
+fn sharing_older_revision_rejects_final_payload_after_retaining_associations() {
+    let mut state = Memory::new();
+    let mut payload = request();
+    payload.last_known_revision_date = Some("r0");
+    assert_eq!(
+        VaultService::new(&mut state)
+            .share_cipher("actor", "source", &payload, ["valid"].as_slice())
+            .unwrap_err()
+            .status_code(),
+        400
+    );
+    assert_eq!(state.associations, ["valid"]);
+    assert!(state.payload.is_none());
+
+    // A later selection failure wins before the final revision guard.
+    let mut state = Memory::new();
+    VaultService::new(&mut state)
+        .share_cipher("actor", "source", &payload, ["valid", "missing"].as_slice())
+        .unwrap_err();
+    assert_eq!(state.associations, ["valid"]);
+    assert!(!state.calls.contains(&"revision"));
+    assert!(state.payload.is_none());
+
+    // Null organization is a personal update: no association steps precede
+    // the same final payload guard, even when IDs were supplied.
+    let mut state = Memory::new();
+    payload.organization_id = None;
+    assert_eq!(
+        VaultService::new(&mut state)
+            .share_cipher("actor", "source", &payload, ["valid"].as_slice())
+            .unwrap_err()
+            .status_code(),
+        400
+    );
+    assert!(state.associations.is_empty() && state.payload.is_none());
+}
+
+#[test]
+fn sharing_revision_comparison_is_provider_owned_and_missing_is_unconditional() {
+    for revision in [Some("r1"), Some("r2"), Some("malformed"), None] {
+        let mut state = Memory::new();
+        let mut payload = request();
+        payload.last_known_revision_date = revision;
+        VaultService::new(&mut state)
+            .share_cipher("actor", "source", &payload, ["valid"].as_slice())
+            .unwrap();
+        assert!(state.payload.is_some());
+        assert_eq!(state.calls.contains(&"revision"), revision.is_some());
+    }
+}
+
+#[test]
 fn sharing_provider_failures_are_safe_and_do_not_undo_prior_individual_steps() {
     for step in [
         "source",
         "membership",
         "collection",
         "association",
+        "revision",
         "payload",
     ] {
         let mut state = Memory::new();
@@ -430,7 +494,10 @@ fn sharing_provider_failures_are_safe_and_do_not_undo_prior_individual_steps() {
         assert_eq!(error.kind, ErrorKind::Storage);
         assert_eq!(error.message, "Storage operation failed.");
         assert!(state.payload.is_none());
-        assert_eq!(state.associations.len(), usize::from(step == "payload"));
+        assert_eq!(
+            state.associations.len(),
+            usize::from(matches!(step, "revision" | "payload"))
+        );
     }
     let mut state = Memory::new();
     state.fail_association = Some(2);

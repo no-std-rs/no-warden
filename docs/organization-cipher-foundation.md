@@ -26,8 +26,10 @@ access resolution. Linking does not demonstrate execution on hardware.
 
 SQLite stores exactly one canonical owner: a personal account, or an organization
 for a cipher. Its atomic legacy-table migration preserves opaque documents,
-child references, user-created indexes and triggers, and restores foreign-key
-enforcement on failure. Folder/favorite annotations are keyed by cipher and viewer. Organization-owned items and other viewers' annotations survive creator
+child references, user-created indexes, dependent views and triggers. Temporary
+[SQLite rename compatibility](https://www.sqlite.org/pragma.html#pragma_legacy_alter_table)
+preserves references to the replaced table. Both rename and foreign-key settings
+are restored after success or rollback. Folder/favorite annotations are keyed by cipher and viewer. Organization-owned items and other viewers' annotations survive creator
 account deletion; organization deletion cascades its items. Reopening a database
 preserves this state. Personal-only metadata checks reject organization ownership
 through the existing ownership guard.

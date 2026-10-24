@@ -82,6 +82,12 @@ impl Input {
         Ok(input)
     }
     pub fn request(&self) -> Result<CipherRequest<'_>, Failure> {
+        if !self.cipher.is_object() {
+            return Err(Failure(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Invalid cipher sharing request",
+            ));
+        }
         CipherRequest::deserialize(&self.cipher).map_err(schema_error)
     }
     pub fn execute(&self, store: &mut Store, owner: &str, id: &str) -> Result<(), Failure> {
@@ -157,12 +163,36 @@ pub(super) fn selected_collection(
     )
     .optional()
 }
+fn associated_collections_sql() -> String {
+    format!(
+        "{COLLECTION_FACTS} JOIN organization_collection_ciphers l ON l.collection_id=c.id WHERE l.cipher_id=?2 ORDER BY c.rowid"
+    )
+}
+
 pub(super) fn associated_collections(
     db: &Connection,
     user: &str,
     id: &str,
 ) -> rusqlite::Result<Vec<CipherSharingCollection<String>>> {
-    let mut statement = db.prepare(&format!("{COLLECTION_FACTS} JOIN organization_collection_ciphers l ON l.collection_id=c.id WHERE l.cipher_id=?2 ORDER BY c.rowid"))?;
+    let mut statement = db.prepare(&associated_collections_sql())?;
+    statement
+        .query_map(params![user, id], collection)?
+        .collect()
+}
+
+// Route projections omit grants from an inactive historical membership. This
+// does not change read admission: native single GET still admits the surviving
+// grant when membership in the cipher's canonical organization is confirmed.
+fn visible_collections(
+    db: &Connection,
+    user: &str,
+    id: &str,
+) -> rusqlite::Result<Vec<CipherSharingCollection<String>>> {
+    let mut statement = db.prepare(&format!(
+        "{COLLECTION_FACTS} JOIN organization_collection_ciphers l ON l.collection_id=c.id
+         JOIN organization_memberships m ON m.organization_id=c.organization_id AND m.user_id=?1
+         WHERE l.cipher_id=?2 AND m.status=2 ORDER BY c.rowid"
+    ))?;
     statement
         .query_map(params![user, id], collection)?
         .collect()
@@ -233,7 +263,6 @@ pub fn project(
         None => None,
     };
     let collections = associated_collections(db, user, id)?;
-    let ids_all: Vec<String> = collections.iter().map(|row| row.id.clone()).collect();
     let access = resolve_cipher_access(
         user,
         source.ownership().map_err(mapped)?,
@@ -289,10 +318,31 @@ pub fn project(
         || membership
             .as_ref()
             .is_some_and(CipherSharingMembership::full_access);
-    let ids: Vec<&str> = if full {
-        ids_all.iter().map(String::as_str).collect()
-    } else {
+    let visible = if full {
         collections
+    } else {
+        visible_collections(db, user, id)?
+    };
+    // A single GET keeps native's unfiltered grant flags. List/sync instead
+    // project permissions from the viewer's currently visible collections.
+    let permissions = if single || full {
+        access
+    } else {
+        resolve_cipher_access(
+            user,
+            source.ownership().map_err(mapped)?,
+            membership.as_ref().map(CipherSharingMembership::view),
+            &AccessData {
+                cipher_org: source.organization_id.as_deref(),
+                records: &visible,
+            },
+        )
+        .map_err(mapped)?
+    };
+    let ids: Vec<&str> = if full {
+        visible.iter().map(|row| row.id.as_str()).collect()
+    } else {
+        visible
             .iter()
             .filter(|row| row.assigned && (!single || !row.read_only))
             .map(|row| row.id.as_str())
@@ -304,9 +354,9 @@ pub fn project(
         .as_deref()
         .map_or(Value::Null, |org| json!(org));
     doc["collectionIds"] = json!(ids);
-    doc["edit"] = json!(access.writable());
-    doc["viewPassword"] = json!(access.view_password());
-    doc["permissions"] = json!({"delete":access.delete(),"restore":access.restore()});
+    doc["edit"] = json!(permissions.writable());
+    doc["viewPassword"] = json!(permissions.view_password());
+    doc["permissions"] = json!({"delete":permissions.delete(),"restore":permissions.restore()});
     // Actual default-configuration personal and shared projections both expose
     // this capability, including accounts without any organization membership.
     doc["organizationUseTotp"] = json!(true);
@@ -330,15 +380,20 @@ pub fn project(
     Ok(Some(doc))
 }
 
+// Bound candidate materialization to personal ownership and canonical membership
+// scopes with confirmed membership. Historical collection associations do not
+// choose the canonical scope; core status and grant checks still decide access.
+fn candidate_ids(db: &Connection, user: &str) -> rusqlite::Result<Vec<String>> {
+    let mut statement = db.prepare("SELECT id FROM items WHERE kind='cipher' AND (owner=?1 OR organization_id IN (SELECT organization_id FROM organization_memberships WHERE user_id=?1 AND status=2)) ORDER BY rowid")?;
+    statement
+        .query_map([user], |row| row.get::<_, String>(0))?
+        .collect()
+}
+
 pub fn list(db: &Connection, user: &str) -> rusqlite::Result<Vec<Value>> {
     // The core independently checks every candidate's membership and collection
     // facts; a SQL join cannot confer access or duplicate an item in the response.
-    let ids = {
-        let mut statement = db.prepare("SELECT id FROM items WHERE kind='cipher' AND (owner=?1 OR organization_id IS NOT NULL) ORDER BY rowid")?;
-        statement
-            .query_map([user], |row| row.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };
+    let ids = candidate_ids(db, user)?;
     let mut rows = Vec::new();
     for id in ids {
         if let Some(row) = project(db, user, &id, false)? {
@@ -443,6 +498,17 @@ pub(super) fn advance_cipher(
 
 impl OrganizationCipherSharingStorage for Store {
     type ShareId = String;
+    fn sharing_revision_is_older(
+        &mut self,
+        source: &CipherSharingSource<String>,
+        requested: &str,
+    ) -> rusqlite::Result<bool> {
+        let current = chrono::DateTime::parse_from_rfc3339(&source.revision)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+        Ok(chrono::DateTime::parse_from_rfc3339(requested)
+            .ok()
+            .is_some_and(|requested| requested < current))
+    }
     fn sharing_source(
         &mut self,
         id: &str,
@@ -494,7 +560,10 @@ impl OrganizationCipherSharingStorage for Store {
         recheck_source(&tx, plan.owner(), plan.cipher_id(), plan.source_revision())?;
         if let Some(org) = plan.target_organization() {
             let member = membership(&tx, plan.owner(), org)?;
-            let rows = associated_collections(&tx, plan.owner(), plan.cipher_id())?;
+            // Historical links remain readable after a successful move, but
+            // cannot replace live authority to write into its destination.
+            let mut rows = associated_collections(&tx, plan.owner(), plan.cipher_id())?;
+            rows.retain(|row| row.organization_id == org);
             let access = resolve_cipher_access(
                 plan.owner(),
                 CipherOwnership::Organization {
@@ -535,6 +604,8 @@ impl OrganizationCipherSharingStorage for Store {
             doc["folderId"] = Value::Null;
             doc["favorite"] = json!(false);
             doc["archivedDate"] = Value::Null;
+        } else if let Some(archived_at) = store::archive_value(&self.pending) {
+            store::save_archive(&tx, plan.owner(), plan.cipher_id(), archived_at.as_deref())?;
         }
         let owner = if plan.target_organization().is_some() {
             None
@@ -556,8 +627,227 @@ impl OrganizationCipherSharingStorage for Store {
 }
 
 #[cfg(test)]
+mod archive_review_tests;
+#[cfg(test)]
+mod review_tests;
+#[cfg(test)]
+mod shape_review_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    const ENCRYPTED: &str = "2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    const REVISION: &str = "2026-01-01T00:00:00.000Z";
+
+    #[test]
+    fn final_share_rechecks_target_grants_without_using_historical_authority() {
+        for revoke in [
+            "DELETE FROM organization_collection_users WHERE collection_id='target' AND user_id='alice';",
+            "UPDATE organization_collection_users SET read_only=1 WHERE collection_id='target' AND user_id='alice';",
+        ] {
+            let mut store = Store::open(":memory:").unwrap();
+            store.db.execute_batch(
+                "INSERT INTO accounts VALUES('alice','alice@example.test','{}','test','2026-01-01T00:00:00.000Z'),('bob','bob@example.test','{}','test','2026-01-01T00:00:00.000Z');
+                 INSERT INTO organizations(id,name,billing_email) VALUES('old-org','old','old@example.test'),('target-org','target','target@example.test');
+                 INSERT INTO organization_memberships(id,organization_id,user_id,key,role,status,access_all) VALUES('alice-old','old-org','alice','opaque',2,2,0),('alice-target','target-org','alice','opaque',2,2,0),('bob-old','old-org','bob','opaque',2,2,0),('bob-target','target-org','bob','opaque',2,2,0);
+                 INSERT INTO organization_collections(id,organization_id,name) VALUES('old','old-org','opaque'),('target','target-org','opaque');
+                 INSERT INTO organization_collection_users VALUES('old','alice',0,0,0),('target','alice',0,0,0),('old','bob',0,0,0);",
+            ).unwrap();
+            let original = json!({"id":"cipher","type":2,"name":ENCRYPTED,"notes":ENCRYPTED,"secureNote":{"type":0},"key":null,"favorite":true,"folderId":null,"creationDate":REVISION,"revisionDate":REVISION,"organizationId":null});
+            store.db.execute(
+                "INSERT INTO items(id,owner,kind,document,revision,created) VALUES('cipher','alice','cipher',?1,?2,?2)",
+                params![original.to_string(),REVISION],
+            ).unwrap();
+            let input = |org: &str, ids: &[&str]| {
+                let mut document = original.clone();
+                document["organizationId"] = json!(org);
+                document["encryptedFor"] = json!("alice");
+                document["lastKnownRevisionDate"] = json!(REVISION);
+                Input::parse(
+                    &serde_json::to_vec(&json!({"collectionIds":ids,"cipher":document})).unwrap(),
+                )
+                .unwrap_or_else(|_| panic!("Valid sharing fixture rejected"))
+            };
+            // An earlier failed move leaves a real, independently writable
+            // historical association while the cipher is still personal.
+            assert!(
+                input("old-org", &["old", "missing"])
+                    .execute(&mut store, "alice", "cipher")
+                    .is_err()
+            );
+            let before: (String, String) = store
+                .db
+                .query_row(
+                    "SELECT document,revision FROM items WHERE id='cipher'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            let account_before: String = store
+                .db
+                .query_row("SELECT revision FROM accounts WHERE id='alice'", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            // This committed association-side effect changes permission before
+            // the separate final transaction, without a timing-dependent test.
+            store.db.execute_batch(&format!(
+                "CREATE TRIGGER revoke_target_after_association AFTER UPDATE OF revision ON accounts WHEN NEW.id='alice' BEGIN {revoke} END;"
+            )).unwrap();
+            assert!(
+                input("target-org", &["target"])
+                    .execute(&mut store, "alice", "cipher")
+                    .is_err(),
+                "Historical grants must not replace revoked destination authority in the final transaction"
+            );
+            let after: (Option<String>, Option<String>, String, String) = store
+                .db
+                .query_row(
+                    "SELECT owner,organization_id,document,revision FROM items WHERE id='cipher'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .unwrap();
+            assert_eq!(after, (Some("alice".into()), None, before.0, before.1));
+            assert_eq!(store.db.query_row("SELECT count(*) FROM organization_collection_ciphers WHERE cipher_id='cipher'",[],|r|r.get::<_,usize>(0)).unwrap(),2);
+            assert_eq!(
+                store
+                    .db
+                    .query_row(
+                        "SELECT count(*) FROM cipher_annotations WHERE cipher_id='cipher'",
+                        [],
+                        |r| r.get::<_, usize>(0)
+                    )
+                    .unwrap(),
+                0
+            );
+            assert_ne!(
+                store
+                    .db
+                    .query_row("SELECT revision FROM accounts WHERE id='alice'", [], |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .unwrap(),
+                account_before
+            );
+            // Restoring actual destination authority permits retry. Historical
+            // access for another confirmed canonical member remains intact.
+            store.db.execute_batch("DROP TRIGGER revoke_target_after_association;
+                INSERT INTO organization_collection_users VALUES('target','alice',0,0,0) ON CONFLICT(collection_id,user_id) DO UPDATE SET read_only=0;").unwrap();
+            assert!(
+                input("target-org", &["target"])
+                    .execute(&mut store, "alice", "cipher")
+                    .is_ok()
+            );
+            let bob = project(&store.db, "bob", "cipher", true).unwrap().unwrap();
+            assert_eq!(bob["organizationId"], "target-org");
+            assert_eq!(bob["collectionIds"], json!(["old"]));
+            assert_eq!(bob["edit"], true);
+        }
+    }
+
+    #[test]
+    fn list_candidates_are_canonical_membership_scoped_and_core_checks_still_apply() {
+        let store = Store::open(":memory:").unwrap();
+        store.db.execute_batch(
+            "INSERT INTO accounts VALUES('alice','alice@example.test','{}','test','2026-01-01T00:00:00.000Z'),('bob','bob@example.test','{}','test','2026-01-01T00:00:00.000Z');
+             INSERT INTO organizations(id,name,billing_email) VALUES('historical','old','old@example.test'),('canonical','current','current@example.test'),('accepted','accepted','accepted@example.test'),('revoked','revoked','revoked@example.test'),('invited','invited','invited@example.test'),('foreign','foreign','foreign@example.test');
+             INSERT INTO organization_memberships(id,organization_id,user_id,key,role,status,access_all) VALUES('old-member','historical','alice','opaque',2,2,0),('current-member','canonical','alice','opaque',2,2,0),('accepted-member','accepted','alice','opaque',2,1,1),('revoked-member','revoked','alice','opaque',2,-1,1),('invited-member','invited','alice','opaque',2,0,1);
+             INSERT INTO organization_collections(id,organization_id,name) VALUES('old-collection','historical','opaque');
+             INSERT INTO organization_collection_users VALUES('old-collection','alice',0,0,0);",
+        ).unwrap();
+        for (id, owner, org, kind) in [
+            ("personal", Some("alice"), None, "cipher"),
+            ("other-personal", Some("bob"), None, "cipher"),
+            ("historical-grant", None, Some("canonical"), "cipher"),
+            ("ungranted", None, Some("canonical"), "cipher"),
+            ("accepted-cipher", None, Some("accepted"), "cipher"),
+            ("revoked-cipher", None, Some("revoked"), "cipher"),
+            ("invited-cipher", None, Some("invited"), "cipher"),
+            ("foreign-with-old-link", None, Some("foreign"), "cipher"),
+            ("personal-folder", Some("alice"), None, "folder"),
+        ] {
+            let document = json!({"id":id,"type":2,"name":ENCRYPTED,"notes":ENCRYPTED,"secureNote":{"type":0},"organizationId":org,"creationDate":REVISION,"revisionDate":REVISION});
+            store.db.execute("INSERT INTO items(id,owner,organization_id,kind,document,revision,created) VALUES(?1,?2,?3,?4,?5,?6,?6)",params![id,owner,org,kind,document.to_string(),REVISION]).unwrap();
+        }
+        // Existing historical associations never turn their organization into
+        // the canonical candidate scope, in either direction.
+        store.db.execute_batch("INSERT INTO organization_collection_ciphers VALUES('old-collection','historical-grant'),('old-collection','foreign-with-old-link');
+            WITH RECURSIVE n(v) AS (VALUES(1) UNION ALL SELECT v+1 FROM n WHERE v<100) INSERT INTO items(id,owner,organization_id,kind,document,revision,created) SELECT 'unrelated-'||v,NULL,'foreign','cipher','{}','r','r' FROM n;").unwrap();
+        assert_eq!(
+            candidate_ids(&store.db, "alice").unwrap(),
+            ["personal", "historical-grant", "ungranted"]
+        );
+        // Confirmed membership bounds materialization, while core decisions still
+        // reject ungranted sources and independently verify current status.
+        for id in ["accepted-cipher", "revoked-cipher", "invited-cipher"] {
+            assert!(project(&store.db, "alice", id, false).unwrap().is_none());
+        }
+        let rows = list(&store.db, "alice").unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["personal", "historical-grant"]
+        );
+        assert_eq!(rows[1]["organizationId"], "canonical");
+        assert_eq!(rows[1]["collectionIds"], json!(["old-collection"]));
+        assert_eq!(rows[1]["edit"], true);
+    }
+
+    #[test]
+    fn cipher_associations_are_indexed_on_new_and_existing_stores() {
+        let store = Store::open(":memory:").unwrap();
+        store.db.execute_batch(
+            "INSERT INTO accounts VALUES('alice','alice@example.test','{}','test','2026-01-01T00:00:00.000Z');
+             INSERT INTO organizations(id,name,billing_email) VALUES('org','opaque','org@example.test');
+             WITH RECURSIVE n(v) AS (VALUES(0) UNION ALL SELECT v+1 FROM n WHERE v<1000)
+             INSERT INTO items(id,owner,organization_id,kind,document,revision,created) SELECT 'cipher-'||v,NULL,'org','cipher','{}','r','r' FROM n;
+             INSERT INTO organization_collections(id,organization_id,name) SELECT 'collection-'||id,'org','opaque' FROM items;
+             INSERT INTO organization_collection_ciphers SELECT 'collection-'||id,id FROM items;",
+        ).unwrap();
+        let lookup = || {
+            let mut statement = store.db.prepare(&associated_collections_sql()).unwrap();
+            let ids = statement
+                .query_map(params!["alice", "cipher-0"], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            assert_eq!(ids, ["collection-cipher-0"]);
+            statement.get_status(rusqlite::StatementStatus::FullscanStep)
+        };
+        assert_eq!(
+            lookup(),
+            0,
+            "new stores must avoid scanning unrelated associations"
+        );
+        // Recreate a pre-index nonempty store, then run the same idempotent
+        // initialization used on reopening it. Existing links remain intact.
+        store
+            .db
+            .execute_batch("DROP INDEX organization_collection_ciphers_cipher")
+            .unwrap();
+        assert!(lookup() >= 1000);
+        for _ in 0..2 {
+            store
+                .db
+                .execute_batch(crate::organization_collections::SCHEMA)
+                .unwrap();
+            assert_eq!(lookup(), 0);
+            assert_eq!(
+                store
+                    .db
+                    .query_row(
+                        "SELECT count(*) FROM organization_collection_ciphers",
+                        [],
+                        |r| r.get::<_, usize>(0)
+                    )
+                    .unwrap(),
+                1001
+            );
+        }
+    }
 
     #[test]
     fn sharing_selection_budget_precedes_every_association_mutation() {

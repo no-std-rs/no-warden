@@ -14,8 +14,8 @@ use reqwest::Method;
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, fs, io::Read, time::Duration};
 use uuid::Uuid;
-pub const CASE_COUNT: usize = 6;
-pub const HTTP_REQUEST_COUNT: usize = 1001;
+pub const CASE_COUNT: usize = 7;
+pub const HTTP_REQUEST_COUNT: usize = 1106;
 pub(crate) const NOTE: &str = "Independent bulk sharing Ω\0";
 const MISSING_ID: &str = "Request missing ids field";
 const MISSING: &str = "Cipher doesn't exist";
@@ -44,6 +44,10 @@ const CASES: [(&str, Case); CASE_COUNT] = [
     (
         "organization_cipher_bulk_sharing_opaque_payload_and_final_folder_failure",
         payloads,
+    ),
+    (
+        "organization_cipher_bulk_sharing_revision_metadata_is_not_a_stale_write_guard",
+        revisions,
     ),
     (
         "organization_cipher_bulk_sharing_preserved_controls_keys_context_and_authority",
@@ -246,7 +250,7 @@ impl Suite {
     fn receipt(&mut self, state: &str) -> Result<(), Error> {
         write_receipt(
             &mut self.receipt,
-            &json!({"schemaVersion":1,"status":state,"cases":self.passed,"passedCases":self.passed.len(),"expectedCases":CASE_COUNT,"httpRequests":self.http.requests,"expectedHttpRequests":HTTP_REQUEST_COUNT,"passwordCredentialAttempts":self.http.logins,"fixtureRegistrations":3,"fixtureRegistrationHttpRequests":6,"nativeBulkPutCaller":"directHTTP","cliBulkCallerClaimed":false,"capturedRouteTrace":false,"browserTraceClaimed":false,"configuredGroups":false,"configuredPolicies":false,"attachments":false,"otherItemTypes":false,"smtpEnabled":false,"concurrencyParity":false,"providerFailureParity":false,"fullParityClaimed":false,"successContentTypeAbsentAsserted":self.passed.contains(&CASES[0].0),"malformedTypeAndWrapperShapeDistinctAsserted":self.passed.contains(&CASES[0].0),"encryptedForRequiredOpaqueStringAndOptionalFieldBehaviorAsserted":self.passed.contains(&CASES[0].0),"missingAndNullFavoritePreservedAcrossOwnershipContextsAsserted":self.passed.contains(&CASES[0].0),"reverseItemsAndForwardSelectionPrefixAsserted":self.passed.contains(&CASES[1].0),"bulkManageDistinctFromNewSelectionAndGetAsserted":self.passed.contains(&CASES[3].0)}),
+            &json!({"schemaVersion":1,"status":state,"cases":self.passed,"passedCases":self.passed.len(),"expectedCases":CASE_COUNT,"httpRequests":self.http.requests,"expectedHttpRequests":HTTP_REQUEST_COUNT,"passwordCredentialAttempts":self.http.logins,"fixtureRegistrations":3,"fixtureRegistrationHttpRequests":6,"nativeBulkPutCaller":"directHTTP","cliBulkCallerClaimed":false,"capturedRouteTrace":false,"browserTraceClaimed":false,"configuredGroups":false,"configuredPolicies":false,"attachments":false,"otherItemTypes":false,"smtpEnabled":false,"concurrencyParity":false,"providerFailureParity":false,"fullParityClaimed":false,"successContentTypeAbsentAsserted":self.passed.contains(&CASES[0].0),"malformedTypeAndWrapperShapeDistinctAsserted":self.passed.contains(&CASES[0].0),"encryptedForRequiredOpaqueStringAndOptionalFieldBehaviorAsserted":self.passed.contains(&CASES[0].0),"missingAndNullFavoritePreservedAcrossOwnershipContextsAsserted":self.passed.contains(&CASES[0].0),"reverseItemsAndForwardSelectionPrefixAsserted":self.passed.contains(&CASES[1].0),"bulkManageDistinctFromNewSelectionAndGetAsserted":self.passed.contains(&CASES[3].0),"revisionMetadataIsNotAStaleWriteGuardAsserted":self.passed.contains(&CASES[5].0)}),
         )
     }
     fn get(&mut self, actor: usize, path: &str) -> Result<Value, Error> {
@@ -1045,6 +1049,91 @@ fn payloads(s: &mut Suite) -> Result<(), Error> {
                 media: true,
             },
         )?;
+    }
+    Ok(())
+}
+// Bulk revision metadata is structurally typed but does not act as the
+// independently measured single-share stale-date guard. Keep each payload fixed
+// while varying only this field; every trial checks full source/account state.
+fn revisions(s: &mut Suite) -> Result<(), Error> {
+    for mode in 0..8 {
+        let source = if mode == 6 {
+            s.shared(0)?
+        } else {
+            s.source(0)?
+        };
+        let other_before = if mode == 6 {
+            let mut private = item(&source.id, &s.accounts[1], Some(&s.orgs[0]), "private")?;
+            private["favorite"] = json!(true);
+            private["folderId"] = json!(s.folders[1]);
+            put(
+                &mut s.http,
+                &s.accounts[1].token,
+                &wrapper(json!([private]), json!([s.collections[0]])),
+                true,
+            )?;
+            Some(s.get(1, &format!("/api/ciphers/{}", source.id))?)
+        } else {
+            None
+        };
+        let before = s.get(0, &format!("/api/ciphers/{}", source.id))?;
+        let mut payload = item(&source.id, &s.accounts[0], Some(&s.orgs[0]), "revision")?;
+        payload["favorite"] = before["favorite"].clone();
+        payload["folderId"] = before["folderId"].clone();
+        let date = match mode {
+            0 | 6 => Some(json!("2000-01-01T00:00:00.000Z")),
+            1 => Some(json!("2999-01-01T00:00:00.000Z")),
+            2 => Some(json!("not-a-date")),
+            3 => None,
+            4 => Some(Value::Null),
+            5 => Some(before["revisionDate"].clone()),
+            7 => Some(json!(7)),
+            _ => unreachable!(),
+        };
+        if let Some(date) = date {
+            payload["lastKnownRevisionDate"] = date;
+        }
+        let id = source.id.clone();
+        if mode == 7 {
+            s.trial(
+                &[source],
+                Trial::unchanged(
+                    0,
+                    wrapper(json!([payload]), json!([s.collections[0]])),
+                    1,
+                    422,
+                    None,
+                ),
+            )?;
+            continue;
+        }
+        s.success(
+            &[source],
+            0,
+            vec![payload],
+            vec![s.collections[0].clone()],
+            [true, true, false],
+        )?;
+        let after = s.get(0, &format!("/api/ciphers/{id}"))?;
+        require(
+            after.get("lastKnownRevisionDate").is_none()
+                && after["deletedDate"] == before["deletedDate"]
+                && after["favorite"] == before["favorite"]
+                && after["folderId"] == before["folderId"],
+            "Bulk revision metadata changed retained private/source fields",
+        )?;
+        let other = s.get(1, &format!("/api/ciphers/{id}"))?;
+        if let Some(old) = other_before {
+            require(
+                other["favorite"] == old["favorite"] && other["folderId"] == old["folderId"],
+                "Bulk revision update changed another viewer annotations",
+            )?;
+        } else {
+            require(
+                other["favorite"] == false && other["folderId"].is_null(),
+                "Bulk revision move copied creator annotations to recipient",
+            )?;
+        }
     }
     Ok(())
 }

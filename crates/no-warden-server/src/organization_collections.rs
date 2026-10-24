@@ -24,7 +24,9 @@ CREATE TABLE IF NOT EXISTS organization_collection_users(
 CREATE TABLE IF NOT EXISTS organization_collection_ciphers(
  collection_id TEXT NOT NULL REFERENCES organization_collections(id) ON DELETE CASCADE,
  cipher_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
- PRIMARY KEY(collection_id,cipher_id));";
+ PRIMARY KEY(collection_id,cipher_id));
+CREATE INDEX IF NOT EXISTS organization_collection_ciphers_cipher
+ ON organization_collection_ciphers(cipher_id,collection_id);";
 
 // Preserve declaration order for positional JSON and duplicate-field checking.
 #[derive(Deserialize)]
