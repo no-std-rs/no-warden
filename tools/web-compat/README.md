@@ -243,3 +243,9 @@ and fresh-context decryption; recipient browser, general shared Save/edit, share
 lifecycle, attachments, configured groups/policies, notifications and full API
 parity remain unverified. No raw bodies, credentials, decrypted values, headers,
 query strings, console, screenshots, HAR or browser storage are persisted.
+
+The organization runner accepts a portless HTTPS origin as port443. In reference
+mode, unused target settings are ignored; paired mode still requires distinct
+backends and HTTPS origins. After fresh login, ordinary browser sync metadata must
+place the exact UI-created cipher in the created organization and selected
+collection. IDs and opaque vault payloads are inspected only in memory.

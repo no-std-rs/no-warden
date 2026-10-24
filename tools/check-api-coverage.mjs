@@ -268,7 +268,8 @@ export function validateCoverage(coverage, hashes = sourceHashes(), readSource =
   assert.equal(organization.background_counts, "observations, not fixed protocol budgets");
   assert.equal(organization.exact_successful_bulk_put_per_target, 1);
   assert.equal(organization.fresh_empty_contexts_per_target, 2);
-  assert.deepEqual(organization.paired_checks, ["initial-ordinary-login-sync", "personal-note-created-before-organization", "organization-and-collection-created-by-ui", "actual-ui-bulk-share-200", "immediate-decrypted-note-equality", "fresh-ordinary-login-sync", "fresh-context-decrypted-note-equality"]);
+  assert.equal(organization.fresh_server_membership_asserted, true);
+  assert.deepEqual(organization.paired_checks, ["initial-ordinary-login-sync", "personal-note-created-before-organization", "organization-and-collection-created-by-ui", "actual-ui-bulk-share-200", "immediate-decrypted-note-equality", "fresh-ordinary-login-sync", "fresh-server-organization-and-collection-membership", "fresh-context-decrypted-note-equality"]);
   for (const field of ["cli_execution_claimed", "recipient_browser_claimed", "general_shared_save_claimed", "shared_lifecycle_claimed", "attachments_claimed", "configured_groups_claimed", "full_parity_claimed"]) assert.equal(organization[field], false, `Organization browser scope exceeded: ${field}`);
   assert.deepEqual(organization.paired_browser_mutations, ["POST /api/ciphers", "POST /api/organizations", "POST /api/organizations/{id}/collections", "PUT /api/ciphers/share"]);
   for (const operation of organization.paired_browser_mutations) assert([...rows.values()].some(route => `${route.method} ${routeShape(route.path)}` === `${operation.split(" ")[0]} ${routeShape(operation.split(" ")[1])}`), `Unknown organization browser mutation: ${operation}`);

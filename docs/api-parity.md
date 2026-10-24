@@ -2078,7 +2078,9 @@ servers. The unchanged mandatory ten-check personal-vault suite runs first; the
 organization extension then creates a personal secure note, organization and
 collection using ordinary UI controls, assigns that note with exactly one
 `PUT /api/ciphers/share`200, and verifies decrypted equality immediately and
-after ordinary login/sync in a fresh empty browser context. Registration is
+after ordinary login/sync in a fresh empty browser context. The ordinary fresh
+browser sync must place the exact UI-created cipher in the expected organization
+and selected collection; a successful no-op share cannot satisfy that check. Registration is
 native HTTP setup, separately counted from browser observations.
 
 This is one confirmed owner's attachment-free secure-note assignment in the

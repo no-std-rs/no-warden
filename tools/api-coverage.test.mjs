@@ -100,6 +100,7 @@ for (const [label, mutate] of [
   ["missing organization record", data => { delete data.web_client_evidence_sources.organization_owner_sharing; }],
   ["reference-only organization evidence", data => { data.web_client_evidence_sources.organization_owner_sharing.actual_paired_browser_execution = false; }],
   ["missing fresh-context decryption", data => { data.web_client_evidence_sources.organization_owner_sharing.paired_checks.pop(); }],
+  ["missing server-sourced assignment evidence", data => { delete data.web_client_evidence_sources.organization_owner_sharing.fresh_server_membership_asserted; }],
   ["invented recipient browser evidence", data => { data.web_client_evidence_sources.organization_owner_sharing.recipient_browser_claimed = true; }],
   ["invented browser CLI execution", data => { data.web_client_evidence_sources.organization_owner_sharing.cli_execution_claimed = true; }],
 ]) {

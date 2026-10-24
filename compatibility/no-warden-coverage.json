@@ -1145,8 +1145,8 @@
 "crates/no-warden/src/service.rs": "cd100498a56cea65afa10383d3210c77a93e6d3825f3a1cdf017671a980c47ff",
 "crates/no-warden/src/validation.rs": "e89c2775eb9b27c54d2d4437d765b358bf281eb1ddbd1792d94e65708af6cca4",
 "crates/no-warden/src/wire.rs": "7e55aaeeba638ab801c189fc934d673fcc8ffe8699692c4953553f806b6ba3c5",
-"tools/api-coverage.test.mjs": "150c2784d4154e67e3d83002401e26bf6b7409985223637b6cc6cb40b27f1650",
-"tools/check-api-coverage.mjs": "c8e3c4bc98a9cf749114e25497ffcf0ae4fd63a1a128f99221d1eb02917a40e4",
+"tools/api-coverage.test.mjs": "390eb41a7346981f562403193eb3562da8f1eac38402e55d12317895633d60a4",
+"tools/check-api-coverage.mjs": "1fbae9102037c6b9711fc213c8285e3f80d6bb7ff2e832d92ad7ef7087e509d4",
 "tools/check-cli-inventory.mjs": "ee9101b057e862acffca44accc23295ea4ed95e6119e8f0c4b85e8d78834a031",
 "tools/cli-inventory.test.mjs": "6282eb84ca5a5989c029c2b0902fb3b6eb0c79a300e27198e151a07330ffbb1e",
 "tools/client-ci.mjs": "4e71fefe9dd2d18eb0b829415246d2ffa3a03055801979f559f1f9515b455f03",
@@ -1167,8 +1167,9 @@
 "tools/web-compat/package-lock.json": "b0e46e90af8bf7c94e831b0d146678125f0c4665daeb3f1e664bf05e59dda08a",
 "tools/web-compat/package.json": "c03ee8bac51df49f0866b527368a23cb32c0f8a42f1b6763d408b11239436760",
 "tools/web-compat/pins.json": "778d700b0de1f07d8af0a224e1ddab75c0834c7345919820d11b5e3ca6c2a249",
-"tools/web-org-sharing.mjs": "ed88a7a465f6ad66c3e10907c8456509000598ee339887c6a2138f2307e10322",
-"tools/web-org-sharing.test.mjs": "ffcbbe4bc7f754a2d955451b078c0409019666567d4170131d8683d0218827a2"
+"tools/web-org-sharing-contract.mjs": "f8d1790c6b9b98c78639d40a0129d1ae113e2446fa87cc96711b737f55d5cb3a",
+"tools/web-org-sharing.mjs": "2a92d52816f5c1b591af3ee71f541b4de339a35957428be924c93da8ba7c7ef7",
+"tools/web-org-sharing.test.mjs": "0e1b389beb97da4b3cdc3d1c0cb0b4f92f77ea74b5487107bea3ebe858fced8b"
 },
 "recommended_next_parity_chunk": {
 "name": "Actual web-vault client verification, then remaining organization lifecycle or sharing groundwork",
@@ -1194,6 +1195,6 @@
 "pins": "tools/web-compat/pins.json",
 "reference_manifest_sha256": "2bb2e0344616c62a6d76ea10558497499f8ed3f731400e143dc7bf17b757b5b9",
 "chromium_executable_sha256": "2d18db9d8608b052b6a552ee00ec1e830f93692e928b65ecc67d693bd33fe801",
-"organization_owner_sharing": {"runner":"tools/web-org-sharing.mjs","setup":"tools/web-compat.sh","ci_workflow":".github/workflows/web-client.yml","pins":"tools/web-compat/pins.json","actual_paired_browser_execution":true,"registration_setup":"native HTTP, separate from browser observations","background_counts":"observations, not fixed protocol budgets","exact_successful_bulk_put_per_target":1,"fresh_empty_contexts_per_target":2,"paired_checks":["initial-ordinary-login-sync","personal-note-created-before-organization","organization-and-collection-created-by-ui","actual-ui-bulk-share-200","immediate-decrypted-note-equality","fresh-ordinary-login-sync","fresh-context-decrypted-note-equality"],"paired_browser_mutations":["POST /api/ciphers","POST /api/organizations","POST /api/organizations/{id}/collections","PUT /api/ciphers/share"],"cli_execution_claimed":false,"recipient_browser_claimed":false,"general_shared_save_claimed":false,"shared_lifecycle_claimed":false,"attachments_claimed":false,"configured_groups_claimed":false,"full_parity_claimed":false}
+"organization_owner_sharing": {"runner":"tools/web-org-sharing.mjs","setup":"tools/web-compat.sh","ci_workflow":".github/workflows/web-client.yml","pins":"tools/web-compat/pins.json","actual_paired_browser_execution":true,"registration_setup":"native HTTP, separate from browser observations","background_counts":"observations, not fixed protocol budgets","exact_successful_bulk_put_per_target":1,"fresh_empty_contexts_per_target":2,"paired_checks":["initial-ordinary-login-sync","personal-note-created-before-organization","organization-and-collection-created-by-ui","actual-ui-bulk-share-200","immediate-decrypted-note-equality","fresh-ordinary-login-sync","fresh-server-organization-and-collection-membership","fresh-context-decrypted-note-equality"],"paired_browser_mutations":["POST /api/ciphers","POST /api/organizations","POST /api/organizations/{id}/collections","PUT /api/ciphers/share"],"cli_execution_claimed":false,"recipient_browser_claimed":false,"general_shared_save_claimed":false,"shared_lifecycle_claimed":false,"attachments_claimed":false,"configured_groups_claimed":false,"full_parity_claimed":false,"fresh_server_membership_asserted":true}
 }
 }

@@ -10,6 +10,7 @@ import {join,resolve} from 'node:path';
 import {pathToFileURL,fileURLToPath} from 'node:url';
 import http from 'node:http';
 import https from 'node:https';
+import {httpsProxyPort,assertAssignedCipher} from './web-org-sharing-contract.mjs';
 
 const quiet=['DEBUG','DEBUG_FILE','PWDEBUG','NODE_DEBUG','NODE_DEBUG_NATIVE'];
 if(quiet.some(k=>process.env[k])) {
@@ -66,10 +67,10 @@ function endpoint(name,fallback,protocol) {
   assert.equal(u.hostname,'127.0.0.1');assert.equal(u.pathname,'/');assert.equal(u.username+u.password+u.search+u.hash,'');return u;
 }
 const reference=endpoint('BW_WEB_REFERENCE_BASE','http://127.0.0.1:18181','http:');
-const target=endpoint('BW_WEB_TARGET_BASE','http://127.0.0.1:18182','http:');
+const target=mode==='paired'?endpoint('BW_WEB_TARGET_BASE','http://127.0.0.1:18182','http:'):null;
 const referenceOrigin=endpoint('BW_WEB_REFERENCE_ORIGIN','https://127.0.0.1:18184','https:');
-const targetOrigin=endpoint('BW_WEB_TARGET_ORIGIN','https://127.0.0.1:18185','https:');
-assert.notEqual(referenceOrigin.port,targetOrigin.port);assert.notEqual(reference.origin,target.origin);
+const targetOrigin=mode==='paired'?endpoint('BW_WEB_TARGET_ORIGIN','https://127.0.0.1:18185','https:'):null;
+if(mode==='paired'){assert.notEqual(referenceOrigin.port,targetOrigin.port);assert.notEqual(reference.origin,target.origin);}
 async function hash(path) {const h=createHash('sha256');for await(const c of createReadStream(path))h.update(c);return h.digest('hex');}
 async function checkpoint() {await writeFile(join(root,'progress.json'),JSON.stringify({stage,results:results.map(r=>({label:r.label,status:r.status})),actualBrowserRunAttempted:true})+'\n',{mode:0o600});console.log(JSON.stringify({stage}));}
 async function proxy(origin,backend,tls) {
@@ -79,13 +80,13 @@ async function proxy(origin,backend,tls) {
     upstream.on('error',()=>{response.writeHead(502);response.end();});request.pipe(upstream);
   });
   server.on('upgrade',(_r,socket)=>socket.destroy());
-  await new Promise((yes,no)=>{server.once('error',no);server.listen(Number(origin.port),'127.0.0.1',yes);});proxies.push(server);
+  await new Promise((yes,no)=>{server.once('error',no);server.listen(httpsProxyPort(origin),'127.0.0.1',yes);});proxies.push(server);
 }
 function reply(page,method,path) {return page.waitForResponse(r=>r.request().method()===method&&normalize(new URL(r.url()).pathname)===path&&r.status()===200,{timeout:30000});}
 async function run(label,backend,origin) {
   const email=`web-org-${randomBytes(12).toString('hex')}@example.test`,password=randomBytes(32).toString('base64');
   const values={org:`Organization ${randomBytes(8).toString('hex')}`,collection:`Collection ${randomBytes(8).toString('hex')}`,name:`Note ${randomBytes(8).toString('hex')}`,body:randomBytes(32).toString('base64')};
-  const events=new Map(),setup=new Map(),checkpoints=[];let unknown=0,badStatus=0,contextsCreated=0,context;
+  const events=new Map(),setup=new Map(),checkpoints=[];let unknown=0,badStatus=0,contextsCreated=0,context,expectedMembership;let freshMembershipVerified=false;
   const result={label,status:'running',uiCheckpoints:checkpoints};
   results.push(result);
   stage=`${label}: ordinary native account registration`;await checkpoint();
@@ -111,13 +112,17 @@ async function run(label,backend,origin) {
   async function login(page,phase) {
     stage=`${label}: ${phase} ordinary browser login and sync`;await checkpoint();
     await page.goto(origin.origin);await page.getByTestId('login-email-input').fill(email);await page.getByRole('button',{name:'Continue',exact:true}).click();await page.locator('input[type=password]:visible').fill(password);
-    await Promise.all([reply(page,'POST','/identity/connect/token'),reply(page,'GET','/api/sync'),reply(page,'GET','/api/accounts/profile'),page.getByRole('button',{name:'Log in',exact:true}).click()]);
+    const [,synced]=await Promise.all([reply(page,'POST','/identity/connect/token'),reply(page,'GET','/api/sync'),reply(page,'GET','/api/accounts/profile'),page.getByRole('button',{name:'Log in',exact:true}).click()]);
     await page.waitForURL(u=>['#/vault','#/setup-extension'].includes(u.hash));
     if(new URL(page.url()).hash==='#/setup-extension') {
       await page.getByRole('button',{name:'Add it later',exact:true}).click();await page.getByRole('dialog').getByRole('link',{name:'Skip to web app',exact:true}).click();await page.waitForURL(u=>u.hash==='#/vault');await page.getByRole('dialog').getByRole('button',{name:'Skip',exact:true}).click();
     }
     for(const operation of ['POST /identity/connect/token 200','GET /api/sync 200','GET /api/accounts/profile 200'])assert((events.get(`${phase} ${operation}`)??0)>0);
     checkpoints.push(`${phase}-ordinary-login-sync`);
+    if(phase==='fresh'){
+      assertAssignedCipher((await synced.json()).ciphers,expectedMembership);
+      freshMembershipVerified=true;checkpoints.push('fresh-server-organization-and-collection-membership');
+    }
   }
   async function assertNote(page,phase) {
     const button=page.getByRole('button',{name:values.name,exact:true});await button.waitFor({state:'visible'});assert.equal(await button.count(),1);await button.click();
@@ -130,12 +135,12 @@ async function run(label,backend,origin) {
     stage=`${label}: create personal secure note through UI`;await checkpoint();
     await page.locator('#newItemDropdown').click();await page.getByRole('menuitem',{name:'Note',exact:true}).click();
     const dialog=page.getByRole('dialog');await dialog.locator('input[formcontrolname=name]').fill(values.name);await dialog.locator('textarea[formcontrolname=notes]').fill(values.body);
-    await Promise.all([reply(page,'POST','/api/ciphers'),dialog.getByRole('button',{name:'Save',exact:true}).click()]);await dialog.getByRole('button',{name:'Close',exact:true}).click();await dialog.waitFor({state:'hidden'});checkpoints.push('personal-note-created-before-organization');
+    const [createdCipher]=await Promise.all([reply(page,'POST','/api/ciphers'),dialog.getByRole('button',{name:'Save',exact:true}).click()]);const cipherId=(await createdCipher.json()).id;await dialog.getByRole('button',{name:'Close',exact:true}).click();await dialog.waitFor({state:'hidden'});checkpoints.push('personal-note-created-before-organization');
     stage=`${label}: create organization and collection through UI`;await checkpoint();
     await page.getByRole('link',{name:'New organization',exact:true}).click();await page.locator('[formcontrolname=name]:visible').fill(values.org);await page.locator('input[type=email]:visible').fill(email);
-    await Promise.all([reply(page,'POST','/api/organizations'),page.getByRole('button',{name:'Submit',exact:true}).click()]);
+    const [createdOrganization]=await Promise.all([reply(page,'POST','/api/organizations'),page.getByRole('button',{name:'Submit',exact:true}).click()]);const organizationId=(await createdOrganization.json()).id;
     await page.getByRole('button',{name:'New',exact:true}).click();await page.getByRole('menuitem',{name:'Collection',exact:true}).click();await page.locator('[formcontrolname=name]:visible').fill(values.collection);
-    await Promise.all([reply(page,'POST','/api/organizations/{id}/collections'),page.getByRole('button',{name:'Save',exact:true}).click()]);checkpoints.push('organization-and-collection-created-by-ui');
+    const [createdCollection]=await Promise.all([reply(page,'POST','/api/organizations/{id}/collections'),page.getByRole('button',{name:'Save',exact:true}).click()]);expectedMembership={id:cipherId,organizationId,collectionId:(await createdCollection.json()).id};checkpoints.push('organization-and-collection-created-by-ui');
     stage=`${label}: assign personal note to organization collection through UI`;await checkpoint();
     await page.getByRole('link',{name:'Password Manager',exact:true}).click();stage=`${label}: wait personal note row after navigation`;await checkpoint();const row=page.getByRole('row').filter({hasText:values.name});await row.waitFor({state:'visible'});assert.equal(await row.count(),1);await row.getByRole('button',{name:'Options',exact:true}).click();await page.getByRole('menuitem',{name:'Assign to collections',exact:true}).click();
     stage=`${label}: select owned collection`;await checkpoint();const picker=page.getByRole('dialog');await picker.getByRole('combobox').nth(1).waitFor({state:'visible'});assert.equal(await picker.getByRole('combobox').count(),2);await picker.getByRole('combobox').nth(1).fill(values.collection);await page.getByRole('option').filter({hasText:values.collection}).click();await page.keyboard.press('Escape');
@@ -160,7 +165,7 @@ async function run(label,backend,origin) {
       if(method==='GET'||path.startsWith('/identity/'))continue;
       assert.equal(phase,'initial');assert(writes.has(`${method} ${path}`));assert.equal(count,1);
     }
-    Object.assign(result,{status:'passed',strictUiMutationAndLoginPhaseContractAsserted:true,backgroundPollingCountsAreObservations:true,freshContextsCreated:contextsCreated,freshContextHasNoInheritedStorage:true,actualUiBulkMutationCaller:true,exactOneBulkShareResponse:true,singleShareBrowserCallerClaimed:false,immediateAndFreshDecryptedEquality:true,unattributedSuppressedResponses:unknown,browserNon200Responses:badStatus,browserHttpResponses:[...events.values()].reduce((a,b)=>a+b,0),http:[...events].sort().map(([operation,count])=>({operation,count})),nativeRegistrationSetupHttp:[...setup].sort().map(([operation,count])=>({operation,count}))});
+    Object.assign(result,{status:'passed',strictUiMutationAndLoginPhaseContractAsserted:true,backgroundPollingCountsAreObservations:true,freshContextsCreated:contextsCreated,freshContextHasNoInheritedStorage:true,actualUiBulkMutationCaller:true,exactOneBulkShareResponse:true,freshServerOrganizationAndCollectionMembershipAsserted:freshMembershipVerified,singleShareBrowserCallerClaimed:false,immediateAndFreshDecryptedEquality:true,unattributedSuppressedResponses:unknown,browserNon200Responses:badStatus,browserHttpResponses:[...events.values()].reduce((a,b)=>a+b,0),http:[...events].sort().map(([operation,count])=>({operation,count})),nativeRegistrationSetupHttp:[...setup].sort().map(([operation,count])=>({operation,count}))});
   } finally {if(context)await context.close();}
 }
 try {
