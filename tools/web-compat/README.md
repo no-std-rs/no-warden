@@ -208,3 +208,44 @@ unverified by this smoke. Cipher identifiers are normalized to `{id}` before
 allowlisted operation counts are emitted. These lifecycle checks add browser
 phases and tighten an existing HTTP case; they do not add an implemented route,
 a named HTTP case or a complete endpoint-parity claim.
+
+
+## Organization-owner sharing in the whole portable comparison
+
+CI unconditionally runs `bash tools/web-compat.sh --organization-sharing`. It
+retains all ten mandatory personal-vault checks first, then executes the same
+strict owner organization flow against both servers. The no-argument local
+command remains the personal-vault comparison.
+
+The extension creates a personal secure note, organization and collection through
+ordinary UI controls, assigns the note to that collection with exactly one
+successful `PUT /api/ciphers/share`, then checks immediate decrypted equality and
+decrypted equality after ordinary login/sync in a fresh empty browser context.
+Successful organization-cipher, collection-details, default-group and mini-details
+reads are required. Unknown API observations, non-200 responses or unexpected
+writes fail. Native registration HTTP setup is separate from browser evidence.
+Background counts are observations rather than fixed protocol budgets.
+
+The fresh whole portable comparison passed both personal and organization scopes
+against Vaultwarden1.37.4 and the current adapter using the unchanged pinned
+Vaultwarden Web2026.7.0, Chromium149.0.7827.55 and Playwright1.64.1. The earlier
+combined integration proof from base8493f584 remains separate historical evidence;
+its request counts and binary are not relabeled as this checkout.
+
+`BW_WEB_ORG_MODE=paired` runs both targets when invoking the organization runner
+directly; explicit `reference` exploration cannot supply paired evidence.
+`BW_WEB_OUTPUT` selects a private sanitized receipt directory. The wrapper
+preserves the verified pins, live target/post-bind readiness and owned fixture
+cleanup, and blocks external browser traffic. Neither runner uses storageState
+or evaluation to bypass ordinary account/vault UI. No browser CLI execution is
+claimed. These checks cover only one owner's attachment-free secure-note sharing
+and fresh-context decryption; recipient browser, general shared Save/edit, shared
+lifecycle, attachments, configured groups/policies, notifications and full API
+parity remain unverified. No raw bodies, credentials, decrypted values, headers,
+query strings, console, screenshots, HAR or browser storage are persisted.
+
+The organization runner accepts a portless HTTPS origin as port443. In reference
+mode, unused target settings are ignored; paired mode still requires distinct
+backends and HTTPS origins. After fresh login, ordinary browser sync metadata must
+place the exact UI-created cipher in the created organization and selected
+collection. IDs and opaque vault payloads are inspected only in memory.
