@@ -109,7 +109,7 @@ invoke the pinned official Bitwarden CLI as an external process.
   configured-group/backend, adjacent member-edit or full-parity claim.
 - [x] Single organization-cipher sharing subset: allocation-free sequential
   association plans and verified current/historical grant decisions, private annotations,
-  six matching actual HTTP cases (423 requests) and 21
+  seven matching actual HTTP cases (538 requests) and 21
   matching official CLI move/fresh owner/recipient decryption commands per target.
   Attachment-bearing moves, general shared editing/lifecycle, bulk/import/admin,
   configured policy/group/backend and full API parity remain open.
@@ -119,6 +119,13 @@ invoke the pinned official Bitwarden CLI as an external process.
   official CLI observation commands. The organization creation/move browser
   experiment is reference-only; no new CLI route caller, configured groups,
   policy/attachment or full-parity claim.
+- [x] Bulk organization-cipher sharing subset: allocation-free global ID preflight,
+  reverse items/forward durable prefixes and separate source/manage/destination ACLs;
+  seven matching direct HTTP cases (1106 requests) and 37 CLI
+  observation commands/31 direct HTTP per target, including two
+  direct bulk mutations. No CLI bulk caller, captured trace or standalone browser
+  claim; configured groups/policies, attachments, shared Save/lifecycle and full
+  upstream API parity remain open.
 - [ ] Attachments, Sends, event notifications and websocket transport.
 - [ ] Two-factor authentication, passkeys, SSO and administrative APIs.
 - [ ] Full import/export compatibility, remaining formats and variants, and upstream protocol regression fixtures.

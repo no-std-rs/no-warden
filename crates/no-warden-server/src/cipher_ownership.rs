@@ -33,8 +33,8 @@ CREATE TABLE IF NOT EXISTS cipher_annotations(
 /// Rebuild SQLite's formerly account-only table once. Foreign-key enforcement is
 /// disabled only around the atomic rebuild, then restored even on failure. Child
 /// tables continue to reference `items`; foreign_key_check runs before commit.
-/// Existing user-created indexes/triggers are retained without executing them
-/// during the opaque document copy.
+/// Existing indexes/triggers are retained without executing them during the copy.
+/// Views and triggers on other tables keep their original references to `items`.
 pub fn initialize(db: &mut Connection) -> rusqlite::Result<()> {
     let columns = {
         let mut statement = db.prepare("PRAGMA table_info(items)")?;
@@ -63,8 +63,15 @@ pub fn initialize(db: &mut Connection) -> rusqlite::Result<()> {
             .collect::<rusqlite::Result<Vec<_>>>()?
     };
     let foreign_keys: bool = db.pragma_query_value(None, "foreign_keys", |row| row.get(0))?;
+    let legacy_alter_table: bool =
+        db.pragma_query_value(None, "legacy_alter_table", |row| row.get(0))?;
     db.pragma_update(None, "foreign_keys", false)?;
     let result = (|| {
+        // This replaces a table under its existing public name. During RENAME,
+        // views still reference the temporarily absent `items`; preserve those
+        // references rather than reparsing or rewriting unrelated schema objects.
+        // https://www.sqlite.org/pragma.html#pragma_legacy_alter_table
+        db.pragma_update(None, "legacy_alter_table", true)?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute_batch(ITEMS)?;
         for sql in schema {
@@ -79,7 +86,12 @@ pub fn initialize(db: &mut Connection) -> rusqlite::Result<()> {
         }
         tx.commit()
     })();
-    db.pragma_update(None, "foreign_keys", foreign_keys)?;
+    // Attempt both restorations even if the first fails. Neither connection
+    // setting may leak into normal operation after a failed migration.
+    let restore_rename = db.pragma_update(None, "legacy_alter_table", legacy_alter_table);
+    let restore_foreign_keys = db.pragma_update(None, "foreign_keys", foreign_keys);
+    restore_rename?;
+    restore_foreign_keys?;
     result
 }
 
@@ -188,6 +200,88 @@ mod tests {
     }
 
     #[test]
+    fn migration_preserves_dependent_views_and_external_triggers() {
+        for legacy_alter_table in [false, true] {
+            let mut db = legacy();
+            db.pragma_update(None, "legacy_alter_table", legacy_alter_table)
+                .unwrap();
+            db.execute_batch(
+                "CREATE VIEW item_summary AS SELECT id,document FROM items;
+                 CREATE VIEW nested_item_summary AS SELECT * FROM item_summary;
+                 CREATE TRIGGER update_item_summary INSTEAD OF UPDATE ON item_summary
+                   BEGIN UPDATE items SET document=NEW.document WHERE id=OLD.id; END;
+                 CREATE TABLE item_updates(id TEXT);
+                 CREATE TRIGGER external_item_update AFTER INSERT ON item_updates
+                   BEGIN UPDATE items SET deleted=0 WHERE id=NEW.id; END;",
+            )
+            .unwrap();
+            let schema: Vec<(String, String)> = db
+                .prepare("SELECT name,sql FROM sqlite_master WHERE type IN('view','trigger') ORDER BY name")
+                .unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            initialize(&mut db).unwrap();
+            initialize(&mut db).unwrap();
+            for (name, sql) in schema {
+                let retained: String = db
+                    .query_row(
+                        "SELECT sql FROM sqlite_master WHERE name=?1",
+                        [name],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(retained, sql);
+            }
+            let document: String = db
+                .query_row(
+                    "SELECT document FROM nested_item_summary WHERE id='cipher'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(document, "opaque encrypted payload");
+            assert_eq!(
+                db.query_row("SELECT count(*) FROM modifications", [], |row| row
+                    .get::<_, usize>(0))
+                    .unwrap(),
+                0
+            );
+            db.execute(
+                "UPDATE item_summary SET document='updated opaque payload' WHERE id='cipher'",
+                [],
+            )
+            .unwrap();
+            db.execute("INSERT INTO item_updates VALUES('cipher')", [])
+                .unwrap();
+            let result: (String, bool) = db
+                .query_row(
+                    "SELECT document,deleted FROM items WHERE id='cipher'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(result, ("updated opaque payload".into(), false));
+            assert_eq!(
+                db.query_row("SELECT count(*) FROM modifications", [], |row| row
+                    .get::<_, usize>(0))
+                    .unwrap(),
+                2
+            );
+            assert!(
+                db.pragma_query_value(None, "foreign_keys", |row| row.get::<_, bool>(0))
+                    .unwrap()
+            );
+            assert_eq!(
+                db.pragma_query_value(None, "legacy_alter_table", |row| row.get::<_, bool>(0))
+                    .unwrap(),
+                legacy_alter_table
+            );
+        }
+    }
+
+    #[test]
     fn canonical_organization_owner_and_private_annotations_survive_creator_removal() {
         let mut db = legacy();
         initialize(&mut db).unwrap();
@@ -274,6 +368,71 @@ mod tests {
             .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn failed_rebuild_preserves_views_and_restores_connection_modes_before_retry() {
+        for legacy_alter_table in [false, true] {
+            for foreign_keys in [false, true] {
+                let mut db = legacy();
+                db.execute_batch(
+                    "PRAGMA foreign_keys=OFF;
+                     UPDATE items SET owner='missing' WHERE id='cipher';
+                     CREATE VIEW item_summary AS SELECT id,document FROM items;
+                     CREATE VIEW nested_item_summary AS SELECT * FROM item_summary;",
+                )
+                .unwrap();
+                db.pragma_update(None, "foreign_keys", foreign_keys)
+                    .unwrap();
+                db.pragma_update(None, "legacy_alter_table", legacy_alter_table)
+                    .unwrap();
+                let schema = |db: &Connection| {
+                    db.prepare("SELECT name,sql FROM sqlite_master ORDER BY name")
+                        .unwrap()
+                        .query_map([], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                        })
+                        .unwrap()
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                        .unwrap()
+                };
+                let before = schema(&db);
+                assert!(initialize(&mut db).is_err());
+                assert!(db.is_autocommit());
+                assert_eq!(schema(&db), before);
+                assert_eq!(
+                    db.pragma_query_value(None, "foreign_keys", |row| row.get::<_, bool>(0))
+                        .unwrap(),
+                    foreign_keys
+                );
+                assert_eq!(
+                    db.pragma_query_value(None, "legacy_alter_table", |row| row.get::<_, bool>(0))
+                        .unwrap(),
+                    legacy_alter_table
+                );
+                db.execute("UPDATE items SET owner='alice' WHERE id='cipher'", [])
+                    .unwrap();
+                initialize(&mut db).unwrap();
+                let document: String = db
+                    .query_row(
+                        "SELECT document FROM nested_item_summary WHERE id='cipher'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(document, "opaque encrypted payload");
+                assert_eq!(
+                    db.pragma_query_value(None, "foreign_keys", |row| row.get::<_, bool>(0))
+                        .unwrap(),
+                    foreign_keys
+                );
+                assert_eq!(
+                    db.pragma_query_value(None, "legacy_alter_table", |row| row.get::<_, bool>(0))
+                        .unwrap(),
+                    legacy_alter_table
+                );
+            }
+        }
     }
 
     #[test]

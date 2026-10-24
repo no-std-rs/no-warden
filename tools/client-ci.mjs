@@ -41,6 +41,7 @@ export const shards = {
     "organization-collections", "organization-collections-cli",
     "file-sends", "file-sends-cli",
     "organization-member-public-keys", "organization-member-public-keys-cli",
+    "organization-cipher-bulk-sharing", "organization-cipher-bulk-sharing-cli",
     "account-kdf-cli",
   ],
 };

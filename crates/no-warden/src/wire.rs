@@ -1821,6 +1821,84 @@ impl<const N: usize> crate::organization_cipher_sharing::CipherShareIdsData
     }
 }
 
+/// Minimal borrowed bulk decision fields. Unknown opaque cipher fields remain in
+/// the adapter's original document; do not serialize this view as a full cipher.
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CipherBulkShareItemRequest<'a> {
+    pub id: Option<&'a str>,
+    #[serde(rename = "type")]
+    pub kind: i32,
+    pub name: &'a str,
+    /// Required native wire field; bulk authority does not use its value.
+    pub encrypted_for: &'a str,
+    /// Absent or null preserves the acting user's favorite annotation.
+    pub favorite: Option<bool>,
+    pub organization_id: Option<&'a str>,
+    pub folder_id: Option<&'a str>,
+}
+impl core::fmt::Debug for CipherBulkShareItemRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("CipherBulkShareItemRequest([REDACTED])")
+    }
+}
+impl crate::organization_cipher_bulk_sharing::CipherBulkShareItemData
+    for CipherBulkShareItemRequest<'_>
+{
+    fn bulk_share_item(&self) -> crate::organization_cipher_bulk_sharing::CipherBulkShareItem<'_> {
+        crate::organization_cipher_bulk_sharing::CipherBulkShareItem {
+            id: self.id,
+            cipher_type: self.kind,
+            name: self.name,
+            organization_id: self.organization_id,
+            folder_id: self.folder_id,
+        }
+    }
+}
+
+/// Borrowed native bulk wrapper with caller-selected capacities. Field order also
+/// supports the observed positional [ciphers, collectionIds] representation.
+/// Inner encryptedFor is structurally required by the minimal item decoder but
+/// does not authorize sharing. Outer encryptedFor is outside this wrapper.
+/// P owns its codec; this model makes no complete opaque-payload round-trip claim.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CipherBulkShareRequest<'a, P, const C: usize, const N: usize> {
+    pub ciphers: BoundedList<P, N>,
+    #[serde(borrow)]
+    pub collection_ids: BoundedList<&'a str, C>,
+}
+impl<P, const C: usize, const N: usize> core::fmt::Debug for CipherBulkShareRequest<'_, P, C, N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("CipherBulkShareRequest([REDACTED])")
+    }
+}
+impl<
+    P: crate::organization_cipher_bulk_sharing::CipherBulkShareItemData,
+    const C: usize,
+    const N: usize,
+> crate::organization_cipher_bulk_sharing::CipherBulkSharingData
+    for CipherBulkShareRequest<'_, P, C, N>
+{
+    fn ciphers_len(&self) -> usize {
+        self.ciphers.len()
+    }
+    fn cipher(
+        &self,
+        index: usize,
+    ) -> Option<crate::organization_cipher_bulk_sharing::CipherBulkShareItem<'_>> {
+        self.ciphers
+            .get(index)
+            .map(crate::organization_cipher_bulk_sharing::CipherBulkShareItemData::bulk_share_item)
+    }
+    fn collections_len(&self) -> usize {
+        self.collection_ids.len()
+    }
+    fn collection(&self, index: usize) -> Option<&str> {
+        self.collection_ids.get(index).copied()
+    }
+}
+
 /// The selected-ID body shared by cipher lifecycle and archive endpoints.
 ///
 /// The caller chooses the decoder capacity. IDs are exact strings, without UUID

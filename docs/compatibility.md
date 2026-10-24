@@ -57,7 +57,8 @@ extension adds two matching fingerprint checks, bringing the verified suite to
 | Organization member public-key batches | Ordered scoped public-only rows, null-key retention and unfiltered target states/roles | Six matching HTTP cases (431 requests) and 16 matching official CLI fingerprint/decryption commands on both targets; no bulk CLI caller or browser trace claim |
 | Native organization-member PUT | Scoped Owner/Admin, staged grant replacement and preserved membership state | Six matching HTTP cases (730 requests),27 official CLI observer commands/32 direct HTTP; no CLI member-edit caller or trace |
 | Organization member mini-details | Seven-field read-only metadata, unfiltered names/native states, restricted Manager admission | Six matching HTTP cases (619 requests) and 18 matching official CLI observation commands on both targets; no mini CLI caller/browser trace |
-| Single organization-cipher sharing | Sequential collection-prefix effects, confirmed canonical membership and historical grants, viewer annotations and route-specific shared reads | Six matching HTTP cases (423 requests) and 21 actual CLI move/fresh-cache decryption commands per target; no route trace/attachment/bulk/full-parity claim |
+| Single organization-cipher sharing | Sequential collection-prefix effects, confirmed canonical membership and historical grants, viewer annotations and route-specific shared reads | Seven matching HTTP cases (538 requests) and 21 actual CLI move/fresh-cache decryption commands per target; no route trace/attachment/bulk/full-parity claim |
+| Bulk organization-cipher sharing | Reverse cipher updates, forward durable collection prefixes, separate source/manage and destination ACLs, private annotations and bounded host work | Seven matching direct HTTP cases (1106 requests) and 37 CLI observation commands/31 direct HTTP per target, including two direct bulk PUTs; no CLI bulk caller/trace/standalone browser/full-parity claim |
 | Organization web reads | Canonical cipher lists, aggregate collection access and explicit default empty groups | Six matching HTTP cases (156 requests) and 21 matching official CLI observation commands; reference-only organization UI experiment stays separate |
 | Single organization-collection update/delete | Complete grant replacement, opaque names, whitespace external-ID clearing and preserved cipher data | Allocation-free core and local rollback/cascade tests; six matching HTTP cases and twenty matching official CLI commands on both actual targets |
 | Organization-scoped collection list/create/single access-details | Confirmed manager authorization, exact projections, opaque names/external IDs and reference validation | Six matching HTTP cases and nineteen matching official CLI commands on both actual servers; atomic local provider tests |
@@ -1496,7 +1497,7 @@ archive state belongs to each viewer. Default personal/shared TOTP capability is
 true. Native success has thirty known fields, but remains opaque adapter JSON,
 not complete typed response coverage.
 
-Both no-warden and Vaultwarden 1.37.4 pass six HTTP cases/423
+Both no-warden and Vaultwarden 1.37.4 pass seven HTTP cases/538
 counted requests, excluding 4 registration
 requests; 2 password logins and 2
 refreshes remain explicit. The separate official CLI 2026.10.0 suite executes
@@ -1547,6 +1548,55 @@ provider/noalloc boundaries and exact limitations appear in the
 configured groups/SMTP/policies, attachments, broader cipher/transport/error and
 failure/concurrency behavior remain open. All three handlers remain partial.
 
+## Bulk organization-cipher sharing
+
+The partial `PUT /api/ciphers/share` implementation has paired Vaultwarden
+1.37.4 / no-warden evidence for seven HTTP cases (1106 requests), plus a separate
+37-command official CLI 2026.10.0 observer with 31 direct HTTP requests and two
+direct bulk mutations. Fresh owner/recipient decryption, private annotations,
+account keys and personal controls are verified. This observer establishes no
+production CLI bulk caller, captured route trace or browser compatibility.
+
+The allocation-free core checks every ID's presence before processing ciphers in
+reverse order and collections forwards. Durable collection prefixes and completed
+suffix ciphers survive later failures. Source/manage authority differs from new
+destination write permission. Final local payload and private annotation writes
+are atomic. Bulk accepts the measured stale/future/malformed revision strings;
+it keeps the single-share revision guard separate. Personal archive metadata is
+applied in the final transaction; missing/null clears it, valid measured dates
+normalize to six fractional digits. GET/list/sync agree in the five-case comparison.
+
+Success is empty HTTP 200 without Content-Type. The host limits requests to
+4096 ciphers, 4096 selections and 8192 estimated associations; these are local
+resource policies. The core has no corresponding count cap. Fourteen core tests,
+route precedence, fourteen host regressions and a linked RISC-V noalloc consumer
+cover local contracts. The firmware is linked rather than executed.
+
+See [API parity notes](api-parity.md#bulk-organization-cipher-sharing-subset) for
+request shapes, ordering, permissions, revision variants, pinned references and
+comparison boundaries. Attachments, other item types, general shared Save/lifecycle,
+configured groups/policies/SMTP and complete upstream parity remain open.
+
+## Paired organization-owner browser sharing
+
+The same pinned Vaultwarden Web2026.7.0, Chromium149.0.7827.55 and
+Playwright1.64.1 now execute the whole portable CI comparison on both actual
+servers. The unchanged mandatory ten-check personal-vault suite runs first; the
+organization extension then creates a personal secure note, organization and
+collection using ordinary UI controls, assigns that note with exactly one
+`PUT /api/ciphers/share`200, and verifies decrypted equality immediately and
+after ordinary login/sync in a fresh empty browser context. The ordinary fresh
+browser sync must place the exact UI-created cipher in the expected organization
+and selected collection; a successful no-op share cannot satisfy that check. Registration is
+native HTTP setup, separately counted from browser observations.
+
+This is one confirmed owner's attachment-free secure-note assignment in the
+default configuration. Background method/path/status counts are observations,
+not fixed protocol budgets. No recipient-browser, general shared Save/edit,
+shared lifecycle, attachment, configured-group/policy, CLI-execution or full API
+parity claim follows. The earlier combined-runtime proof remains historical
+and separate from this fresh whole portable harness run. No route or named
+HTTP-case count is added by these browser phases.
 ## Native organization-member update subset
 
 `PUT /api/organizations/{org_id}/users/{member_id}` is verified against actual Vaultwarden1.37.4 by six HTTP cases (730 counted requests per target). Success is200 with zero response bytes and no Content-Type. Native PUT200 has an empty body and no Content-Type. Lower-camel type is required; three/four positional slots are supported. Valid JSON without Content-Type succeeds. Only confirmed Owner/Admin actors are admitted; the last CONFIRMED Owner is protected. Admitted updates clear direct grants and advance the target account revision, retain the valid ordered prefix on later collection/group failure, and commit the new role only after final validation. New full-access roles, including measured full Custom, skip collection lookups. Raw numeric/string4 gains full access only with all three JSON-true collection permission bits; Manager/Custom names retain distinct provenance. Rich member permissions are null for restricted roles and an exact twelve-field object for full Custom; profile organization permissions are a separate projection. The host decodes at most4096 entries in each selection list before mutation; that local work budget is not an upstream limit claim.
