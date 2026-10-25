@@ -16,6 +16,8 @@ mod organization_bulk_confirmations;
 mod organization_bulk_member_removal;
 mod organization_bulk_member_status;
 mod organization_cipher_bulk_sharing;
+mod organization_cipher_collections;
+mod organization_cipher_partial;
 mod organization_cipher_sharing;
 mod organization_cipher_update;
 mod organization_collections;
@@ -25,6 +27,7 @@ mod organization_member_mini_details;
 mod organization_member_public_keys;
 mod organization_member_removal;
 mod organization_member_status;
+mod organization_member_update;
 mod organization_members;
 mod organization_web_reads;
 mod organizations;
@@ -131,6 +134,7 @@ impl IntoResponse for Failure {
                 "Cipher doesn't exist"
                     | "Cipher is not owned by user"
                     | "Cannot add this cipher to the selected collection"
+                    | "Cipher revision is older than the stored revision"
             )
         {
             return password_login::error_response(self.0, self.1);
@@ -376,11 +380,17 @@ async fn dispatch_http(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, Failure> {
-    let bulk = route::Method::parse(method.as_str())
-        .and_then(|method| route::classify(method, uri.path()))
-        == Some(Route::CipherBulkShare);
+    let route = route::Method::parse(method.as_str())
+        .and_then(|method| route::classify(method, uri.path()));
+    let bulk = route == Some(Route::CipherBulkShare);
+    let member_update = matches!(route, Some(Route::OrganizationMemberUpdate(..)));
+    let collections = matches!(route, Some(Route::CipherCollectionsUpdate(_)));
+    let partial = matches!(route, Some(Route::CipherPartial(_)));
     match dispatch_with_peer(app, method, uri, headers, body, peer.ip()).await {
         Err(error) if bulk => Ok(organization_cipher_bulk_sharing::render_error(error)),
+        Err(error) if member_update => Ok(organization_member_update::error_response(error)),
+        Err(error) if collections => Ok(organization_cipher_collections::render_error(error)),
+        Err(error) if partial => Ok(organization_cipher_partial::render_error(error)),
         result => result,
     }
 }
@@ -891,6 +901,20 @@ async fn dispatch_with_peer(
                 uri.query(),
             )?;
             VaultService::new(&mut *store).restore_org_member(&owner, &org, &member)?;
+            Ok(StatusCode::OK.into_response())
+        }
+        Route::OrganizationMemberUpdate(raw_org, raw_member) => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let (org, member) = organization_members::detail_paths(
+                &mut store,
+                &owner,
+                raw_org,
+                raw_member,
+                uri.query(),
+            )?;
+            let input = organization_member_update::Input::parse(&body)?;
+            VaultService::new(&mut *store).update_org_member(&owner, &org, &member, &input)?;
             Ok(StatusCode::OK.into_response())
         }
         Route::OrganizationMemberDelete(raw_org, raw_member) => {
@@ -1408,6 +1432,20 @@ async fn dispatch_with_peer(
             let input = organization_cipher_bulk_sharing::Input::parse(&body)?;
             input.execute(&mut store, &owner)?;
             Ok(StatusCode::OK.into_response())
+        }
+        Route::CipherCollectionsUpdate(raw) => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let id = cipher_reads::path_id(raw)?;
+            let input = organization_cipher_collections::Input::parse(&body)?;
+            Ok(json_response(input.execute(&mut store, &owner, &id)?))
+        }
+        Route::CipherPartial(raw) => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let id = cipher_reads::path_id(raw)?;
+            let input = organization_cipher_partial::Input::parse(&body)?;
+            Ok(json_response(input.execute(&mut store, &owner, &id)?))
         }
         Route::CipherShare(raw) => {
             devices::access_binding(&store.db, &digest(bearer), &owner)?

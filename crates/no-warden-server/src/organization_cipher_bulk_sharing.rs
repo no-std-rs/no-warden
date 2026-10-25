@@ -385,6 +385,8 @@ impl OrganizationCipherBulkSharingStorage for Store {
             doc["folderId"] = Value::Null;
             doc["favorite"] = json!(false);
             doc["archivedDate"] = Value::Null;
+        } else if let Some(archived_at) = store::archive_value(&doc) {
+            store::save_archive(&tx, p.owner(), p.cipher_id(), archived_at.as_deref())?;
         }
         let owner = p.target_organization().is_none().then_some(p.owner());
         let changed=tx.execute("UPDATE items SET owner=?1,organization_id=?2,document=?3,revision=?4 WHERE id=?5 AND revision=?6 AND owner IS ?7 AND organization_id IS ?8",params![owner,p.target_organization(),doc.to_string(),revision,p.cipher_id(),p.source_revision(),p.source_owner(),p.source_organization()])?;
@@ -395,5 +397,7 @@ impl OrganizationCipherBulkSharingStorage for Store {
         tx.commit()
     }
 }
+#[cfg(test)]
+mod archive_review_tests;
 #[cfg(test)]
 mod tests;

@@ -20,6 +20,7 @@ export const shards = {
   ],
   baseline: [
     "baseline-cli", "text-sends", "text-sends-cli",
+    "organization-member-update", "organization-member-update-cli",
     "organization-bulk-confirmation", "organization-bulk-confirmation-cli",
     "user-key-id", "user-key-id-cli", "account-password-cli",
   ],
@@ -31,6 +32,8 @@ export const shards = {
     "organization-collection-mutations", "organization-collection-mutations-cli",
     "organization-members", "organization-members-cli",
     "organization-cipher-sharing", "organization-cipher-sharing-cli",
+    "organization-cipher-collections", "organization-cipher-collections-cli",
+    "organization-cipher-partial", "organization-cipher-partial-cli",
     "account-deletion", "refresh-grants", "cipher-reads", "password-grants",
   ],
   "organization-b": [

@@ -109,7 +109,7 @@ invoke the pinned official Bitwarden CLI as an external process.
   configured-group/backend, adjacent member-edit or full-parity claim.
 - [x] Single organization-cipher sharing subset: allocation-free sequential
   association plans and verified current/historical grant decisions, private annotations,
-  six matching actual HTTP cases (423 requests) and 21
+  seven matching actual HTTP cases (538 requests) and 21
   matching official CLI move/fresh owner/recipient decryption commands per target.
   Attachment-bearing moves, general shared editing/lifecycle, bulk/import/admin,
   configured policy/group/backend and full API parity remain open.
@@ -121,7 +121,7 @@ invoke the pinned official Bitwarden CLI as an external process.
   policy/attachment or full-parity claim.
 - [x] Bulk organization-cipher sharing subset: allocation-free global ID preflight,
   reverse items/forward durable prefixes and separate source/manage/destination ACLs;
-  six matching direct HTTP cases (1001 requests) and 37 CLI
+  seven matching direct HTTP cases (1106 requests) and 37 CLI
   observation commands/31 direct HTTP per target, including two
   direct bulk mutations. No CLI bulk caller, captured trace or standalone browser
   claim; configured groups/policies, attachments, shared Save/lifecycle and full
@@ -136,3 +136,14 @@ invoke the pinned official Bitwarden CLI as an external process.
 - [ ] Two-factor authentication, passkeys, SSO and administrative APIs.
 - [ ] Full import/export compatibility, remaining formats and variants, and upstream protocol regression fixtures.
 - [ ] Security audit, abuse controls, migration policy and production deployment.
+
+## Native organization-member update subset
+
+- [x] Native member PUT default-policy subset: allocation-free staged provider contract, six matching actual HTTP cases/730 requests, and 27 official CLI observer commands/32 direct HTTP requests.
+- [ ] Configured groups/policies/SMTP/events, general sharing, all untested variants and full API parity remain open.
+
+## Organization cipher collection reassignment subset
+
+- [x] PUT collections_v2 subset: allocation-free scoped reassignment/unique-order validation, protected old links and lost-read operation response; six actual HTTP cases/522 requests plus separate Owner/recipient item-collections CLI28/25. Native invalid-subset order, aliases/admin/groups/policies/attachments/full parity remain open.
+
+- [x] PUT/POST private cipher annotations subset: allocation-free READ admission/sealed actor-only plan, readonly/historical grants, exact folder scope, unchanged common cipher revision/payload; six paired HTTP cases/605 requests and separate actual CLI observer 31/37. Actual CLI partial caller, broader variants/groups/policies/attachments/native concurrency/full parity remain open.

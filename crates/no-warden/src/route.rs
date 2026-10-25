@@ -61,6 +61,7 @@ pub enum Route<'a> {
     OrganizationMemberConfirm(&'a str, &'a str),
     OrganizationBulkConfirm(&'a str),
     OrganizationMember(&'a str, &'a str),
+    OrganizationMemberUpdate(&'a str, &'a str),
     OrganizationBulkMemberDelete(&'a str),
     OrganizationMemberDelete(&'a str, &'a str),
     OrganizationMemberRevoke(&'a str, &'a str),
@@ -105,6 +106,8 @@ pub enum Route<'a> {
     CipherCreateWrapped,
     CipherShare(&'a str),
     CipherBulkShare,
+    CipherCollectionsUpdate(&'a str),
+    CipherPartial(&'a str),
     CipherImport,
     CipherPurge,
     CipherBulkTrash,
@@ -165,6 +168,9 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
         let (cipher, attachment) = tail.split_once('/')?;
         return (method == Get && valid_segment(cipher) && valid_segment(attachment))
             .then_some(AttachmentDownload(cipher, attachment));
+    }
+    if method == Put && encoded_bulk_share_path(path) {
+        return Some(CipherBulkShare);
     }
     match (method, path) {
         (
@@ -282,6 +288,9 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
                         }
                         (Put, action) if action.starts_with("users/") => {
                             let rest = action.strip_prefix("users/")?;
+                            if !rest.is_empty() && !rest.contains('/') {
+                                return Some(OrganizationMemberUpdate(organization, rest));
+                            }
                             let (member, kind) =
                                 if let Some(member) = rest.strip_suffix("/restore/vnext") {
                                     (member, 2)
@@ -427,6 +436,12 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
             }
             let tail = path.strip_prefix("/api/ciphers/")?;
             if let Some((id, action)) = tail.split_once('/') {
+                if matches!(method, Put | Post) && !id.is_empty() && action == "partial" {
+                    return Some(CipherPartial(id));
+                }
+                if method == Put && !id.is_empty() && action == "collections_v2" {
+                    return Some(CipherCollectionsUpdate(id));
+                }
                 if method == Put && !id.is_empty() && action == "share" {
                     return Some(CipherShare(id));
                 }
@@ -495,6 +510,21 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
     }
 }
 
+// Compare each static segment independently: encoded separators never create
+// path boundaries, and no dynamic identifier is decoded or broadened here.
+fn encoded_bulk_share_path(path: &str) -> bool {
+    let mut segments = path.split('/');
+    for literal in [b"".as_slice(), b"api", b"ciphers", b"share"] {
+        if !segments
+            .next()
+            .is_some_and(|s| encoded_literal_matches(s, literal))
+        {
+            return false;
+        }
+    }
+    segments.next().is_none()
+}
+
 // Rocket matches percent-encoded static segment characters before its ranked
 // dynamic member UUID route. Compare this literal without decoding any IDs.
 fn encoded_literal_matches(segment: &str, literal: &[u8]) -> bool {
@@ -537,6 +567,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn partial_is_authenticated_put_or_post_with_static_route_precedence() {
+        for method in [Method::Put, Method::Post] {
+            for path in [
+                "/api/ciphers/id/partial",
+                "/api/ciphers/id/partial/?ignored=true",
+            ] {
+                assert_eq!(classify(method, path), Some(Route::CipherPartial("id")));
+            }
+        }
+        assert!(Route::CipherPartial("id").requires_authentication());
+        for method in [Method::Get, Method::Delete, Method::Options] {
+            assert_eq!(classify(method, "/api/ciphers/id/partial"), None);
+        }
+        for path in [
+            "/api/ciphers//partial",
+            "/api/ciphers/id/partial/extra",
+            "/api/ciphers/id/partial-admin",
+        ] {
+            assert_eq!(classify(Method::Put, path), None);
+        }
+        assert_eq!(
+            classify(Method::Put, "/api/ciphers/share"),
+            Some(Route::CipherBulkShare)
+        );
+        assert_eq!(
+            classify(Method::Post, "/api/ciphers/import"),
+            Some(Route::CipherImport)
+        );
+    }
+
+    #[test]
+    fn collections_v2_is_put_only_authenticated_and_preserves_static_precedence() {
+        for path in [
+            "/api/ciphers/id/collections_v2",
+            "/api/ciphers/id/collections_v2/?ignored=true",
+        ] {
+            assert_eq!(
+                classify(Method::Put, path),
+                Some(Route::CipherCollectionsUpdate("id"))
+            );
+        }
+        assert!(Route::CipherCollectionsUpdate("id").requires_authentication());
+        assert_eq!(
+            classify(Method::Put, "/api/ciphers/share"),
+            Some(Route::CipherBulkShare)
+        );
+        assert_eq!(
+            classify(Method::Put, "/api/ciphers/id/share"),
+            Some(Route::CipherShare("id"))
+        );
+        for method in [Method::Get, Method::Post, Method::Delete] {
+            assert_eq!(classify(method, "/api/ciphers/id/collections_v2"), None);
+        }
+        for path in [
+            "/api/ciphers/id/collections",
+            "/api/ciphers/id/collections-admin",
+            "/api/ciphers/id/collections_v2/extra",
+            "/api/ciphers//collections_v2",
+        ] {
+            assert_eq!(classify(Method::Put, path), None);
+        }
+    }
+
+    #[test]
     fn bulk_sharing_static_put_overrides_dynamic_id_without_changing_adjacent_routes() {
         for path in ["/api/ciphers/share", "/api/ciphers/share/?ignored=true"] {
             assert_eq!(classify(Method::Put, path), Some(Route::CipherBulkShare));
@@ -558,6 +652,48 @@ mod tests {
         assert_eq!(classify(Method::Put, "/api/ciphers/share/extra"), None);
     }
     #[test]
+    fn bulk_sharing_matches_measured_encoded_static_segments() {
+        for path in [
+            "/api/ciphers/%73hare",
+            "/api/%63iphers/share",
+            "/api/ciphers/sh%61re",
+            "/api/ciphers/%73hare/?ignored=true",
+        ] {
+            assert_eq!(classify(Method::Put, path), Some(Route::CipherBulkShare));
+        }
+        for (method, path) in [
+            (Method::Post, "/api/ciphers/%73hare"),
+            (Method::Put, "/api/ciphers/%2Fshare"),
+            (Method::Put, "/api/ciphers/sh%00are"),
+            (Method::Put, "/api/ciphers/sh%6"),
+            (Method::Put, "/api/ciphers/%73hare/extra"),
+        ] {
+            assert_ne!(classify(method, path), Some(Route::CipherBulkShare));
+        }
+    }
+    #[test]
+    fn organization_member_update_route_preserves_raw_authenticated_path() {
+        for (org, member) in [
+            ("org", "member"),
+            ("bad%", "bad.id"),
+            ("%30org", "mini-details"),
+        ] {
+            let path =
+                std::format!("/api/organizations/{org}/users/{member}/?organizationId=other");
+            let expected = Route::OrganizationMemberUpdate(org, member);
+            assert_eq!(classify(Method::Put, &path), Some(expected));
+            assert!(expected.requires_authentication());
+        }
+        for path in [
+            "/api/organizations//users/member",
+            "/api/organizations/org/users/",
+            "/api/organizations/org/users/member/extra",
+        ] {
+            assert_eq!(classify(Method::Put, path), None);
+        }
+    }
+
+    #[test]
     fn organization_member_public_keys_route_keeps_raw_org_and_is_authenticated_post() {
         for org in ["org", "bad.id", "%30org", "malformed%"] {
             let uri =
@@ -565,7 +701,10 @@ mod tests {
             let route = Route::OrganizationMemberPublicKeys(org);
             assert_eq!(classify(Method::Post, &uri), Some(route));
             assert!(route.requires_authentication());
-            assert_eq!(classify(Method::Put, &uri), None);
+            assert_eq!(
+                classify(Method::Put, &uri),
+                Some(Route::OrganizationMemberUpdate(org, "public-keys"))
+            );
             assert_eq!(
                 classify(Method::Get, &uri),
                 Some(Route::OrganizationMember(org, "public-keys"))
@@ -593,7 +732,10 @@ mod tests {
             assert_eq!(classify(Method::Get, &uri), Some(route));
             assert!(route.requires_authentication());
             assert_eq!(classify(Method::Post, &uri), None);
-            assert_eq!(classify(Method::Put, &uri), None);
+            assert_eq!(
+                classify(Method::Put, &uri),
+                Some(Route::OrganizationMemberUpdate(org, "mini-details"))
+            );
             assert_eq!(
                 classify(Method::Delete, &uri),
                 Some(Route::OrganizationMemberDelete(org, "mini-details"))
@@ -739,7 +881,10 @@ mod tests {
             let route = Route::OrganizationMemberDelete(org, member);
             assert_eq!(classify(Method::Delete, &path), Some(route));
             assert!(route.requires_authentication());
-            assert_eq!(classify(Method::Put, &path), None);
+            assert_eq!(
+                classify(Method::Put, &path),
+                Some(Route::OrganizationMemberUpdate(org, member))
+            );
             assert_eq!(classify(Method::Options, &path), None);
         }
         for path in [
@@ -774,9 +919,11 @@ mod tests {
                 classify(Method::Delete, &uri),
                 Some(Route::OrganizationMemberDelete(org, "confirm"))
             );
-            for method in [Method::Put, Method::Options] {
-                assert_eq!(classify(method, &uri), None);
-            }
+            assert_eq!(
+                classify(Method::Put, &uri),
+                Some(Route::OrganizationMemberUpdate(org, "confirm"))
+            );
+            assert_eq!(classify(Method::Options, &uri), None);
         }
         assert_eq!(
             classify(Method::Post, "/api/organizations/org/users/member/confirm"),
@@ -838,9 +985,11 @@ mod tests {
                 classify(Method::Delete, &uri),
                 Some(Route::OrganizationMemberDelete(org, "invite"))
             );
-            for method in [Method::Put, Method::Options] {
-                assert_eq!(classify(method, &uri), None);
-            }
+            assert_eq!(
+                classify(Method::Put, &uri),
+                Some(Route::OrganizationMemberUpdate(org, "invite"))
+            );
+            assert_eq!(classify(Method::Options, &uri), None);
         }
         for uri in [
             "/api/organizations//users/invite",
@@ -933,6 +1082,7 @@ mod tests {
                         Method::Post if member == "public-keys" => {
                             Some(Route::OrganizationMemberPublicKeys(org))
                         }
+                        Method::Put => Some(Route::OrganizationMemberUpdate(org, member)),
                         Method::Delete => Some(Route::OrganizationMemberDelete(org, member)),
                         _ => None,
                     };
