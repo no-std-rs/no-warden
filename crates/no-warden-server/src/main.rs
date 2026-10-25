@@ -16,6 +16,7 @@ mod organization_bulk_confirmations;
 mod organization_bulk_member_removal;
 mod organization_bulk_member_status;
 mod organization_cipher_bulk_sharing;
+mod organization_cipher_collections;
 mod organization_cipher_sharing;
 mod organization_collections;
 mod organization_confirmations;
@@ -381,9 +382,11 @@ async fn dispatch_http(
         .and_then(|method| route::classify(method, uri.path()));
     let bulk = route == Some(Route::CipherBulkShare);
     let member_update = matches!(route, Some(Route::OrganizationMemberUpdate(..)));
+    let collections = matches!(route, Some(Route::CipherCollectionsUpdate(_)));
     match dispatch_with_peer(app, method, uri, headers, body, peer.ip()).await {
         Err(error) if bulk => Ok(organization_cipher_bulk_sharing::render_error(error)),
         Err(error) if member_update => Ok(organization_member_update::error_response(error)),
+        Err(error) if collections => Ok(organization_cipher_collections::render_error(error)),
         result => result,
     }
 }
@@ -1425,6 +1428,13 @@ async fn dispatch_with_peer(
             let input = organization_cipher_bulk_sharing::Input::parse(&body)?;
             input.execute(&mut store, &owner)?;
             Ok(StatusCode::OK.into_response())
+        }
+        Route::CipherCollectionsUpdate(raw) => {
+            devices::access_binding(&store.db, &digest(bearer), &owner)?
+                .ok_or_else(unauthorized)?;
+            let id = cipher_reads::path_id(raw)?;
+            let input = organization_cipher_collections::Input::parse(&body)?;
+            Ok(json_response(input.execute(&mut store, &owner, &id)?))
         }
         Route::CipherShare(raw) => {
             devices::access_binding(&store.db, &digest(bearer), &owner)?

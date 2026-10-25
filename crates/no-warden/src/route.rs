@@ -106,6 +106,7 @@ pub enum Route<'a> {
     CipherCreateWrapped,
     CipherShare(&'a str),
     CipherBulkShare,
+    CipherCollectionsUpdate(&'a str),
     CipherImport,
     CipherPurge,
     CipherBulkTrash,
@@ -434,6 +435,9 @@ pub fn classify(method: Method, uri: &str) -> Option<Route<'_>> {
             }
             let tail = path.strip_prefix("/api/ciphers/")?;
             if let Some((id, action)) = tail.split_once('/') {
+                if method == Put && !id.is_empty() && action == "collections_v2" {
+                    return Some(CipherCollectionsUpdate(id));
+                }
                 if method == Put && !id.is_empty() && action == "share" {
                     return Some(CipherShare(id));
                 }
@@ -557,6 +561,39 @@ fn valid_segment(segment: &str) -> bool {
 mod tests {
     extern crate std;
     use super::*;
+
+    #[test]
+    fn collections_v2_is_put_only_authenticated_and_preserves_static_precedence() {
+        for path in [
+            "/api/ciphers/id/collections_v2",
+            "/api/ciphers/id/collections_v2/?ignored=true",
+        ] {
+            assert_eq!(
+                classify(Method::Put, path),
+                Some(Route::CipherCollectionsUpdate("id"))
+            );
+        }
+        assert!(Route::CipherCollectionsUpdate("id").requires_authentication());
+        assert_eq!(
+            classify(Method::Put, "/api/ciphers/share"),
+            Some(Route::CipherBulkShare)
+        );
+        assert_eq!(
+            classify(Method::Put, "/api/ciphers/id/share"),
+            Some(Route::CipherShare("id"))
+        );
+        for method in [Method::Get, Method::Post, Method::Delete] {
+            assert_eq!(classify(method, "/api/ciphers/id/collections_v2"), None);
+        }
+        for path in [
+            "/api/ciphers/id/collections",
+            "/api/ciphers/id/collections-admin",
+            "/api/ciphers/id/collections_v2/extra",
+            "/api/ciphers//collections_v2",
+        ] {
+            assert_eq!(classify(Method::Put, path), None);
+        }
+    }
 
     #[test]
     fn bulk_sharing_static_put_overrides_dynamic_id_without_changing_adjacent_routes() {

@@ -3,6 +3,7 @@ use crate::{Failure, Store, json_guard_error, store};
 use axum::http::StatusCode;
 use no_warden::{
     VaultService,
+    organization_cipher_collections::CipherCollectionsResponseScope,
     organization_cipher_sharing::{
         CipherAccessSnapshot, CipherCollectionAccessData, CipherCollectionAccessRecord,
         CipherOwnership, CipherShareIdsData, CipherSharingCollection, CipherSharingMembership,
@@ -276,6 +277,58 @@ pub fn project(
     if !access.readable() {
         return Ok(None);
     }
+    project_document(
+        db,
+        user,
+        &source,
+        membership.as_ref(),
+        &collections,
+        access,
+        single,
+    )
+    .map(Some)
+}
+
+/// Only a sealed successful core operation may project after losing read access.
+/// The caller holds the same Store operation lock through commit and projection.
+pub(super) fn project_reassignment(
+    db: &Connection,
+    scope: &CipherCollectionsResponseScope<'_, String>,
+) -> rusqlite::Result<Value> {
+    let source = source(db, scope.cipher_id())?.ok_or(rusqlite::Error::InvalidQuery)?;
+    scope.validate_source(&source).map_err(mapped)?;
+    let member = membership(db, scope.actor(), scope.organization_id())?;
+    let rows = associated_collections(db, scope.actor(), scope.cipher_id())?;
+    let access = scope
+        .response_access(
+            member.as_ref().map(CipherSharingMembership::view),
+            &AccessData {
+                cipher_org: source.organization_id.as_deref(),
+                records: &rows,
+            },
+        )
+        .map_err(mapped)?;
+    project_document(
+        db,
+        scope.actor(),
+        &source,
+        member.as_ref(),
+        &rows,
+        access,
+        true,
+    )
+}
+
+fn project_document(
+    db: &Connection,
+    user: &str,
+    source: &CipherSharingSource<String>,
+    membership: Option<&CipherSharingMembership<String>>,
+    collections: &[CipherSharingCollection<String>],
+    access: CipherAccessSnapshot,
+    single: bool,
+) -> rusqlite::Result<Value> {
+    let id = source.id.as_str();
     let text: String = db.query_row(
         "SELECT document FROM items WHERE id=?1 AND kind='cipher'",
         [id],
@@ -283,6 +336,45 @@ pub fn project(
     )?;
     let mut doc: Value = serde_json::from_str(&text).map_err(|_| rusqlite::Error::InvalidQuery)?;
     let fields = doc.as_object_mut().ok_or(rusqlite::Error::InvalidQuery)?;
+    if source.organization_id.is_some() {
+        // Native shared responses omit unknown outer fields while preserving
+        // nested encrypted extension values. The private stored JSON is untouched.
+        fields.retain(|name, _| {
+            matches!(
+                name.as_str(),
+                "archivedDate"
+                    | "attachments"
+                    | "bankAccount"
+                    | "card"
+                    | "collectionIds"
+                    | "creationDate"
+                    | "deletedDate"
+                    | "driversLicense"
+                    | "edit"
+                    | "favorite"
+                    | "fields"
+                    | "folderId"
+                    | "id"
+                    | "identity"
+                    | "key"
+                    | "login"
+                    | "name"
+                    | "notes"
+                    | "object"
+                    | "organizationId"
+                    | "organizationUseTotp"
+                    | "passport"
+                    | "passwordHistory"
+                    | "permissions"
+                    | "reprompt"
+                    | "revisionDate"
+                    | "secureNote"
+                    | "sshKey"
+                    | "type"
+                    | "viewPassword"
+            )
+        });
+    }
     for name in [
         "encryptedFor",
         "encryptedByKeyId",
@@ -314,14 +406,14 @@ pub fn project(
     fields.entry("reprompt").or_insert(json!(0));
     fields.entry("favorite").or_insert(json!(false));
     doc["object"] = json!("cipherDetails");
-    let full = source.owner_id.is_some()
-        || membership
-            .as_ref()
-            .is_some_and(CipherSharingMembership::full_access);
+    let full =
+        source.owner_id.is_some() || membership.is_some_and(CipherSharingMembership::full_access);
+    let restricted;
     let visible = if full {
         collections
     } else {
-        visible_collections(db, user, id)?
+        restricted = visible_collections(db, user, id)?;
+        &restricted
     };
     // A single GET keeps native's unfiltered grant flags. List/sync instead
     // project permissions from the viewer's currently visible collections.
@@ -331,10 +423,10 @@ pub fn project(
         resolve_cipher_access(
             user,
             source.ownership().map_err(mapped)?,
-            membership.as_ref().map(CipherSharingMembership::view),
+            membership.map(CipherSharingMembership::view),
             &AccessData {
                 cipher_org: source.organization_id.as_deref(),
-                records: &visible,
+                records: visible,
             },
         )
         .map_err(mapped)?
@@ -377,7 +469,7 @@ pub fn project(
     {
         doc["archivedDate"] = json!(archived);
     }
-    Ok(Some(doc))
+    Ok(doc)
 }
 
 // Bound candidate materialization to personal ownership and canonical membership

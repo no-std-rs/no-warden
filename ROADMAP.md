@@ -135,3 +135,7 @@ invoke the pinned official Bitwarden CLI as an external process.
 
 - [x] Native member PUT default-policy subset: allocation-free staged provider contract, six matching actual HTTP cases/730 requests, and 27 official CLI observer commands/32 direct HTTP requests.
 - [ ] Configured groups/policies/SMTP/events, general sharing, all untested variants and full API parity remain open.
+
+## Organization cipher collection reassignment subset
+
+- [x] PUT collections_v2 subset: allocation-free scoped reassignment/unique-order validation, protected old links and lost-read operation response; six actual HTTP cases/522 requests plus separate Owner/recipient item-collections CLI28/25. Native invalid-subset order, aliases/admin/groups/policies/attachments/full parity remain open.

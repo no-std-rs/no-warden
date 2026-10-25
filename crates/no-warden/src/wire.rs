@@ -1821,6 +1821,30 @@ impl<const N: usize> crate::organization_cipher_sharing::CipherShareIdsData
     }
 }
 
+/// Borrowed collection-only selection. Required exact camel/Pascal field names
+/// and the one-field positional representation; no opaque cipher DTO is decoded.
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CipherCollectionsRequest<'a, const N: usize> {
+    #[serde(borrow, alias = "CollectionIds")]
+    pub collection_ids: BoundedList<&'a str, N>,
+}
+impl<const N: usize> core::fmt::Debug for CipherCollectionsRequest<'_, N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("CipherCollectionsRequest([REDACTED])")
+    }
+}
+impl<const N: usize> crate::organization_cipher_sharing::CipherShareIdsData
+    for CipherCollectionsRequest<'_, N>
+{
+    fn len(&self) -> usize {
+        self.collection_ids.len()
+    }
+    fn get(&self, index: usize) -> Option<&str> {
+        self.collection_ids.get(index).copied()
+    }
+}
+
 /// Minimal borrowed bulk decision fields. Unknown opaque cipher fields remain in
 /// the adapter's original document; do not serialize this view as a full cipher.
 #[derive(Clone, Deserialize)]
