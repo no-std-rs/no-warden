@@ -39,13 +39,13 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 127 routed patterns, 66 with typed requests, 120 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 128 routed patterns, 67 with typed requests, 121 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 124 partial and 170 unimplemented. Query/rank/configuration
+status: 125 partial and 169 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
@@ -56,8 +56,8 @@ responses, and attachment responses. Bulk cipher lists use the generic `ListResp
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 121 patterns, negative
-HTTP evidence for 120, 329 named HTTP cases, and 55 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 122 patterns, negative
+HTTP evidence for 121, 337 named HTTP cases, and 55 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -1736,9 +1736,9 @@ GET bodies are ignored, including invalid JSON/UTF-8 and different media types.
 seven-field projection. Trailing slashes and encoded static mini-details letters
 or hyphens are matched before the UUID-member route. POST/PATCH unsupported
 methods and the existing DELETE UUID fallback are compared. Reference PUT 422 is
-an observation of the adjacent still-unimplemented member-edit family and is
-excluded from matched GET claims; this slice adds no PUT route or artificial
-fallback for that unimplemented service.
+an observation of the adjacent member-edit family, excluded from the mini GET
+milestone. The separate [native update subset](#native-organization-member-update-subset)
+now covers its default-policy PUT contract; mini GET adds no mutation behavior.
 
 `OrganizationMemberMiniStorage` supplies a stable minimal indexed view through
 `OrganizationMemberMiniData` and `OrganizationMemberMiniRecord`. The core service
@@ -1840,7 +1840,7 @@ backend, timing, concurrency or durability variants. The RISC-V consumer links
 the real decoder/service/prefix/final/access paths with fixed storage; firmware
 is not executed and no opaque adapter serializer is implied by that link.
 
-Both actual targets pass six HTTP cases: 423 counted requests,
+Both actual targets pass seven HTTP cases: 538 counted requests,
 2 password logins and 2 refreshes,
 excluding 2 registrations/4
 registration requests. The separate official CLI 2026.10.0 comparison executes
@@ -1850,6 +1850,39 @@ logins, excluding 4 registration requests.
 It decrypts the same-ID item immediately and after owner sync/fresh-cache login,
 then in a fresh confirmed selective recipient cache, including collection
 decryption. These totals are separate from the unchanged 120-command baseline.
+
+A valid older client revision rejects the final payload phase after successful
+association/account-revision steps persist. Equal, future, malformed, missing and
+null revisions follow the measured accepted controls. Selection errors win before
+the final revision guard; null organization runs the same guard without association
+steps. Timestamp parsing stays in the provider; the core controls the final phase.
+The final SQLite transaction rechecks live destination grants in the target
+organization, retaining historical links for independently verified later reads.
+
+Additional paired Vaultwarden 1.37.4 review probes distinguish historical read
+admission from response flags. After revoking the older membership, a confirmed
+current-organization User still reads the cipher, but all three projections hide
+the older collection ID. Single GET retains edit/delete/restore and password
+visibility; list/sync clear those flags. Restoring the older membership restores
+its collection and flags; removing it denies the historical reader on both
+servers. Actual shared writes were not exercised by these probes.
+
+Personal-target sharing synchronizes the archive annotation with the payload in
+the final transaction. Missing/null `archivedDate` clears it; the measured valid
+older/newer dates replace it and render with six fractional digits. Malformed
+date variants remain outside this comparison. A complete positional inner cipher
+array now rejects with 422 before association or revision effects, like the native
+target; native Rocket's object-valued `error` and the adapter's string-valued
+schema error remain distinct. These direct probes do not add CLI or browser claims
+or change the seven-case suite totals above.
+
+Organization attachment metadata authorization remains a separate open parity
+item: the current attachment metadata provider requires personal ownership.
+Native-only attachment probes accept omitted/empty/partial/complete rewrap maps.
+Modern attachments sharing the unchanged per-item key remain decryptable in all
+four cases, so a complete-map requirement would reject measured valid behavior.
+Legacy direct-user-key attachments need the relevant client rewrap to decrypt;
+opaque payload acceptance alone does not establish attachment-flow compatibility.
 
 The [pinned CLI command](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/apps/cli/src/admin-console/commands/share.command.ts#L88)
 delegates to the bundled SDK `share_cipher`/`put_share` path. The paired runner
@@ -1957,11 +1990,14 @@ remain unfinished.
 
 This partial `PUT /api/ciphers/share` slice accepts the measured native
 attachment-free secure-note bulk wrapper. Both actual Vaultwarden 1.37.4 and
-no-warden pass six named direct HTTP cases (1001 counted requests,
+no-warden pass seven named direct HTTP cases (1106 counted requests,
 3 password logins), excluding 3
 registrations/6 registration requests per target.
 The [pinned declaration](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L1021) remains separate from that runtime executable.
-All full-upstream-parity flags remain false.
+All full-upstream-parity flags remain false. A separate seven-case routing probe
+verifies canonical PUT and three percent-encoded static-segment forms reach the
+bulk handler. Invalid encoded paths and POST controls remain non-mutating;
+the native 422 versus local 404 fallback difference is explicitly unimplemented.
 
 Required exact `ciphers` and `collectionIds` arrays and the observed positional
 `[ciphers, collectionIds]` form are compared. Entire typed structure and every
@@ -1990,6 +2026,20 @@ Missing/null `folderId` clears the actor's folder. Invalid or foreign
 folders fail after successful collection associations have already committed.
 Final payload/ownership and the actor's folder/favorite update atomically locally,
 preserving other viewers' annotations and opaque encrypted fields/extensions.
+Personal-target archive metadata joins that final transaction: missing/null clears
+it; measured valid older/newer dates replace it and normalize to six fractional
+digits. A separate five-case comparison checks subsequent GET/list/sync agreement
+and preserved opaque payload/private state. Archive-write failure rolls back the
+current item and account locally; malformed dates remain unmeasured for this route.
+
+A dedicated revision-metadata case accepts older, future, malformed, omitted,
+null and equal date strings for personal-to-organization updates, plus an older
+same-org shared update. Those successes apply opaque payloads and advance cipher
+and reader account revisions while retaining each viewer's private annotations.
+A numeric date is a whole-request 422 with unchanged state. Bulk therefore does
+not inherit the separately measured single-share stale-date guard. Empty selected
+collections reject before provider access; every reachable final target plan has
+nonempty exact destination checks. This is not a concurrency-parity claim.
 
 Success is exactly empty 200 with no Content-Type. There is no bulk list response
 or complete typed cipher serializer. `CipherBulkShareRequest` is a caller-bounded
@@ -2015,11 +2065,44 @@ separate integration evidence reserved for a later browser harness PR. This
 standalone API slice claims no actual browser execution or ancillary-read coverage.
 General shared Save/edit/lifecycle, attachments, other item types, configured groups,
 policies/SMTP, backend/failure/concurrency variants and full parity remain open.
-Fourteen core tests, the static-route precedence test, twelve host regressions
+Fourteen core tests, the static-route precedence test, fourteen host regressions
 and the real fixed-storage noalloc decoder/prefix/final/source-access link
 exercise provide local contracts;
 firmware is linked rather than executed, and these are not upstream backend proofs.
 
+## Paired organization-owner browser sharing
+
+The same pinned Vaultwarden Web2026.7.0, Chromium149.0.7827.55 and
+Playwright1.64.1 now execute the whole portable CI comparison on both actual
+servers. The unchanged mandatory ten-check personal-vault suite runs first; the
+organization extension then creates a personal secure note, organization and
+collection using ordinary UI controls, assigns that note with exactly one
+`PUT /api/ciphers/share`200, and verifies decrypted equality immediately and
+after ordinary login/sync in a fresh empty browser context. The ordinary fresh
+browser sync must place the exact UI-created cipher in the expected organization
+and selected collection; a successful no-op share cannot satisfy that check. Registration is
+native HTTP setup, separately counted from browser observations.
+
+This is one confirmed owner's attachment-free secure-note assignment in the
+default configuration. Background method/path/status counts are observations,
+not fixed protocol budgets. No recipient-browser, general shared Save/edit,
+shared lifecycle, attachment, configured-group/policy, CLI-execution or full API
+parity claim follows. The earlier combined-runtime proof remains historical
+and separate from this fresh whole portable harness run. No route or named
+HTTP-case count is added by these browser phases.
+## Native organization-member update subset
+
+`PUT /api/organizations/{org_id}/users/{member_id}` is verified against actual Vaultwarden1.37.4 by six HTTP cases (730 counted requests per target). Success is200 with zero response bytes and no Content-Type. Native PUT200 has an empty body and no Content-Type. Lower-camel type is required; three/four positional slots are supported. Valid JSON without Content-Type succeeds. Only confirmed Owner/Admin actors are admitted; the last CONFIRMED Owner is protected. Admitted updates clear direct grants and advance the target account revision, retain the valid ordered prefix on later collection/group failure, and commit the new role only after final validation. New full-access roles, including measured full Custom, skip collection lookups. Raw numeric/string4 gains full access only with all three JSON-true collection permission bits; Manager/Custom names retain distinct provenance. Rich member permissions are null for restricted roles and an exact twelve-field object for full Custom; profile organization permissions are a separate projection. The host decodes at most4096 entries in each selection list before mutation; that local work budget is not an upstream limit claim.
+
+A separate official CLI2026.10.0 observer passes27 commands and32 direct HTTP requests, including3 direct PUT mutations. It verifies cached data before explicit sync, selective encrypted collection decryption after sync, password lock/unlock after promotion, fresh-cache decryption and retained personal note and organization key. Existing argv forms are reused; this is not a CLI member-edit caller or request trace.
+
+Default policy and no-created-groups fixtures only. Configured groups/policies/MyItems, SMTP/events, general sharing, concurrency/provider-failure parity and full API parity remain open. Per-phase live SQL checks and rollback/failure tests are local engineering guarantees. Direct PUT setup is not a CLI mutation caller or captured request/browser trace.
+
+Constructed borrowed OrganizationMemberUpdateRequest and real update_org_member phases through a stack-owned provider, with caller-owned selections and sealed authority. The DTO is constructed rather than JSON-decoded because this link consumer codec does not support deserialize_any. Linked RISC-V proof excludes alloc/std/undefined symbols; firmware execution, SQL/HTTP/crypto and upstream failure-injection parity are not inferred.
+
+The [pinned route declaration](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/organizations.rs#L1485) belongs to the inventoried revision, independently of the tested Vaultwarden 1.37.4 runtime. The [pinned shared client API](https://github.com/bitwarden/clients/blob/b449ac1d255784380d75ef026343198891286be7/libs/admin-console/src/common/organization-user/services/default-organization-user-api.service.ts#L267-L279) is a static caller reference; no actual member-edit browser or CLI mutation caller is inferred.
+
+[Core service](../crates/no-warden/src/organization_member_update.rs#L274), [HTTP conformance](../crates/no-warden-conformance/src/organization_member_update.rs), and [actual CLI observer](../crates/no-warden-conformance/src/organization_member_update_cli.rs) are independently authored sources. The source hash ledger binds these files; the inventory remains partial.
 ## Organization cipher collection reassignment
 
 `PUT /api/ciphers/{cipher_id}/collections_v2` reassigns collection links for the

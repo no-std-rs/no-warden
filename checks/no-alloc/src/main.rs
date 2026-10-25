@@ -60,6 +60,11 @@ use no_warden::{
         OrganizationMemberStatusRecord, OrganizationMemberStatusStorage,
         ValidatedOrganizationMemberStatus,
     },
+    organization_member_update::{
+        OrganizationMemberUpdateCollection, OrganizationMemberUpdateRecord,
+        OrganizationMemberUpdateStorage, ValidatedOrganizationMemberUpdate,
+        ValidatedOrganizationMemberUpdateGrant, ValidatedOrganizationMemberUpdateStart,
+    },
     organization_members::{
         OrganizationMemberCollection, OrganizationMemberDetailQuery,
         OrganizationMemberDetailStorage, OrganizationMemberGroup, OrganizationMemberListData,
@@ -103,13 +108,14 @@ use no_warden::{
         OrganizationBulkMemberRevokeRequest, OrganizationCollectionCreateRequest,
         OrganizationConfirmRequest, OrganizationCreateRequest, OrganizationInviteCollection,
         OrganizationInvitePermissions, OrganizationInviteRequest,
-        OrganizationMemberPublicKeysRequest, OrganizationPlanType, PasswordLoginRequest,
-        PasswordOrOtpRequest, PreloginKdfSettings, PreloginRequest, PreloginResponse,
-        ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest, RegistrationAuthentication,
-        RegistrationCredentials, RegistrationFinishRequest, RegistrationFinishResponse,
-        RegistrationUnlock, RegistrationVerificationRequest, RegistrationVerificationToken,
-        SecretVerificationRequest, SendAccessTokenRequest, SendFileData, TextSendRequest,
-        UserKeyIdRequest, UserPublicKeyResponse, WebAuthnCredentialsResponse,
+        OrganizationMemberPublicKeysRequest, OrganizationMemberUpdateRequest, OrganizationPlanType,
+        PasswordLoginRequest, PasswordOrOtpRequest, PreloginKdfSettings, PreloginRequest,
+        PreloginResponse, ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest,
+        RegistrationAuthentication, RegistrationCredentials, RegistrationFinishRequest,
+        RegistrationFinishResponse, RegistrationUnlock, RegistrationVerificationRequest,
+        RegistrationVerificationToken, SecretVerificationRequest, SendAccessTokenRequest,
+        SendFileData, TextSendRequest, UserKeyIdRequest, UserPublicKeyResponse,
+        WebAuthnCredentialsResponse,
     },
 };
 
@@ -150,6 +156,10 @@ struct PurgeProbe {
     shared_cipher: bool,
     bulk_associations: usize,
     bulk_commits: usize,
+    member_update_role: i32,
+    member_update_access_all: bool,
+    member_update_grants: u16,
+    member_update_revision: u32,
     reassignment_links: [bool; 3],
     reassignment_revisions: usize,
 }
@@ -252,6 +262,13 @@ impl Storage for PurgeProbe {
 impl CipherReadStorage for PurgeProbe {}
 impl OrganizationCipherSharingStorage for PurgeProbe {
     type ShareId = &'static str;
+    fn sharing_revision_is_older(
+        &mut self,
+        source: &CipherSharingSource<Self::ShareId>,
+        requested: &str,
+    ) -> Result<bool, ()> {
+        Ok(source.revision == "embedded-source-revision" && requested == "embedded-old-revision")
+    }
     fn sharing_source(
         &mut self,
         id: &str,
@@ -929,6 +946,91 @@ impl OrganizationBulkMemberRemovalStorage for PurgeProbe {
             return Err(());
         }
         self.remove_organization_member(plan.removal())
+    }
+}
+impl OrganizationMemberUpdateStorage for PurgeProbe {
+    type UpdateId = &'static str;
+    fn update_member(
+        &mut self,
+        org: &str,
+        member: &str,
+    ) -> Result<Option<OrganizationMemberUpdateRecord<Self::UpdateId>>, ()> {
+        Ok((self.organization_present
+            && org == "embedded-org"
+            && member == "embedded-update-member")
+            .then_some(OrganizationMemberUpdateRecord {
+                membership_id: "embedded-update-member",
+                organization_id: "embedded-org",
+                user_id: "existing-account",
+                role: self.member_update_role,
+                status: 1,
+                access_all: self.member_update_access_all,
+                groups_configured: false,
+            }))
+    }
+    fn update_confirmed_owner_count(&mut self, _: &str) -> Result<u64, ()> {
+        Ok(1)
+    }
+    fn update_collection(
+        &mut self,
+        org: &str,
+        id: &str,
+    ) -> Result<Option<OrganizationMemberUpdateCollection<Self::UpdateId>>, ()> {
+        Ok(
+            (org == "embedded-org" && id == "embedded-update-collection").then_some(
+                OrganizationMemberUpdateCollection {
+                    id: "embedded-update-collection",
+                    organization_id: "embedded-org",
+                },
+            ),
+        )
+    }
+    fn begin_member_update(
+        &mut self,
+        p: &ValidatedOrganizationMemberUpdateStart<'_, Self::UpdateId>,
+    ) -> Result<(), ()> {
+        if !self.organization_present
+            || p.owner() != "embedded-owner"
+            || p.organization() != "embedded-org"
+            || p.membership_id() != "embedded-update-member"
+            || p.user_id() != "existing-account"
+            || p.previous_role() != self.member_update_role
+            || p.status() != 1
+            || p.previous_access_all() != self.member_update_access_all
+        {
+            return Err(());
+        }
+        self.member_update_grants = 0;
+        self.member_update_revision += 1;
+        Ok(())
+    }
+    fn append_member_update_grant(
+        &mut self,
+        p: &ValidatedOrganizationMemberUpdateGrant<'_, '_, Self::UpdateId>,
+    ) -> Result<(), ()> {
+        if !self.organization_present
+            || p.start().previous_role() != self.member_update_role
+            || p.start().previous_access_all() != self.member_update_access_all
+            || p.selection().id != "embedded-update-collection"
+        {
+            return Err(());
+        }
+        self.member_update_grants = 1;
+        Ok(())
+    }
+    fn finish_member_update(
+        &mut self,
+        p: &ValidatedOrganizationMemberUpdate<'_, '_, Self::UpdateId>,
+    ) -> Result<(), ()> {
+        if !self.organization_present
+            || p.start().previous_role() != self.member_update_role
+            || p.start().previous_access_all() != self.member_update_access_all
+        {
+            return Err(());
+        }
+        self.member_update_role = p.start().new_role();
+        self.member_update_access_all = p.start().new_access_all();
+        Ok(())
     }
 }
 impl OrganizationMemberStatusStorage for PurgeProbe {
@@ -1761,6 +1863,10 @@ pub extern "C" fn _start() -> ! {
             shared_cipher: false,
             bulk_associations: 0,
             bulk_commits: 0,
+            member_update_role: 2,
+            member_update_access_all: false,
+            member_update_grants: 7,
+            member_update_revision: 0,
             reassignment_links: [true, true, false],
             reassignment_revisions: 0,
         };
@@ -1777,7 +1883,7 @@ pub extern "C" fn _start() -> ! {
         // The real sharing service retains an association prefix after a later
         // missing selection, then reaches the sealed payload phase on success.
         let share = serde_json_core::from_slice::<CipherShareRequest<'_, 2>>(black_box(
-            br#"{"collectionIds":["embedded-share-collection","missing"],"cipher":{"type":2,"organizationId":"embedded-org","encryptedFor":"embedded-owner","name":"2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","notes":"2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","secureNote":{"type":0},"key":null}}"#,
+            br#"{"collectionIds":["embedded-share-collection","missing"],"cipher":{"type":2,"organizationId":"embedded-org","encryptedFor":"embedded-owner","name":"2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","notes":"2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","secureNote":{"type":0},"key":null,"lastKnownRevisionDate":"embedded-old-revision"}}"#,
         ));
         if let Ok((request, _)) = share {
             let _ = black_box(organization_service.share_cipher(
@@ -1790,10 +1896,24 @@ pub extern "C" fn _start() -> ! {
                 organization_service.storage().sharing_associations,
                 organization_service.storage().shared_cipher,
             ));
+            let mut stale = request.cipher.clone();
+            stale.last_known_revision_date = Some(black_box("embedded-old-revision"));
             let _ = black_box(organization_service.share_cipher(
                 "embedded-owner",
                 "embedded-share-source",
-                &request.cipher,
+                &stale,
+                ["embedded-share-collection"].as_slice(),
+            ));
+            black_box((
+                organization_service.storage().sharing_associations,
+                organization_service.storage().shared_cipher,
+            ));
+            let mut current = request.cipher.clone();
+            current.last_known_revision_date = None;
+            let _ = black_box(organization_service.share_cipher(
+                "embedded-owner",
+                "embedded-share-source",
+                &current,
                 ["embedded-share-collection"].as_slice(),
             ));
             black_box((
@@ -1938,6 +2058,63 @@ pub extern "C" fn _start() -> ! {
                 &mut organization_output,
             ));
         }
+        // Reach native borrowed update input and the actual ordered core phases.
+        // Flexible integer/string role decoding needs deserialize_any, so this
+        // embedding constructs its borrowed DTO without assuming codec support.
+        let mut update_collections = no_warden::bounded::BoundedList::<_, 2>::new();
+        let _ = update_collections.push(OrganizationInviteCollection {
+            id: "embedded-update-collection",
+            read_only: true,
+            hide_passwords: false,
+            manage: false,
+        });
+        let _ = update_collections.push(OrganizationInviteCollection {
+            id: "missing",
+            read_only: false,
+            hide_passwords: false,
+            manage: false,
+        });
+        let update = OrganizationMemberUpdateRequest::<0, 2> {
+            role: OrganizationPlanType::Integer(3),
+            collections: Some(update_collections),
+            groups: None,
+            permissions: OrganizationInvitePermissions::default(),
+        };
+        let _ = black_box(organization_service.update_org_member(
+            "embedded-owner",
+            "embedded-org",
+            "embedded-update-member",
+            black_box(&update),
+        ));
+        black_box((
+            organization_service.storage().member_update_role,
+            organization_service.storage().member_update_grants,
+            organization_service.storage().member_update_revision,
+        ));
+        let mut update_collections = no_warden::bounded::BoundedList::<_, 1>::new();
+        let _ = update_collections.push(OrganizationInviteCollection {
+            id: "embedded-update-collection",
+            read_only: false,
+            hide_passwords: true,
+            manage: false,
+        });
+        let update = OrganizationMemberUpdateRequest::<0, 1> {
+            role: OrganizationPlanType::Integer(3),
+            collections: Some(update_collections),
+            groups: None,
+            permissions: OrganizationInvitePermissions::default(),
+        };
+        let _ = black_box(organization_service.update_org_member(
+            "embedded-owner",
+            "embedded-org",
+            "embedded-update-member",
+            black_box(&update),
+        ));
+        black_box((
+            organization_service.storage().member_update_role,
+            organization_service.storage().member_update_grants,
+            organization_service.storage().member_update_revision,
+        ));
         if let Ok(response) =
             organization_service.get_organization("embedded-owner", "embedded-org")
         {
@@ -2536,6 +2713,7 @@ pub extern "C" fn _start() -> ! {
             provider.account_present,
         ));
     }
+    black_box(classify(Method::Put, black_box("/api/ciphers/%73hare")));
     black_box(classify(Method::Post, black_box("/api/ciphers/purge")));
     black_box(classify(Method::Post, black_box("/api/sends/file/v2")));
     black_box(classify(

@@ -40,6 +40,7 @@ pub mod organization_member_mini_details;
 pub mod organization_member_public_keys;
 pub mod organization_member_removal;
 pub mod organization_member_status;
+pub mod organization_member_update;
 pub mod organization_members;
 pub mod organization_web_reads;
 pub mod organizations;
