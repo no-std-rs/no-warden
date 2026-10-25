@@ -139,3 +139,5 @@ invoke the pinned official Bitwarden CLI as an external process.
 ## Organization cipher collection reassignment subset
 
 - [x] PUT collections_v2 subset: allocation-free scoped reassignment/unique-order validation, protected old links and lost-read operation response; six actual HTTP cases/522 requests plus separate Owner/recipient item-collections CLI28/25. Native invalid-subset order, aliases/admin/groups/policies/attachments/full parity remain open.
+
+- [x] PUT/POST private cipher annotations subset: allocation-free READ admission/sealed actor-only plan, readonly/historical grants, exact folder scope, unchanged common cipher revision/payload; six paired HTTP cases/605 requests and separate actual CLI observer 31/37. Actual CLI partial caller, broader variants/groups/policies/attachments/native concurrency/full parity remain open.

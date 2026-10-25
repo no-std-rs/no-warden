@@ -22,6 +22,9 @@ use no_warden::{
         OrganizationCipherCollectionsStorage, ValidatedCipherCollectionAdd,
         ValidatedCipherCollectionsFinish,
     },
+    organization_cipher_partial::{
+        CipherPartialFolder, CipherPartialStorage, ValidatedCipherPartial,
+    },
     organization_cipher_sharing::{
         CipherCollectionAccessData, CipherCollectionAccessRecord, CipherOwnership,
         CipherSharingCollection, CipherSharingMembership, CipherSharingSource,
@@ -99,11 +102,12 @@ use no_warden::{
         AuthRequestCreateRequest, AuthRequestListResponse, AuthRequestLoginRequest,
         AuthRequestResponse, AuthRequestUpdateRequest, AvatarUpdateRequest,
         CipherBulkShareItemRequest, CipherBulkShareRequest, CipherCollectionsRequest,
-        CipherIdsRequest, CipherRequest, CipherShareRequest, ClientCredentialsRequest,
-        DeviceListResponse, DevicePushTokenRequest, DeviceResponse, DomainSettingsRequest,
-        DomainSettingsResponse, DomainSettingsUpdateResponse, FileSendRequest, FolderRequest,
-        ImportRequest, InitializedAccountKeysResponse, KnownDeviceRequest, KnownDeviceResponse,
-        MasterPasswordPolicy, MasterPasswordPolicyResponse, OrganizationBulkConfirmRequest,
+        CipherIdsRequest, CipherPartialRequest, CipherRequest, CipherShareRequest,
+        ClientCredentialsRequest, DeviceListResponse, DevicePushTokenRequest, DeviceResponse,
+        DomainSettingsRequest, DomainSettingsResponse, DomainSettingsUpdateResponse,
+        FileSendRequest, FolderRequest, ImportRequest, InitializedAccountKeysResponse,
+        KnownDeviceRequest, KnownDeviceResponse, MasterPasswordPolicy,
+        MasterPasswordPolicyResponse, OrganizationBulkConfirmRequest,
         OrganizationBulkMemberRemovalRequest, OrganizationBulkMemberRestoreRequest,
         OrganizationBulkMemberRevokeRequest, OrganizationCollectionCreateRequest,
         OrganizationConfirmRequest, OrganizationCreateRequest, OrganizationInviteCollection,
@@ -162,6 +166,9 @@ struct PurgeProbe {
     member_update_revision: u32,
     reassignment_links: [bool; 3],
     reassignment_revisions: usize,
+    partial_favorite: bool,
+    partial_folder: bool,
+    partial_account_revision: u64,
 }
 impl PurgeProbe {
     fn organization_record(&self) -> OrganizationRecord<'_> {
@@ -343,6 +350,123 @@ impl OrganizationCipherSharingStorage for PurgeProbe {
             return Err(());
         }
         self.shared_cipher = true;
+        Ok(())
+    }
+}
+// Partial updates deliberately admit this read-only direct grant without manage.
+// Facts own their state and never borrow a replaceable provider cache.
+struct PartialFacts {
+    shared: bool,
+}
+impl CipherCollectionAccessData for PartialFacts {
+    fn len(&self) -> usize {
+        usize::from(self.shared)
+    }
+    fn get(&self, index: usize) -> Option<CipherCollectionAccessRecord<'_>> {
+        (self.shared && index == 0).then_some(CipherCollectionAccessRecord {
+            cipher_organization_id: Some("embedded-org"),
+            collection: CipherSharingCollection {
+                id: "embedded-partial-collection",
+                user_id: "embedded-owner",
+                organization_id: "embedded-org",
+                assigned: true,
+                read_only: true,
+                hide_passwords: false,
+                manage: false,
+            },
+        })
+    }
+}
+impl CipherPartialStorage for PurgeProbe {
+    type PartialId = &'static str;
+    type PartialAccess = PartialFacts;
+    fn cipher_partial_source(
+        &mut self,
+        cipher: &str,
+    ) -> Result<Option<CipherSharingSource<Self::PartialId>>, ()> {
+        Ok(match cipher {
+            "embedded-partial-personal" => Some(CipherSharingSource {
+                id: "embedded-partial-personal",
+                owner_id: Some("embedded-owner"),
+                organization_id: None,
+                revision: "unchanged-partial-revision",
+            }),
+            "embedded-partial-shared" => Some(CipherSharingSource {
+                id: "embedded-partial-shared",
+                owner_id: None,
+                organization_id: Some("embedded-org"),
+                revision: "unchanged-partial-revision",
+            }),
+            _ => None,
+        })
+    }
+    fn cipher_partial_membership(
+        &mut self,
+        actor: &str,
+        org: &str,
+    ) -> Result<Option<CipherSharingMembership<Self::PartialId>>, ()> {
+        Ok(
+            (actor == "embedded-owner" && org == "embedded-org").then_some(
+                CipherSharingMembership {
+                    user_id: "embedded-owner",
+                    organization_id: "embedded-org",
+                    role: 2,
+                    status: 2,
+                    access_all: false,
+                },
+            ),
+        )
+    }
+    fn cipher_partial_collections(
+        &mut self,
+        _: &str,
+        source: &CipherSharingSource<Self::PartialId>,
+    ) -> Result<Self::PartialAccess, ()> {
+        Ok(PartialFacts {
+            shared: source.organization_id.is_some(),
+        })
+    }
+    fn cipher_partial_folder(
+        &mut self,
+        folder: &str,
+    ) -> Result<Option<CipherPartialFolder<Self::PartialId>>, ()> {
+        Ok(match folder {
+            "embedded-private-folder" => Some(CipherPartialFolder {
+                id: "embedded-private-folder",
+                owner_id: "embedded-owner",
+            }),
+            "embedded-foreign-folder" => Some(CipherPartialFolder {
+                id: "embedded-foreign-folder",
+                owner_id: "other-owner",
+            }),
+            _ => None,
+        })
+    }
+    fn commit_cipher_partial(&mut self, plan: &ValidatedCipherPartial<'_>) -> Result<(), ()> {
+        let source = self.cipher_partial_source(plan.cipher_id())?.ok_or(())?;
+        let member = if let Some(org) = source.organization_id {
+            self.cipher_partial_membership(plan.actor(), org)?
+        } else {
+            None
+        };
+        let facts = self.cipher_partial_collections(plan.actor(), &source)?;
+        let folder = if let Some(id) = plan.folder_id() {
+            self.cipher_partial_folder(id)?
+        } else {
+            None
+        };
+        plan.validate_live(
+            &source,
+            member.as_ref().map(CipherSharingMembership::view),
+            &facts,
+            folder.as_ref().map(CipherPartialFolder::view),
+        )
+        .map_err(|_| ())?;
+        // Only actor-private state changes. No common cipher or key storage API
+        // is invoked, and the source revision remains its opaque original token.
+        self.partial_favorite = plan.favorite();
+        self.partial_folder = plan.folder_id().is_some();
+        self.partial_account_revision += 1;
         Ok(())
     }
 }
@@ -1869,6 +1993,9 @@ pub extern "C" fn _start() -> ! {
             member_update_revision: 0,
             reassignment_links: [true, true, false],
             reassignment_revisions: 0,
+            partial_favorite: true,
+            partial_folder: false,
+            partial_account_revision: 0,
         };
         let organization = OrganizationCreateRequest {
             billing_email: "owner@example.com",
@@ -1880,6 +2007,36 @@ pub extern "C" fn _start() -> ! {
         };
         let mut organization_output = [0; 8192];
         let mut organization_service = VaultService::new(&mut provider);
+        // Actual borrowed JSON decode + sealed service + live provider recheck:
+        // shared readonly admission, personal tuple clear, and foreign-folder
+        // rejection. Fixed stack storage supplies every snapshot and annotation.
+        for (body, cipher) in [
+            (
+                br#"{"folderId":"embedded-private-folder","favorite":false}"#.as_slice(),
+                "embedded-partial-shared",
+            ),
+            (br#"[null,true]"#.as_slice(), "embedded-partial-personal"),
+            (
+                br#"{"folderId":"embedded-foreign-folder","favorite":false}"#.as_slice(),
+                "embedded-partial-shared",
+            ),
+        ] {
+            if let Ok((request, _)) =
+                serde_json_core::from_slice::<CipherPartialRequest<'_>>(black_box(body))
+            {
+                let result = organization_service.update_cipher_private_annotations(
+                    "embedded-owner",
+                    black_box(cipher),
+                    request.view(),
+                );
+                black_box((
+                    result.is_ok(),
+                    organization_service.storage().partial_favorite,
+                    organization_service.storage().partial_folder,
+                    organization_service.storage().partial_account_revision,
+                ));
+            }
+        }
         // The real sharing service retains an association prefix after a later
         // missing selection, then reaches the sealed payload phase on success.
         let share = serde_json_core::from_slice::<CipherShareRequest<'_, 2>>(black_box(

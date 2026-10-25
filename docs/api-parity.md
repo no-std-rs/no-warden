@@ -39,13 +39,13 @@ must remain `no_std` without `alloc` throughout that cycle.
 | [Server routes](../compatibility/vaultwarden-routes.json) | [Vaultwarden `58a980f`](https://github.com/dani-garcia/vaultwarden/tree/58a980f850464f7d9cdc99a765df36f0a3308b91): 294 declared handlers, 288 method/path templates, seven mounts, three catchers |
 | [Shipped client calls](../compatibility/cli-routes.json) | [CLI `2026.10.0`, `b449ac1`](https://github.com/bitwarden/clients/tree/b449ac1d255784380d75ef026343198891286be7): 370 request-construction records, 305 distinct method/path pairs, 41 command registration variants |
 | Bundled SDK source | [`c5e53d3`](https://github.com/bitwarden/sdk-internal/tree/c5e53d3e82ab80fdc9fd79ebd74058399a6444b6), resolved from the upstream clients build lock and SDK registry metadata |
-| [Current coverage](../compatibility/no-warden-coverage.json) | 128 routed patterns, 67 with typed requests, 121 with reusable core service behavior; each carries its narrower limits |
+| [Current coverage](../compatibility/no-warden-coverage.json) | 130 routed patterns, 69 with typed requests, 123 with reusable core service behavior; each carries its narrower limits |
 | Runtime CLI comparison | Official CLI `2026.10.0`: all 120 commands pass against the adapter and official Vaultwarden `1.37.4`, including attachment byte round trips and authenticated public-key fingerprints. This runtime baseline differs from the inventoried Vaultwarden main revision above. |
 | Focused text-Send CLI comparison | A separate official CLI `2026.10.0` run passes all twenty Send commands against both actual servers. Owner get/list use cache after sync; no captured route trace is claimed. |
 | Focused file-Send CLI comparison | Another separate official CLI `2026.10.0` run passes twenty commands on both servers, including two byte-exact file receives. Owner cache operations remain distinct from traced HTTP reads. |
 
 The coverage ledger joins all 294 declared upstream handlers to an explicit
-status: 125 partial and 169 unimplemented. Query/rank/configuration
+status: 127 partial and 167 unimplemented. Query/rank/configuration
 variants retain separate upstream identities, and path parameter renames have
 explicit mappings. Three additional local aliases are tracked as extensions;
 they do not replace the corresponding upstream endpoints.
@@ -56,8 +56,8 @@ responses, and attachment responses. Bulk cipher lists use the generic `ListResp
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 122 patterns, negative
-HTTP evidence for 121, 337 named HTTP cases, and 55 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 124 patterns, negative
+HTTP evidence for 123, 343 named HTTP cases, and 55 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -2147,3 +2147,58 @@ cipher/lifecycle/backend/order and full upstream parity remain open. Protocol
 remain separate from runtime build 7c188967e7a467b19b2757bc3326f9cf3ccae327;
 client/SDK pins are b449ac1d255784380d75ef026343198891286be7 and
 c5e53d3e82ab80fdc9fd79ebd74058399a6444b6. All full-parity flags remain false.
+
+## Private cipher annotations
+
+`PUT` and `POST /api/ciphers/{cipher_id}/partial` change only the actor's
+favorite/folder and account revision for the measured personal-owner/readable
+shared secure-note subset. Readonly membership is sufficient. Owner, Admin,
+tested full Custom4, writable/readonly/manage User and confirmed canonical member
+with retained historical readonly grant are covered. Cipher revision, encrypted
+payload/key/fields/history, ownership/links and the other viewer's private state,
+account revision and key material remain unchanged. Even identical annotations
+advance actor account revision.
+
+Required boolean `favorite`, optional `folderId` and the tested two-field tuple
+are decoded before source/read authority and folder ownership. Missing/null/empty
+folder clears. Uppercase `FolderId` and snake_case folder names are ignored;
+uppercase `Favorite` fails the required field. Wrong types return schema 422;
+a genuine third tuple element returns schema 400 with one error field. Business
+folder/source errors return 400 with nine fields. Unknown encrypted/ownership body
+fields and the tested unrelated query are ignored. Success is exactly a 30-field
+`cipherDetails` equal to the actor's immediate GET.
+
+Both actual Vaultwarden 1.37.4 and no-warden pass six cases/605 counted
+HTTP requests plus 4 registration requests each. Separate actual CLI 2026.10.0
+observers pass 31 commands/37 direct fixture requests plus 4
+registrations: TWO direct partial mutations, then production sync/get/list and
+fresh empty Owner/readonly-recipient caches recover unchanged decrypted notes
+and separate favorite/private folder state, including folder-name decryption.
+Four CLI logins and 2 direct logins are distinct. This does not establish a CLI
+partial caller or captured trace; its normal edit permission guard is separate.
+Native-only browser research does not establish local compatibility. Retained
+2026-10-21 paired evidence executes pinned Vaultwarden Web 2026.7.0 with Chromium
+149.0.7827.55/Playwright 1.64.1: readonly recipient Favorite, then ordinary private-folder
+Save each issue one PUT partial 200 with exact 30-field cipherDetails/JSON; three
+empty-context ordinary logins verify decryption and private/common/account invariants.
+Unknown API responses are zero. This proves this PUT UI subset, not POST browser,
+general item editing, or full web parity; inherited mandatory personal web10 is unchanged.
+Those artifact-bound historical receipts do not establish equivalence of the integrated
+rescue head; fresh verification is recorded separately.
+
+The allocation-free core uses owned source/folder snapshots, existing pure READ
+resolution and a sealed annotation-only plan. The host loads CURRENT opaque JSON
+under its transaction for personal annotations or changes only the shared actor
+annotation row. Live scope/READ/folder rechecks, actor-only revision and rollback
+are local guarantees. Host-only 4096 associated-row/8 MiB charged-material budgets
+precede allocation and are rechecked live; core has no intrinsic cap. The linked
+bare-metal consumer exercises actual decoding/service/provider checks without
+allocator/std/undefined symbols and is not executed on hardware.
+
+Protocol declarations are pinned at 58a980f850464f7d9cdc99a765df36f0a3308b91;
+actual image build 7c188967e7a467b19b2757bc3326f9cf3ccae327 is separate. Manual
+native 45/734 and companion 8/104 source measurements stay separately scoped and
+are not automated suite totals. Static client/SDK references are b449ac1d... and
+c5e53d3e... . Hidden-password partials, attachments, broader item/deleted/archived
+states, configured groups/policies, native concurrency/capacity and full parity
+remain open. All full-parity flags remain false.

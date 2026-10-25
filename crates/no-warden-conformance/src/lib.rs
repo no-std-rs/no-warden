@@ -32,6 +32,8 @@ pub mod organization_cipher_bulk_sharing;
 pub mod organization_cipher_bulk_sharing_cli;
 pub mod organization_cipher_collections;
 pub mod organization_cipher_collections_cli;
+pub mod organization_cipher_partial;
+pub mod organization_cipher_partial_cli;
 pub mod organization_cipher_sharing;
 pub mod organization_cipher_sharing_cli;
 pub mod organization_collection_mutations;
