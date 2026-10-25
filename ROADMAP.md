@@ -126,6 +126,12 @@ invoke the pinned official Bitwarden CLI as an external process.
   direct bulk mutations. No CLI bulk caller, captured trace or standalone browser
   claim; configured groups/policies, attachments, shared Save/lifecycle and full
   upstream API parity remain open.
+- [x] Ordinary shared secure-note update subset: allocation-free scoped provider
+  decisions and sealed atomic update plans, six matching actual HTTP cases
+  (505 requests) and 32 real CLI Owner/recipient edit and fresh-cache
+  decryption commands per target. Private annotations and opaque payload storage
+  are preserved. Attachment-bearing updates, other item types, broad lifecycle,
+  groups/policies/SMTP and full API parity remain open.
 - [ ] Attachments, Sends, event notifications and websocket transport.
 - [ ] Two-factor authentication, passkeys, SSO and administrative APIs.
 - [ ] Full import/export compatibility, remaining formats and variants, and upstream protocol regression fixtures.

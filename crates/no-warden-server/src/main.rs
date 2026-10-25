@@ -19,6 +19,7 @@ mod organization_cipher_bulk_sharing;
 mod organization_cipher_collections;
 mod organization_cipher_partial;
 mod organization_cipher_sharing;
+mod organization_cipher_update;
 mod organization_collections;
 mod organization_confirmations;
 mod organization_invitations;
@@ -1490,6 +1491,22 @@ async fn dispatch_with_peer(
             Ok(StatusCode::OK.into_response())
         }
         Route::CipherCreate | Route::CipherCreateWrapped | Route::CipherUpdate(_) => {
+            if let Route::CipherUpdate(id) = route {
+                // Select shared updates from canonical persisted ownership. An
+                // attacker-controlled organizationId cannot choose this flow.
+                if organization_cipher_sharing::source(&store.db, id)?
+                    .is_some_and(|source| source.organization_id.is_some())
+                {
+                    let updated = organization_cipher_update::Input::parse(&body)
+                        .and_then(|input| input.execute(&mut store, &owner, id));
+                    return match updated {
+                        Ok(()) => Ok(json_response(
+                            store.item(&owner, id, "cipher")?.ok_or_else(missing)?,
+                        )),
+                        Err(error) => Ok(organization_cipher_update::render_error(error)),
+                    };
+                }
+            }
             let document: Value = serde_json::from_slice(&body).map_err(|_| invalid())?;
             let payload = if route == Route::CipherCreateWrapped {
                 document

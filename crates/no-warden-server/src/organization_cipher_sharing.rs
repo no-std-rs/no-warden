@@ -469,6 +469,17 @@ fn project_document(
     {
         doc["archivedDate"] = json!(archived);
     }
+    if source.organization_id.is_some() && doc["type"] == 2 && !doc["secureNote"].is_null() {
+        let subtype = doc["secureNote"]
+            .get("type")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        if let Some(fields) = doc["secureNote"].as_object_mut() {
+            fields.insert("type".to_owned(), json!(subtype));
+        } else {
+            doc["secureNote"] = json!({"type":subtype});
+        }
+    }
     Ok(doc)
 }
 

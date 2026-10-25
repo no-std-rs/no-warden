@@ -56,8 +56,8 @@ responses, and attachment responses. Bulk cipher lists use the generic `ListResp
 wrapper; a complete borrowed cipher response model is still absent, and single
 archive responses remain host-built JSON.
 
-The ledger records positive or restart HTTP evidence for 124 patterns, negative
-HTTP evidence for 123, 343 named HTTP cases, and 55 CLI command patterns. These are
+The ledger records positive or restart HTTP evidence for 125 patterns, negative
+HTTP evidence for 123, 349 named HTTP cases, and 55 CLI command patterns. These are
 distinct coverage dimensions; no route has a captured CLI request trace or a verified
 full-parity status.
 
@@ -2202,3 +2202,56 @@ are not automated suite totals. Static client/SDK references are b449ac1d... and
 c5e53d3e... . Hidden-password partials, attachments, broader item/deleted/archived
 states, configured groups/policies, native concurrency/capacity and full parity
 remain open. All full-parity flags remain false.
+## Ordinary shared secure-note updates
+
+`PUT /api/ciphers/{cipher_id}` and the measured Owner `POST` alias now
+include canonical organization-owned secure-note updates (type 2) without attachments.
+Existing personal behavior remains separate. The [pinned PUT declaration](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L715)
+and [POST alias declaration](https://github.com/dani-garcia/vaultwarden/blob/58a980f850464f7d9cdc99a765df36f0a3308b91/src/api/core/ciphers.rs#L704)
+are protocol references, distinct from the actual Vaultwarden 1.37.4 image build.
+
+Known structure is decoded before write authority. Confirmed Owner/Admin, custom type 4 with the measured full collection permissions,
+and writable User fixtures succeed; the measured readonly/manage
+source can update while ordinary GET still reports `edit:false`. Accepted,
+revoked, readonly without manage, nonmember and foreign-source controls fail.
+An older valid revision is rejected before organization matching, folder validation
+and required nonnull secure-note presence. Missing/null revisions and the measured
+malformed/future values are accepted. This is older-date comparison rather
+than exact client-date equality. Exact error text is not compared between servers.
+
+The canonical stored source selects organization flow and its organization must
+match the request. Submitted body IDs and collection IDs cannot replace source
+identity or existing associations. Missing/null favorite preserves the actor's
+value; explicit false clears it. Missing/null folder clears only the actor's
+folder; a foreign folder fails. The adapter rechecks live authority, source
+revision, canonical ownership and folder scope in the atomic payload/annotation
+transaction. Rollback controls cover statement and deferred-commit failures;
+exhaustive backend/concurrency equivalence is unverified.
+
+Raw opaque encrypted key, custom fields and unknown outer/nested extensions
+remain stored. Shared GET/list/sync use the measured 30 known response fields,
+without reflecting unknown outer extensions. Unknown nested secure-note members
+remain visible. Measured empty/scalar secure-note data projects subtype zero
+independently of preserved raw JSON. Plain/empty names and measured nonnull
+opaque note shapes remain accepted. Empty `attachments`/`attachments2` objects
+are covered as attachment-free inputs. Attachment-bearing edits remain open.
+
+Six actual paired HTTP cases pass with 505 counted requests per
+target, including 2 password logins and excluding 4 registration HTTP requests.
+A separate official CLI 2026.10.0 suite executes 32 actual commands
+and 16 direct HTTP requests per target, excluding 4 registration
+requests, with 4 CLI and 2 direct password logins. Owner and confirmed writable
+recipient execute `bw edit item`; both fresh caches decrypt the final state.
+An edited personal control and preserved recipient personal control are checked.
+The final Rust TLS adapter captures no request trace or internal request count.
+These results are separate from the inherited 120-command baseline and native
+research traces. No paired browser claim follows from this suite.
+
+The allocation-free core borrows required fields and presence information,
+validates scoped provider snapshots and lends a sealed final plan. Date parsing,
+SQL, opaque JSON, clocks and HTTP stay in adapters. Firmware is linked and
+symbol-audited rather than executed. Other cipher types, attachments, lifecycle,
+groups/policies/SMTP, arbitrary field aliases, exhaustive timestamp/error shapes
+and full API parity remain open. The rescued implementation includes the current
+main migration and permission corrections; fresh HTTP and CLI comparisons
+validate the integrated shared-update behavior.

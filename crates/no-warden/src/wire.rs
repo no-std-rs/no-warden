@@ -1947,6 +1947,41 @@ impl<
     }
 }
 
+/// Minimal borrowed structural view for ordinary organization-cipher updates.
+/// Preserve the full opaque document in the adapter; this view has no serializer.
+/// It neither validates cryptography nor establishes positional/native-full-schema
+/// compatibility. Required fields are decoded before source-write authorization.
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizationCipherUpdateRequest<'a> {
+    #[serde(rename = "type")]
+    pub kind: i32,
+    pub name: &'a str,
+    pub encrypted_for: &'a str,
+    pub favorite: Option<bool>,
+    pub organization_id: Option<&'a str>,
+    pub folder_id: Option<&'a str>,
+    pub last_known_revision_date: Option<&'a str>,
+    pub secure_note: Option<serde::de::IgnoredAny>,
+}
+impl core::fmt::Debug for OrganizationCipherUpdateRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OrganizationCipherUpdateRequest([REDACTED])")
+    }
+}
+impl crate::organization_cipher_update::OrganizationCipherUpdateData
+    for OrganizationCipherUpdateRequest<'_>
+{
+    fn update_view(&self) -> crate::organization_cipher_update::OrganizationCipherUpdateView<'_> {
+        crate::organization_cipher_update::OrganizationCipherUpdateView {
+            organization_id: self.organization_id,
+            folder_id: self.folder_id,
+            last_known_revision_date: self.last_known_revision_date,
+            secure_note_present: self.secure_note.is_some(),
+        }
+    }
+}
+
 /// The selected-ID body shared by cipher lifecycle and archive endpoints.
 ///
 /// The caller chooses the decoder capacity. IDs are exact strings, without UUID

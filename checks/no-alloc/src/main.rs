@@ -31,6 +31,10 @@ use no_warden::{
         OrganizationCipherSharingStorage, ValidatedCipherShare, ValidatedCipherShareAssociation,
         resolve_cipher_access,
     },
+    organization_cipher_update::{
+        OrganizationCipherUpdateData, OrganizationCipherUpdateStorage,
+        ValidatedOrganizationCipherUpdate,
+    },
     organization_collection_mutations::{
         OrganizationCollectionMutationStorage, ValidatedCollectionDelete, ValidatedCollectionUpdate,
     },
@@ -109,9 +113,9 @@ use no_warden::{
         KnownDeviceRequest, KnownDeviceResponse, MasterPasswordPolicy,
         MasterPasswordPolicyResponse, OrganizationBulkConfirmRequest,
         OrganizationBulkMemberRemovalRequest, OrganizationBulkMemberRestoreRequest,
-        OrganizationBulkMemberRevokeRequest, OrganizationCollectionCreateRequest,
-        OrganizationConfirmRequest, OrganizationCreateRequest, OrganizationInviteCollection,
-        OrganizationInvitePermissions, OrganizationInviteRequest,
+        OrganizationBulkMemberRevokeRequest, OrganizationCipherUpdateRequest,
+        OrganizationCollectionCreateRequest, OrganizationConfirmRequest, OrganizationCreateRequest,
+        OrganizationInviteCollection, OrganizationInvitePermissions, OrganizationInviteRequest,
         OrganizationMemberPublicKeysRequest, OrganizationMemberUpdateRequest, OrganizationPlanType,
         PasswordLoginRequest, PasswordOrOtpRequest, PreloginKdfSettings, PreloginRequest,
         PreloginResponse, ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest,
@@ -169,6 +173,7 @@ struct PurgeProbe {
     partial_favorite: bool,
     partial_folder: bool,
     partial_account_revision: u64,
+    organization_update_commits: usize,
 }
 impl PurgeProbe {
     fn organization_record(&self) -> OrganizationRecord<'_> {
@@ -239,8 +244,15 @@ impl Storage for PurgeProbe {
     fn insert_account(&mut self, _: &str, _: &RegisterRequest<'_>) -> Result<(), ()> {
         unreachable!()
     }
-    fn folder_metadata(&mut self, _: &str) -> Result<Option<ItemMetadata<'_>>, ()> {
-        unreachable!()
+    fn folder_metadata(&mut self, id: &str) -> Result<Option<ItemMetadata<'_>>, ()> {
+        if id == "embedded-update-folder" {
+            Ok(Some(ItemMetadata {
+                owner_id: "embedded-owner",
+                deleted: false,
+            }))
+        } else {
+            unreachable!()
+        }
     }
     fn save_folder(&mut self, _: &str, _: &str, _: &FolderRequest<'_>) -> Result<(), ()> {
         unreachable!()
@@ -704,6 +716,62 @@ impl OrganizationCipherBulkSharingStorage for PurgeProbe {
             return Err(());
         }
         self.bulk_commits += 1;
+        Ok(())
+    }
+}
+impl OrganizationCipherUpdateStorage for PurgeProbe {
+    type UpdateId = &'static str;
+    type UpdateAccess = BulkAccess;
+    fn organization_cipher_update_source(
+        &mut self,
+        id: &str,
+    ) -> Result<Option<CipherSharingSource<Self::UpdateId>>, ()> {
+        Ok(
+            (id == "embedded-org-cipher").then_some(CipherSharingSource {
+                id: "embedded-org-cipher",
+                owner_id: None,
+                organization_id: Some("embedded-org"),
+                revision: "2030-01-01T00:00:00Z",
+            }),
+        )
+    }
+    fn organization_cipher_update_membership(
+        &mut self,
+        user: &str,
+        org: &str,
+    ) -> Result<Option<CipherSharingMembership<Self::UpdateId>>, ()> {
+        self.sharing_membership(user, org)
+    }
+    fn organization_cipher_update_collections(
+        &mut self,
+        _: &str,
+        _: &CipherSharingSource<Self::UpdateId>,
+    ) -> Result<Self::UpdateAccess, ()> {
+        Ok(BulkAccess)
+    }
+    fn organization_cipher_update_revision_is_older(
+        &mut self,
+        _: &CipherSharingSource<Self::UpdateId>,
+        requested: Option<&str>,
+    ) -> Result<bool, ()> {
+        // A provider-owned comparison result; no clock/date library is in core.
+        Ok(requested == Some("2000-01-01T00:00:00Z"))
+    }
+    fn commit_organization_cipher_update<D: OrganizationCipherUpdateData + ?Sized>(
+        &mut self,
+        plan: &ValidatedOrganizationCipherUpdate<'_, D>,
+    ) -> Result<(), ()> {
+        if plan.owner() != "embedded-owner"
+            || plan.cipher_id() != "embedded-org-cipher"
+            || plan.organization_id() != "embedded-org"
+            || plan.source_revision() != "2030-01-01T00:00:00Z"
+            || plan.folder_id() != Some("embedded-update-folder")
+            || !plan.view().secure_note_present
+            || plan.request().update_view().organization_id != Some("embedded-org")
+        {
+            return Err(());
+        }
+        self.organization_update_commits += 1;
         Ok(())
     }
 }
@@ -1996,6 +2064,7 @@ pub extern "C" fn _start() -> ! {
             partial_favorite: true,
             partial_folder: false,
             partial_account_revision: 0,
+            organization_update_commits: 0,
         };
         let organization = OrganizationCreateRequest {
             billing_email: "owner@example.com",
@@ -2158,6 +2227,26 @@ pub extern "C" fn _start() -> ! {
                 scope.source_revision(),
                 flags.map(|v| (v.readable(), v.writable())),
             ));
+        }
+        // Real borrowed decoding and service calls: older revision fails before
+        // commit, then an unconditional update reaches the sealed shared plan.
+        let update = serde_json_core::from_slice::<OrganizationCipherUpdateRequest<'_>>(black_box(
+            br#"{"type":2,"name":"opaque","encryptedFor":"embedded-owner","organizationId":"embedded-org","folderId":"embedded-update-folder","lastKnownRevisionDate":"2000-01-01T00:00:00Z","secureNote":{"type":0},"id":"ignored-body-id"}"#,
+        ));
+        if let Ok((mut request, _)) = update {
+            let _ = black_box(organization_service.update_organization_cipher(
+                "embedded-owner",
+                "embedded-org-cipher",
+                &request,
+            ));
+            black_box(organization_service.storage().organization_update_commits);
+            request.last_known_revision_date = None;
+            let _ = black_box(organization_service.update_organization_cipher(
+                "embedded-owner",
+                "embedded-org-cipher",
+                &request,
+            ));
+            black_box(organization_service.storage().organization_update_commits);
         }
         let readonly = [CipherCollectionAccessRecord {
             cipher_organization_id: Some("embedded-org"),

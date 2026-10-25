@@ -15,6 +15,7 @@ export const shards = {
     "organization-member-mini-details", "organization-member-mini-details-cli",
     "web-organization-reads",
     "web-organization-reads-cli",
+    "organization-cipher-update", "organization-cipher-update-cli",
     "personal-vault-purge",
   ],
   baseline: [
