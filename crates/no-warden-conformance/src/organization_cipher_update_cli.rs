@@ -262,10 +262,12 @@ pub fn run() -> Result<(), Error> {
         "BW_SHARED_EDIT_RECIPIENT_PASSWORD".into(),
         recipient.password.clone().into(),
     );
+    let local = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/node_modules/.bin/bw");
+    let binary = std::env::var_os("BW_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| if local.exists() { local } else { "bw".into() });
     let mut c = Cli {
-        binary: std::env::var_os("BW_BIN")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| "bw".into()),
+        binary,
         environment,
         commands: 0,
         logins: 0,

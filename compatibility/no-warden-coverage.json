@@ -1,7 +1,7 @@
 {
 "schema_version": 1,
 "repository": "no-std-rs/no-warden",
-"snapshot_commit": "6bc347b0cef1e9a764c685b220116d49b48b44fc",
+"snapshot_commit": "991436ba36f370c50cfec037e3cb008013a6e6fd",
 "audit_kind": "Default no-SMTP organization invitations and same-ID placeholder completion: one additional partial POST uses an opt-in allocation-free provider and ordered per-email commits. All six focused HTTP cases and the separate twenty-four-command official CLI comparison pass both actual targets. Existing modern registration initializes passwordless accounts and accepts their pending memberships without confirmation. No CLI invitation/registration caller, confirmation success, sharing, full-parity or captured-trace claim.",
 "coverage_semantics": {
 "routed": "Classifier recognizes a method/path shape. This alone is not a semantic implementation, especially reserved names shadowed by {id}.",
@@ -1039,7 +1039,7 @@
 "crates/no-warden-conformance/src/organization_cipher_sharing.rs": "4a303501b035ae42145708a05c85220a8ca27fa49c6a29cc129d0fc0ba7d67a8",
 "crates/no-warden-conformance/src/organization_cipher_sharing_cli.rs": "5f4fc14a3bf794c6ac20bf7d9f45a995c30a136687813040bbffc1e73e4a8f45",
 "crates/no-warden-conformance/src/organization_cipher_update.rs": "d333a10568d1c126db8f0e8db8cdf3cb5c2eccf9c5f35f4ced1c4a992143c4f8",
-"crates/no-warden-conformance/src/organization_cipher_update_cli.rs": "147a864a37871f0f75887561f2036c361f3ef328b090feb30cddf80ba7672512",
+"crates/no-warden-conformance/src/organization_cipher_update_cli.rs": "e6415754ce4491de8279ec9d086ede8e4866ed25a338bd019fbe60d884df1218",
 "crates/no-warden-conformance/src/organization_collection_mutations.rs": "ed5d8d7756b8859f918b62bc76b14ca9097e236eae05038a6f458c1d0b97b890",
 "crates/no-warden-conformance/src/organization_collection_mutations_cli.rs": "bc55dd6a9c1a1c129730a9e9deb94edea0e6117e60278169254f74053c45279e",
 "crates/no-warden-conformance/src/organization_collections.rs": "7c2df7900cbf241b954a247d5e41f0fba65f30ff2d47d7eef9398cc686335b44",
